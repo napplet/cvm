@@ -8,6 +8,12 @@ import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-
 import { FundingService } from "../../src/funding/funding-service";
 import type { CashuTopUpRecord } from "../../src/funding/cashu-top-up";
 
+const deferred = <T = void>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+};
+
 test("production realm rejects development-only funding adapters before construction", () => {
   const descriptor = { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" };
   expect(createAccountingRealm("production-real").schema).toBe("production_real");
@@ -104,10 +110,10 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     const funding = new FundingService(database.funding);
     expect((await funding.status(principal)).available).toBe("0");
     await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [productionAccountId]);
-    const cashuRecord = (topUpId: string, commitment: string): CashuTopUpRecord => ({
+    const cashuRecord = (topUpId: string, commitment: string, proofIdentity = "9".repeat(64)): CashuTopUpRecord => ({
       result: { topUpId, state: "verifying", policyVersion: "cashu-policy", commitment }, accountId: productionAccountId,
       policy: { version: "cashu-policy", mints: [] } as never, protectedId: `protected:${topUpId}`,
-      semanticProofIdentities: ["9".repeat(64)], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
+      semanticProofIdentities: [proofIdentity], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
     });
     const cashuClaims = await Promise.all([
       database.cashu.claim(cashuRecord("cashu:one", "1".repeat(64))),
@@ -118,6 +124,61 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     expect(cashuClaims.filter((claim) => claim.claimed)).toHaveLength(1);
     const cashuWinner = cashuClaims.find((claim) => claim.claimed)!.record;
     expect(new Set(cashuClaims.map((claim) => claim.record.result.topUpId))).toEqual(new Set([cashuWinner.result.topUpId]));
+
+    // Hold the first client immediately after it has the session advisory
+    // lock. The other claims have demonstrably reached the same lock and stay
+    // pending past the old 250ms try-lock budget before the winner commits.
+    const firstLockAcquired = deferred<void>();
+    const contenderReachedLock = deferred<void>();
+    const releaseFirstLock = deferred<void>();
+    let advisoryLockCalls = 0;
+    const contendedPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
+      async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (sql.includes("pg_advisory_lock(")) {
+          advisoryLockCalls += 1;
+          if (advisoryLockCalls === 1) {
+            const result = await client.query<Row>(sql, values ? [...values] : undefined);
+            firstLockAcquired.resolve();
+            await releaseFirstLock.promise;
+            return { rows: result.rows };
+          }
+          if (advisoryLockCalls === 2) contenderReachedLock.resolve();
+        }
+        try { return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows }; }
+        catch (error) { if (error instanceof Error && "code" in error && error.code === "40001") error.message += ` [statement: ${sql.slice(0, 180)}]`; throw error; }
+      }, release() { client.release(); },
+    }; } };
+    const contendedDatabase = new PostgresFundingDatabase(contendedPool, { realm: "production-real", deadlineMs: 1_000 });
+    const contendedProof = "8".repeat(64);
+    const firstClaim = contendedDatabase.cashu.claim(cashuRecord("cashu:contended-one", "5".repeat(64), contendedProof));
+    await firstLockAcquired.promise;
+    const contendingClaims = ["two", "three", "four"].map((suffix, index) => contendedDatabase.cashu.claim(cashuRecord(`cashu:contended-${suffix}`, String(index + 6).repeat(64), contendedProof)));
+    const allContendedClaims = [firstClaim, ...contendingClaims];
+    let settledWhileLocked = 0;
+    const observedContendedClaims = allContendedClaims.map(async (claim) => { try { return await claim; } finally { settledWhileLocked += 1; } });
+    try {
+      await contenderReachedLock.promise;
+      await Bun.sleep(350);
+      expect(settledWhileLocked).toBe(0);
+    } finally {
+      releaseFirstLock.resolve();
+    }
+    const contendedResults = await Promise.all(observedContendedClaims);
+    expect(contendedResults.filter((claim) => claim.claimed)).toHaveLength(1);
+    const contendedWinner = contendedResults.find((claim) => claim.claimed)!.record;
+    expect(new Set(contendedResults.map((claim) => claim.record.result.topUpId))).toEqual(new Set([contendedWinner.result.topUpId]));
+
+    // PostgreSQL advisory locks are database-scoped. A development lock for
+    // the same proof must not delay a production claim in a separate realm.
+    const realmProof = "7".repeat(64);
+    const developmentRealmLock = `cashu-proof:development-test:${realmProof}`;
+    await pool.query("SELECT pg_advisory_lock(hashtextextended($1::text,$2::bigint))", [developmentRealmLock, "20261031"]);
+    try {
+      expect(await database.cashu.claim(cashuRecord("cashu:realm-isolated", "a".repeat(64), realmProof))).toMatchObject({ claimed: true, record: { result: { topUpId: "cashu:realm-isolated" } } });
+    } finally {
+      await pool.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [developmentRealmLock, "20261031"]);
+    }
+
     await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data", outputDataDigest: "4".repeat(64) });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);

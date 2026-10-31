@@ -140,7 +140,15 @@ export class CashuTopUpCoordinator {
     }
     const protectedReference = await this.options.vault.seal({ accountId, topUpId: submitted.topUpId, rail: "cashu" }, submitted.token);
     const result = frozen({ topUpId: submitted.topUpId, state: "verifying" as const, policyVersion: policy.version, commitment });
-    const claimed = await this.options.repository.claim({ result, accountId, policy, protectedId: protectedReference.id, semanticProofIdentities: identity.semanticProofIdentities, idempotencyKey: submitted.idempotencyKey, principal: submitted.principal as Principal, amount: submitted.amount, maxFee: submitted.maxFee, createdAt: this.#now() });
+    let claimed: Readonly<{ claimed: boolean; record: CashuTopUpRecord }>;
+    try {
+      claimed = await this.options.repository.claim({ result, accountId, policy, protectedId: protectedReference.id, semanticProofIdentities: identity.semanticProofIdentities, idempotencyKey: submitted.idempotencyKey, principal: submitted.principal as Principal, amount: submitted.amount, maxFee: submitted.maxFee, createdAt: this.#now() });
+    } catch (error) {
+      // A claim is still before any provider or treasury action. Do not retain
+      // a newly sealed bearer when the durable identity decision is retryable.
+      await this.options.vault.expire(protectedReference.id).catch(() => undefined);
+      throw error;
+    }
     if (!claimed.claimed) {
       await this.options.vault.expire(protectedReference.id);
       if (claimed.record.accountId !== accountId) throw asError("CASHU_TOP_UP_NOT_OWNER");

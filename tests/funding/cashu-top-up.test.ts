@@ -88,6 +88,17 @@ describe("Cashu validation and swap", () => {
     expect(vault.sealed).toHaveLength(0);
   });
 
+  test("a retryable durable claim failure expires the newly sealed bearer before any swap", async () => {
+    const { policies, provider, vault, funding, repository, store } = harness();
+    repository.claim = async () => { throw new Error("CASHU_PROOF_CLAIM_RETRYABLE"); };
+    const coordinator = new CashuTopUpCoordinator({ policies, provider, vault, funding, repository });
+
+    await expect(coordinator.submit(validSubmit("retryable-claim"))).rejects.toThrow("CASHU_PROOF_CLAIM_RETRYABLE");
+    expect(vault.expired).toEqual(["protected:1"]);
+    expect(provider.settleCalls).toBe(0);
+    expect(store.postings).toHaveLength(0);
+  });
+
   test("validation credits only a normalized online verified swap and retains no bearer material", async () => {
     const { coordinator, provider, vault, store } = harness();
     provider.nextSettlement({ status: "verified", externalReference: "mint-op-1", settlementReference: "mint-settlement-1", verifiedAt: "2026-08-04T12:00:00.000Z" });

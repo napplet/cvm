@@ -31,17 +31,39 @@ function operationFromRow(row: Record<string, unknown>): UncertainRailOperation 
 const RETRYABLE_SERIALIZATION_CODES = new Set(["40001", "40P01", "23505"]);
 const PRODUCTION_SERIALIZABLE_ATTEMPTS = 3;
 const CASHU_PROOF_CLAIM_ATTEMPTS = 5;
-const ADVISORY_LOCK_BUSY = "55P03";
+const ADVISORY_LOCK_TIMEOUT = "55P03";
 const CASHU_PROOF_LOCK_SEED = "20261031";
+// A proof claimant may hold its session lock across the bounded SQL claim
+// transaction. Thirty seconds covers the five-second statement ceilings and
+// their finite sequence without making the wait unbounded.
+const CASHU_PROOF_LOCK_TIMEOUT_MS = 30_000;
 
 type ProductionTransactionOptions = Readonly<{
   advisoryLockKeys?: readonly string[];
+  advisoryLockTimeoutMs?: number;
   attempts?: number;
 }>;
 
-const waitForProductionRetry = (attempt: number): Promise<void> => new Promise((resolve) => {
-  setTimeout(resolve, 25 * (attempt + 1));
-});
+async function acquireSessionAdvisoryLocks(client: PostgresSqlClient, keys: readonly string[], timeoutMs: number): Promise<readonly string[]> {
+  if (!keys.length) return [];
+  // This is deliberately session-scoped and happens before BEGIN. A waiter
+  // therefore creates its SERIALIZABLE snapshot only after the prior claimant
+  // commits. Reset the setting before returning this pooled connection.
+  await client.query("SELECT set_config('lock_timeout',$1,false)", [`${timeoutMs}ms`]);
+  const acquired: string[] = [];
+  try {
+    for (const key of keys) {
+      await client.query("SELECT pg_advisory_lock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]);
+      acquired.push(key);
+    }
+    return acquired;
+  } catch (error) {
+    for (const key of acquired.reverse()) await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]).catch(() => undefined);
+    throw error;
+  } finally {
+    await client.query("RESET lock_timeout").catch(() => undefined);
+  }
+}
 
 /**
  * Rails must retain their original operation identity across a transaction
@@ -64,14 +86,7 @@ async function serializableProductionTransaction<T>(
       // contention key. Acquire it before BEGIN so a waiter starts its
       // SERIALIZABLE snapshot only after the winner has committed. The lock
       // never represents ownership; table uniqueness remains authoritative.
-      for (const key of advisoryLockKeys) {
-        const lock = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtextextended($1::text,$2::bigint)) AS locked", [key, CASHU_PROOF_LOCK_SEED]);
-        if (lock.rows[0]?.locked !== true) {
-          const error = Object.assign(new Error("PRODUCTION_ADVISORY_LOCK_BUSY"), { code: ADVISORY_LOCK_BUSY });
-          throw error;
-        }
-        heldLocks.push(key);
-      }
+      heldLocks.push(...await acquireSessionAdvisoryLocks(client, advisoryLockKeys, options.advisoryLockTimeoutMs ?? CASHU_PROOF_LOCK_TIMEOUT_MS));
       await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await client.query("SET LOCAL lock_timeout = '1000ms'");
       await client.query("SET LOCAL statement_timeout = '5000ms'");
@@ -82,7 +97,7 @@ async function serializableProductionTransaction<T>(
       await client.query("ROLLBACK").catch(() => undefined);
       lastError = error;
       const code = String((error as { code?: unknown }).code ?? "");
-      const retryable = RETRYABLE_SERIALIZATION_CODES.has(code) || (code === ADVISORY_LOCK_BUSY && advisoryLockKeys.length > 0);
+      const retryable = RETRYABLE_SERIALIZATION_CODES.has(code);
       if (!retryable || attempt + 1 === attempts) throw error;
     } finally {
       for (const key of heldLocks.reverse()) {
@@ -90,7 +105,6 @@ async function serializableProductionTransaction<T>(
       }
       client.release();
     }
-    if (advisoryLockKeys.length) await waitForProductionRetry(attempt);
   }
   throw lastError ?? new Error("PRODUCTION_SERIALIZATION_RETRY_EXHAUSTED");
 }
@@ -185,25 +199,32 @@ class PostgresLightningLifecycleRepository implements LightningTopUpRepository {
 }
 
 class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
-  constructor(private readonly pool: PostgresSqlPool) {}
+  constructor(private readonly pool: PostgresSqlPool, private readonly realm: AccountingRealm) {}
 
   async claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>> {
     if (!input.semanticProofIdentities.length || new Set(input.semanticProofIdentities).size !== input.semanticProofIdentities.length || input.semanticProofIdentities.some((identity) => !/^[a-f0-9]{64}$/iu.test(identity))) throw new Error("CASHU_PROOF_IDENTITY_INVALID");
-    return serializableProductionTransaction(this.pool, async (client) => {
-      const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [input.result.topUpId]);
-      if (existing.rows[0]) {
-        return frozen({ claimed: false, record: existing.rows[0].state_json });
-      }
-      const collision = await client.query<{ top_up_id: string }>("SELECT top_up_id FROM cashu_top_up_proof_identities WHERE proof_identity = ANY($1::text[]) FOR UPDATE", [input.semanticProofIdentities]);
-      if (collision.rows[0]) {
-        const winner = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [collision.rows[0].top_up_id]);
-        if (!winner.rows[0]) throw new Error("CASHU_PROOF_CLAIM_INTEGRITY_INVALID");
-        return frozen({ claimed: false, record: winner.rows[0].state_json });
-      }
-      await client.query("INSERT INTO cashu_top_up_state(top_up_id,account_id,proof_commitment,state_json) VALUES ($1,$2,$3,$4)", [input.result.topUpId, input.accountId, input.result.commitment, JSON.stringify(input)]);
-      for (const proofIdentity of input.semanticProofIdentities) await client.query("INSERT INTO cashu_top_up_proof_identities(proof_identity,top_up_id,account_id) VALUES($1,$2,$3)", [proofIdentity, input.result.topUpId, input.accountId]);
-      return frozen({ claimed: true, record: input });
-    }, { advisoryLockKeys: input.semanticProofIdentities, attempts: CASHU_PROOF_CLAIM_ATTEMPTS });
+    try {
+      return await serializableProductionTransaction(this.pool, async (client) => {
+        const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [input.result.topUpId]);
+        if (existing.rows[0]) {
+          return frozen({ claimed: false, record: existing.rows[0].state_json });
+        }
+        const collision = await client.query<{ top_up_id: string }>("SELECT top_up_id FROM cashu_top_up_proof_identities WHERE proof_identity = ANY($1::text[]) FOR UPDATE", [input.semanticProofIdentities]);
+        if (collision.rows[0]) {
+          const winner = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [collision.rows[0].top_up_id]);
+          if (!winner.rows[0]) throw new Error("CASHU_PROOF_CLAIM_INTEGRITY_INVALID");
+          return frozen({ claimed: false, record: winner.rows[0].state_json });
+        }
+        await client.query("INSERT INTO cashu_top_up_state(top_up_id,account_id,proof_commitment,state_json) VALUES ($1,$2,$3,$4)", [input.result.topUpId, input.accountId, input.result.commitment, JSON.stringify(input)]);
+        for (const proofIdentity of input.semanticProofIdentities) await client.query("INSERT INTO cashu_top_up_proof_identities(proof_identity,top_up_id,account_id) VALUES($1,$2,$3)", [proofIdentity, input.result.topUpId, input.accountId]);
+        return frozen({ claimed: true, record: input });
+      }, { advisoryLockKeys: input.semanticProofIdentities.map((identity) => `cashu-proof:${this.realm.name}:${identity}`), advisoryLockTimeoutMs: CASHU_PROOF_LOCK_TIMEOUT_MS, attempts: CASHU_PROOF_CLAIM_ATTEMPTS });
+    } catch (error) {
+      if (String((error as { code?: unknown }).code ?? "") !== ADVISORY_LOCK_TIMEOUT) throw error;
+      const winner = await this.findWinner(input.semanticProofIdentities);
+      if (winner) return frozen({ claimed: false, record: winner });
+      throw new Error("CASHU_PROOF_CLAIM_RETRYABLE");
+    }
   }
 
   async find(topUpId: string): Promise<CashuTopUpRecord | undefined> {
@@ -267,6 +288,16 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
       const result = await client.query<Record<typeof column, T>>(`SELECT ${column} FROM cashu_top_up_state WHERE top_up_id=$1`, [topUpId]);
       const value = result.rows[0]?.[column];
       return value && frozen(value);
+    });
+  }
+
+  private async findWinner(proofIdentities: readonly string[]): Promise<CashuTopUpRecord | undefined> {
+    return this.withClient(async (client) => {
+      const collision = await client.query<{ top_up_id: string }>("SELECT top_up_id FROM cashu_top_up_proof_identities WHERE proof_identity = ANY($1::text[]) ORDER BY proof_identity LIMIT 1", [proofIdentities]);
+      if (!collision.rows[0]) return undefined;
+      const winner = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1", [collision.rows[0].top_up_id]);
+      if (!winner.rows[0]) throw new Error("CASHU_PROOF_CLAIM_INTEGRITY_INVALID");
+      return frozen(winner.rows[0].state_json);
     });
   }
 
@@ -375,7 +406,7 @@ export class PostgresFundingDatabase {
     this.meteredFunding = this.funding;
     this.continuationFunding = this.funding;
     this.lightning = new PostgresLightningLifecycleRepository(realmPool);
-    this.cashu = new PostgresCashuLifecycleRepository(realmPool);
+    this.cashu = new PostgresCashuLifecycleRepository(realmPool, this.realm);
     this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool, this.realm);
     this.railStatuses = new PostgresRailStatusProjection(realmPool);
     this.custody = new PostgresProductionCustodyRepository(realmPool, this.realm);

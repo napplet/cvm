@@ -103,6 +103,34 @@ test("every real edge adapter payload matches its server contract and rejects ch
   } finally { execute.mockRestore(); }
 });
 
+test("tracer: edge model operations require native OpenAI usage and never retain a Vertex receipt requirement", () => {
+  const nativeModelPayload = {
+    candidateId: digest("a"),
+    require: ["openai_responses_usage", "openai_price_digest", "cap", "exact_settlement", "cancellation", "known_id_get_only", "unknown_id_held", "one_dispatch", "one_debit"],
+  };
+  expect(CertificationEdgePayloadSchemas["edge.payment.model"].parse(nativeModelPayload)).toEqual(nativeModelPayload);
+  expect(CertificationEdgePayloadSchemas["edge.payment.model"].safeParse({ ...nativeModelPayload, require: ["vertex_receipt", ...nativeModelPayload.require.slice(1)] }).success).toBe(false);
+});
+
+test("tracer: construction has no credential, provider, client, network, payment, signing, publication, resource, or report effect", () => {
+  let effects = 0;
+  const explosive = new Proxy({}, {
+    get() { effects += 1; throw new Error("EDGE_CONSTRUCTION_EFFECT"); },
+  });
+  expect(() => createProductionEdgeClients({
+    host: { packageHost: explosive as never, chromium: { kind: "chromium" } as never },
+    ownerSigner: { signer: explosive as never, verifier: explosive as never },
+    lightning: { config: explosive, receiver: explosive as never, coordinator: explosive as never },
+    cashu: { config: explosive, settlement: explosive as never, walletOperations: explosive as never, coordinator: explosive as never },
+    publication: { upload: { config: explosive, port: explosive as never }, relay: { config: explosive, port: explosive as never }, promotedSnapshot: explosive },
+    publicationContext: { resolve: async () => { throw new Error("EDGE_EXECUTION_EFFECT"); } } as never,
+    paymentScenarioContext: { resolve: async () => { throw new Error("EDGE_EXECUTION_EFFECT"); } } as never,
+    sourceBuild: { authority: "production-real", verify: async () => { throw new Error("EDGE_EXECUTION_EFFECT"); } } as never,
+    authorizationRequest: {}, authorizationReceipt: {},
+  } as never)).not.toThrow();
+  expect(effects).toBe(0);
+});
+
 test("native edge factory rejects a non-Chromium mounted browser before any provider construction", () => {
   expect(() => createProductionEdgeClients({ host: { packageHost: {} as never, chromium: { kind: "webkit" } as never } } as never)).toThrow("PRODUCTION_EDGE_CHROMIUM_REQUIRED");
 });

@@ -16,6 +16,14 @@ const env = { PATH: "/usr/local/bin:/usr/bin:/bin", NAPPLET_CVM_POLICY_VERSION: 
 const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const fail = (code: string): never => { throw new Error(code); };
 const canonical = (value: unknown): string => value === null || typeof value !== "object" ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
+type CommandResult = Awaited<ReturnType<typeof command>>;
+const sanitizedTail = (value: string) => value.slice(-4096).replace(/\b(authorization|token|secret|password|api[_-]?key)\s*[:=]\s*[^\s]+/giu, "$1=[redacted]");
+function commandDiagnostic(command: CommandResult, commandIndex: number) {
+  return Object.freeze({ commandIndex, argv: command.argv, exitCode: command.exitCode, stdoutSha256: sha(command.stdout), stderrSha256: sha(command.stderr), stdoutTail: sanitizedTail(command.stdout), stderrTail: sanitizedTail(command.stderr) });
+}
+class ReproductionCommandFailure extends Error {
+  constructor(readonly diagnostic: ReturnType<typeof commandDiagnostic>) { super("JOB_REPRODUCTION_COMMAND_FAILED"); }
+}
 // Fixed immutable image paths, measured by this privileged supervisor before
 // generated commands and checked again afterward. No project-supplied receipt.
 const DIRECT_CLI_PINS: Record<string, string> = {
@@ -361,22 +369,62 @@ async function measuredLockedFile(path: string) {
     return sha(bytes.subarray(0, result.bytesRead));
   } finally { await handle.close(); }
 }
+async function rootOwnedDirectory(path: string) {
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== 0 || (info.mode & 0o022) !== 0) fail("JOB_SUPPLY_DIRECTORY_UNTRUSTED");
+}
+async function installedPackageInventory(project: string) {
+  const store = join(project, "node_modules/.pnpm"); await rootOwnedDirectory(store);
+  const packageRoots: string[] = [];
+  for (const entry of (await readdir(store)).sort()) {
+    const nodeModules = join(store, entry, "node_modules");
+    const exists = await lstat(nodeModules).then(info => info.isDirectory() && !info.isSymbolicLink(), () => false); if (!exists) continue;
+    for (const name of (await readdir(nodeModules)).sort()) {
+      if (name.startsWith("@")) for (const nested of (await readdir(join(nodeModules, name))).sort()) packageRoots.push(join(nodeModules, name, nested));
+      else packageRoots.push(join(nodeModules, name));
+    }
+  }
+  const packages = [] as Array<{ name: string; version: string; packageJsonSha256: string }>;
+  for (const root of packageRoots) {
+    const manifest = join(root, "package.json"), handle = await open(manifest, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.uid !== 0 || before.nlink !== 1 || (before.mode & 0o022) !== 0 || before.size < 2 || before.size > 262_144) fail("JOB_INSTALLED_PACKAGE_UNTRUSTED");
+      const bytes = Buffer.alloc(before.size + 1), read = await handle.read(bytes, 0, bytes.length, 0), after = await handle.stat();
+      if (read.bytesRead !== before.size || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) fail("JOB_INSTALLED_PACKAGE_CHANGED");
+      const value = objectRecord(JSON.parse(bytes.subarray(0, read.bytesRead).toString("utf8")), "JOB_INSTALLED_PACKAGE_INVALID"), name = stringField(value, "name", "JOB_INSTALLED_PACKAGE_INVALID"), version = stringField(value, "version", "JOB_INSTALLED_PACKAGE_INVALID");
+      if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(name) || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version)) fail("JOB_INSTALLED_PACKAGE_INVALID");
+      packages.push({ name, version, packageJsonSha256: sha(bytes.subarray(0, read.bytesRead)) });
+    } finally { await handle.close(); }
+  }
+  packages.sort((left, right) => canonical(left).localeCompare(canonical(right)));
+  if (!packages.length || packages.length > 2_048 || new Set(packages.map(canonical)).size !== packages.length) fail("JOB_INSTALLED_PACKAGE_INVALID");
+  return Object.freeze({ format: "installed-package-inventory-v1" as const, packages: Object.freeze(packages), sha256: sha(canonical(packages)) });
+}
+async function measureEdgeToolchain() {
+  const paths = ["/toolchain/production-artifact-contract", "/toolchain/bin/napplet", "/toolchain/package.json", "/toolchain/pnpm-lock.yaml", "/toolchain/boilerplate-template/package.json", "/toolchain/boilerplate-template/pnpm-lock.yaml"] as const;
+  const files = await Promise.all(paths.map(async path => Object.freeze({ path, sha256: await immutableImageFileHash(path) })));
+  return Object.freeze({ format: "immutable-image-files-v1" as const, files: Object.freeze(files), sha256: sha(canonical(files)) });
+}
 function parsedEdgeAudit(stdout: string, request: EdgeRequest) {
   const value = objectRecord(JSON.parse(stdout), "JOB_EDGE_AUDIT_INVALID"), edge = request.edgeCertification;
   const hostile = objectRecord(value.hostile, "JOB_EDGE_AUDIT_INVALID");
-  const remainingLifetimeMs = numberField(value, "remainingLifetimeMs", "JOB_EDGE_AUDIT_INVALID");
-  if (Object.keys(value).sort().join(",") !== "candidateSha256,hostile,image,kind,remainingLifetimeMs,sessionLeaseSha256,toolchainSha256,topologySha256,version"
-    || value.version !== 1 || value.kind !== "edge-native-v1" || value.candidateSha256 !== edge.candidateSha256 || value.topologySha256 !== edge.topologySha256
-    || value.image !== edge.providerImage.toLowerCase() || value.sessionLeaseSha256 !== edge.sessionLeaseSha256 || value.toolchainSha256 !== request.toolchainSha256
-    || !Number.isSafeInteger(remainingLifetimeMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000
-    || Object.keys(hostile).sort().join(",") !== "filesystemDenied,lifetimeBounded,minimalCapabilities,networkDenied,noInboundPorts,nonRoot,resourceBounded"
+  const cgroup = objectRecord(value.cgroup, "JOB_EDGE_AUDIT_INVALID");
+  const [cpuQuotaMicros, cpuPeriodMicros, memoryMaxBytes, pidsMax] = ["cpuQuotaMicros", "cpuPeriodMicros", "memoryMaxBytes", "pidsMax"].map(key => numberField(cgroup, key, "JOB_EDGE_AUDIT_INVALID"));
+  if (Object.keys(value).sort().join(",") !== "candidateSha256,cgroup,hostile,kind,topologySha256,version"
+    || value.version !== 2 || value.kind !== "edge-native-v2" || value.candidateSha256 !== edge.candidateSha256 || value.topologySha256 !== edge.topologySha256
+    || Object.keys(cgroup).sort().join(",") !== "cpuPeriodMicros,cpuQuotaMicros,memoryMaxBytes,pidsMax"
+    || [cpuQuotaMicros, cpuPeriodMicros, memoryMaxBytes, pidsMax].some(item => !Number.isSafeInteger(item) || item <= 0)
+    || cpuQuotaMicros > cpuPeriodMicros * 2 || memoryMaxBytes > 2_048 * 1024 * 1024 || pidsMax > 256
+    || Object.keys(hostile).sort().join(",") !== "filesystemDenied,minimalCapabilities,networkDenied,noInboundPorts,nonRoot"
     || Object.values(hostile).some(item => item !== true)) fail("JOB_EDGE_AUDIT_INVALID");
-  return { version: 1, candidateSha256: edge.candidateSha256, topologySha256: edge.topologySha256, workerOperationId: edge.workerOperationId, providerImage: edge.providerImage.toLowerCase(), sessionLeaseSha256: edge.sessionLeaseSha256, toolchainSha256: request.toolchainSha256, remainingLifetimeMs,
-    hostile: { filesystemDenied: true, networkDenied: true, resourceBounded: true, lifetimeBounded: true, noInboundPorts: true, nonRoot: true, minimalCapabilities: true } };
+  return { version: 2, candidateSha256: edge.candidateSha256, topologySha256: edge.topologySha256,
+    hostile: { filesystemDenied: true, networkDenied: true, noInboundPorts: true, nonRoot: true, minimalCapabilities: true },
+    cgroup: { cpuQuotaMicros, cpuPeriodMicros, memoryMaxBytes, pidsMax } };
 }
 async function reproduce(id: string, request: EdgeRequest) {
-  const project = `/workspace/jobs/${id}/reproduction`, commands: Awaited<ReturnType<typeof command>>[] = [];
-  const execute = async (argv: string[], cwd = project) => { const result = await command(argv, cwd, request.deadlineEpochMs); commands.push(result); if (result.exitCode !== 0) fail("JOB_REPRODUCTION_COMMAND_FAILED"); };
+  const project = `/workspace/jobs/${id}/reproduction`, commands: CommandResult[] = [];
+  const execute = async (argv: string[], cwd = project) => { const result = await command(argv, cwd, request.deadlineEpochMs); commands.push(result); if (result.exitCode !== 0) throw new ReproductionCommandFailure(commandDiagnostic(result, commands.length - 1)); };
   await chown(join(ROOT, id), 65532, 65532);
   await execute(["/toolchain/bin/napplet", "create", project, "--template", "/toolchain/boilerplate-template"], "/workspace");
   await execute(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "dist", "--title", "Generated napplet", ...(request.publication ? ["--server", request.publication.server] : [])]);
@@ -389,13 +437,14 @@ async function reproduce(id: string, request: EdgeRequest) {
   for (const name of ["dist", "test-results", "playwright-report", ".cache", ".vite"]) { const path = join(project, name); await mkdir(path, { recursive: true }); await chown(path, 65532, 65532); await chmod(path, 0o700); }
   for (const argv of [[pnpm, "build"], [pnpm, "verify"], [pnpm, "test:conformance"], ["/toolchain/bin/napplet", "deploy", "--dry-run", "--json", "--name", `cvm-${id.slice(0, 24)}`]]) await execute(argv);
   const files = await collect(join(project, "dist"));
-  return { files, aggregateSha256: sha(canonical(files)), lockSha256: await measuredLockedFile(join(project, "pnpm-lock.yaml")), commandEvidenceSha256: sha(canonical(commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })))) };
+  const installed = await installedPackageInventory(project);
+  return { files, aggregateSha256: sha(canonical(files)), lockSha256: await measuredLockedFile(join(project, "pnpm-lock.yaml")), installed, commandEvidenceSha256: sha(canonical(commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })))) };
 }
 async function run(id: string, dir: string) {
   const requestBytes = await readFile(join(dir, "request.json")); if (sha(requestBytes) !== id) fail("JOB_REQUEST_DIGEST_INVALID");
   const request = parseRequest(JSON.parse(requestBytes.toString("utf8")));
   await assertImageContract(request);
-  const commands: Awaited<ReturnType<typeof command>>[] = [];
+  const commands: CommandResult[] = [];
   const project = `/workspace/jobs/${id}/project`;
   const execute = async (argv: string[], cwd: string) => { const result = await command(argv, cwd, request.deadlineEpochMs); commands.push(result); if (result.exitCode !== 0) fail("JOB_COMMAND_FAILED"); };
   let locked = false;
@@ -403,6 +452,7 @@ async function run(id: string, dir: string) {
     await mkdir(join(ROOT, "active")); locked = true;
     if (request.deadlineEpochMs <= Date.now() || request.deadlineEpochMs > Date.now() + 600_000) fail("JOB_DEADLINE_INVALID");
     const toolchainReceipt = request.version === 2 ? await measureDirectToolchain() : undefined;
+    const edgeToolchain = request.version === 3 ? await measureEdgeToolchain() : undefined;
     await mkdir(`/workspace/jobs/${id}`, { recursive: true }); await chown(`/workspace/jobs/${id}`, 65532, 65532);
     await execute(["/toolchain/bin/napplet", "create", project, "--template", "/toolchain/boilerplate-template"], "/workspace");
     await execute(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "dist", "--title", "Generated napplet", ...(request.publication ? ["--server", request.publication.server] : [])], project);
@@ -424,15 +474,17 @@ async function run(id: string, dir: string) {
       await execute(argv, project);
     }
     if (toolchainReceipt && canonical(toolchainReceipt) !== canonical(await measureDirectToolchain())) fail("JOB_TOOLCHAIN_FILE_CHANGED");
+    if (edgeToolchain && canonical(edgeToolchain) !== canonical(await measureEdgeToolchain())) fail("JOB_TOOLCHAIN_FILE_CHANGED");
     const collected = await collect(join(project, "dist"));
     const edgeCertification = request.version === 3 ? await (async () => {
-      const hostileCommand = await command(["/usr/local/bin/napplet-cvm-worker", "edge-audit", "--candidate-sha256", request.edgeCertification.candidateSha256, "--topology-sha256", request.edgeCertification.topologySha256, "--session-lease-sha256", request.edgeCertification.sessionLeaseSha256, "--provider-image", request.edgeCertification.providerImage, "--toolchain-sha256", request.toolchainSha256, "--provider-deadline-epoch-ms", String(request.deadlineEpochMs)], project, request.deadlineEpochMs);
+      const hostileCommand = await command(["/usr/local/bin/napplet-cvm-worker", "edge-audit", "--candidate-sha256", request.edgeCertification.candidateSha256, "--topology-sha256", request.edgeCertification.topologySha256], project, request.deadlineEpochMs);
       if (hostileCommand.exitCode !== 0) fail("JOB_EDGE_AUDIT_FAILED");
       const hostile = parsedEdgeAudit(hostileCommand.stdout, request);
-      const primary = { aggregateSha256: sha(canonical(collected)), lockSha256: await measuredLockedFile(join(project, "pnpm-lock.yaml")), commandEvidenceSha256: sha(canonical(commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })))) };
+      const installed = await installedPackageInventory(project);
+      const primary = { aggregateSha256: sha(canonical(collected)), lockSha256: await measuredLockedFile(join(project, "pnpm-lock.yaml")), installed, commandEvidenceSha256: sha(canonical(commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })))) };
       const secondary = await reproduce(id, request);
-      if (primary.aggregateSha256 !== secondary.aggregateSha256 || primary.lockSha256 !== secondary.lockSha256) fail("JOB_REPRODUCTION_MISMATCH");
-      return { ...hostile, supply: { format: "pnpm-lock-v1" as const, primary, secondary } };
+      if (primary.aggregateSha256 !== secondary.aggregateSha256 || primary.lockSha256 !== secondary.lockSha256 || primary.installed.sha256 !== secondary.installed.sha256) fail("JOB_REPRODUCTION_MISMATCH");
+      return { ...hostile, imageToolchain: edgeToolchain ?? fail("JOB_TOOLCHAIN_FILE_CHANGED"), supply: { format: "installed-package-inventory-v1" as const, primary: { ...primary, installed: primary.installed }, secondary: { ...secondary, installed: secondary.installed } } };
     })() : undefined;
     const direct = request.version === 2 ? {
       version: 3, artifactContract: request.artifactContract, toolchainReceipt,
@@ -451,8 +503,9 @@ async function run(id: string, dir: string) {
     // ephemeral workspace is removed. These are untrusted diagnostic bytes,
     // never conformance or artifact evidence; full output hashes stay intact.
     const last = commands.at(-1);
-    const diagnostics = last ? { commandIndex: commands.length - 1, stdoutTail: last.stdout.slice(-4096), stderrTail: last.stderr.slice(-4096) } : undefined;
-    await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "failed", requestSha256: id, code: error instanceof Error ? error.message : "JOB_FAILED", commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })), ...(diagnostics ? { diagnostics } : {}) })).catch(() => undefined);
+    const diagnostics = last ? commandDiagnostic(last, commands.length - 1) : undefined;
+    const reproductionDiagnostics = error instanceof ReproductionCommandFailure ? error.diagnostic : undefined;
+    await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "failed", requestSha256: id, code: error instanceof Error ? error.message : "JOB_FAILED", commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })), ...(diagnostics ? { diagnostics } : {}), ...(reproductionDiagnostics ? { reproductionDiagnostics } : {}) })).catch(() => undefined);
   } finally {
     // The immutable input and artifact are retained under the root-only job
     // record. Free ephemeral installs so revisions cannot fill the workspace.

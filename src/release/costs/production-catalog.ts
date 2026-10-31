@@ -3,6 +3,7 @@ import { canonicalJson } from "../../promotion/schema";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./live-estimator";
 import type { ReleaseTopologyQuantity } from "../topology";
 import type { VertexGeminiPriceObservation } from "./official-sources";
+import { OpenAiResponsesRateSnapshotSchema, type OpenAiResponsesRateSnapshot } from "./non-google-cost-bound";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const ProviderSchema = z.enum(RELEASE_COST_FAMILIES);
@@ -29,6 +30,20 @@ const FundingFeeFactSchema = z.object({ provider: z.enum(FUNDING_FEE_PROVIDERS),
  * absence is an approval blocker, never a fabricated zero-cost assumption. */
 export type FundingRailFeePort = Readonly<{ readFeeFacts(): Promise<readonly unknown[]> }>;
 export type ProductionLiveCostCatalogOptions = Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort; vertex: VertexModelPricePort; fundingRailFees?: FundingRailFeePort; quantityContract?: readonly ReleaseTopologyQuantity[]; now?: () => number }>;
+/** Versioned successor seam. It cannot feed the historic sixteen-family
+ * estimator, preserving existing catalog hashes and readers. */
+export type NonGoogleModelCostCatalogPort = Readonly<{ readModelRate(): Promise<OpenAiResponsesRateSnapshot> }>;
+export function createNonGoogleModelCostCatalog(input: Readonly<{ rates: Readonly<{ readOpenAiResponsesRate(): Promise<unknown> }>; now?: () => number }>): NonGoogleModelCostCatalogPort {
+  const now = input.now ?? Date.now;
+  return Object.freeze({
+    async readModelRate() {
+      const rate = OpenAiResponsesRateSnapshotSchema.parse(await input.rates.readOpenAiResponsesRate());
+      const at = now();
+      if (!Number.isSafeInteger(at) || at <= 0 || rate.observedAtMs > at || rate.freshUntilMs <= at || rate.freshUntilMs <= rate.observedAtMs) throw new Error("NON_GOOGLE_MODEL_PRICE_HELD");
+      return Object.freeze({ ...rate });
+    },
+  });
+}
 
 async function sha256Bytes(bytes: Uint8Array): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer); return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 async function sha256(value: unknown): Promise<string> { return sha256Bytes(new TextEncoder().encode(canonicalJson(value))); }

@@ -6,12 +6,13 @@ import type { ReadyCapacityPort } from "../funding/funded-admission";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { WorkerBenchmarkSampleSchema, type WorkerBenchmarkSample } from "../admission/benchmark";
-import { CoreControlPayloadSchemas } from "../release/deployment/production-core-suite-protocol";
+import { CORE_NATIVE_BACKEND_PROVENANCE, CoreControlPayloadSchemas, type CoreServiceControlKind } from "../release/deployment/production-core-suite-protocol";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { assertProductionReadyCapacity, type ProductionReadyCapacityPort } from "./worker-capacity";
 import { ProductionUnusedAdmissionRelease } from "./unused-admission";
 import type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
 import { ProductionRestoreCertification, assertProductionRestoreCertification } from "./restore-certification";
+import { ProductionChaosCertificationService, assertProductionChaosCertification } from "./chaos-certification";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -29,6 +30,66 @@ type Cohort = Readonly<{
 const observers = new WeakSet<object>();
 export function assertProductionAdmissionObserver(value: unknown): asserts value is ProductionCertificationCoreServices {
   if (!value || typeof value !== "object" || !observers.has(value)) throw new Error("PRODUCTION_ADMISSION_OBSERVER_REQUIRED");
+}
+
+const nativeCoreServices = new WeakSet<object>();
+/**
+ * Composes only branded project-owned backends. Constructor work is limited to
+ * provenance validation: it does not resolve credentials, instantiate clients,
+ * contact a provider, or create a report/resource. Telemetry is intentionally
+ * held pending a non-Google authenticated observation transport.
+ */
+export class ProductionNativeCoreCertificationServices implements ProductionCertificationServices {
+  readonly provenance = CORE_NATIVE_BACKEND_PROVENANCE;
+  constructor(private readonly input: Readonly<{
+    admission: ProductionCertificationCoreServices;
+    chaos: ProductionChaosCertificationService;
+    restore: ProductionRestoreCertification;
+  }>) {
+    assertProductionAdmissionObserver(input.admission);
+    assertProductionChaosCertification(input.chaos);
+    assertProductionRestoreCertification(input.restore);
+    nativeCoreServices.add(this);
+    Object.freeze(this);
+  }
+  async execute(input: Readonly<{ operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
+    switch (input.kind) {
+      case "cohort.prepare": return this.input.admission.prepareCohort({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "cohort.observe": return this.input.admission.observeCohort({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "fault.inject": return this.input.chaos.injectFault({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "fault.observe": {
+        const observation = CoreControlPayloadSchemas[input.kind].parse(input.payload);
+        return this.input.chaos.observeFault({ ...observation, operationId: input.operationId });
+      }
+      case "restore.prepare":
+      case "restore.inventory":
+      case "restore.lose-local":
+      case "restore.create":
+      case "restore.subject":
+      case "restore.expiry":
+      case "restore.topology":
+      case "restore.cleanup": return this.input.restore.restore({ operationId: input.operationId, action: input.kind, payload: CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "telemetry.emit":
+      case "telemetry.window": throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD");
+    }
+  }
+  async prepareCohort(input: Parameters<ProductionCertificationServices["prepareCohort"]>[0]) { return this.input.admission.prepareCohort(input); }
+  async observeCohort(input: Parameters<ProductionCertificationServices["observeCohort"]>[0]) { return this.input.admission.observeCohort(input); }
+  async emitTelemetry(_input: Parameters<ProductionCertificationServices["emitTelemetry"]>[0]) { throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD"); }
+  async telemetryWindow(_input: Parameters<ProductionCertificationServices["telemetryWindow"]>[0]) { throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD"); }
+  async injectFault(input: Parameters<ProductionCertificationServices["injectFault"]>[0]) { return this.input.chaos.injectFault(input); }
+  async observeFault(input: Parameters<ProductionCertificationServices["observeFault"]>[0]) { return this.input.chaos.observeFault(input); }
+  async restore(input: Parameters<ProductionCertificationServices["restore"]>[0]) { return this.input.restore.restore(input); }
+  async reconcile(input: Parameters<ProductionCertificationServices["reconcile"]>[0]) {
+    if (input.kind.startsWith("cohort.")) return this.input.admission.reconcile(input);
+    if (input.kind.startsWith("fault.")) return this.input.chaos.reconcile(input);
+    if (input.kind.startsWith("restore.")) return this.input.restore.reconcile(input);
+    if (input.kind.startsWith("telemetry.")) throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD");
+    throw new Error("PRODUCTION_CORE_NATIVE_KIND_INVALID");
+  }
+}
+export function assertProductionNativeCoreCertificationServices(value: unknown): asserts value is ProductionNativeCoreCertificationServices {
+  if (!value || typeof value !== "object" || !nativeCoreServices.has(value)) throw new Error("PRODUCTION_CORE_NATIVE_SERVICES_REQUIRED");
 }
 
 /** Signed admission and its exact worker share one coordinator clock. SQL

@@ -21,6 +21,10 @@ const Recorded = z.object({
   oracle: z.object({ activeWriters: z.literal(1), effects: z.object({ credit: z.literal(0), debit: z.literal(0), worker: z.literal(0), session: z.literal(0), artifact: z.literal(0), checkpoint: z.literal(0), deploy: z.literal(0), ownerEvent: z.literal(0), attestation: z.literal(0) }).strict() }).strict(),
   sqlState: z.literal("40001").optional(),
 }).strict();
+const services = new WeakSet<object>();
+export function assertProductionChaosCertification(value: unknown): asserts value is ProductionChaosCertificationService {
+  if (!value || typeof value !== "object" || !services.has(value)) throw new Error("PRODUCTION_CHAOS_CERTIFICATION_REQUIRED");
+}
 
 /** A real serialization conflict on one run-owned operation-journal row.
  * Both transactions take their snapshot before either writes. PostgreSQL,
@@ -75,6 +79,7 @@ export class ProductionChaosCertificationService implements Pick<ProductionCerti
     this.#pool = bindAccountingRealmPool(input.generation.dependencies.pool, createAccountingRealm("production-real"));
     this.#journal = new PostgresOperationJournal(this.#pool, { namespace: "production-chaos", scopeSha256: this.#scope });
     if (input.contextvm) this.#relay = new ProductionRelayChaosCertification({ config: input.config, generation: input.generation, contextvm: input.contextvm, core: input.generation.admissionObserver });
+    services.add(this);
   }
   async #authorize(readOnly: boolean) {
     const request = await validateAuthorizationRequest(this.input.generation.authorization.request);

@@ -41,6 +41,17 @@ export const CoreRestoreChunkSchema = z.object({ freshInstanceId: Identity, sour
 export const CoreFreshInstanceSchema = z.object({ freshInstanceId: Identity, sourceInstanceId: Identity, databaseInstanceId: Identity, applicationInstanceId: Identity, restoredBackupSha256: Digest }).strict().refine(value => value.freshInstanceId !== value.sourceInstanceId && value.databaseInstanceId !== value.sourceInstanceId && value.applicationInstanceId !== value.sourceInstanceId, "fresh instance required");
 
 export type CoreServiceControlKind = keyof typeof CoreControlPayloadSchemas;
+
+/** Fixed, project-owned constructor provenance for the four core suites.
+ * This is an implementation identity, not caller-provided evidence and is
+ * deliberately independent of the retired cloud control transport. */
+export const CORE_NATIVE_BACKEND_PROVENANCE = Object.freeze({
+  admission: Object.freeze({ module: "src/production/certification-services.ts", export: "ProductionCertificationCoreServices", purpose: "receipt_bound_admission_observation" }),
+  telemetry: Object.freeze({ module: "src/production/certification-services.ts", export: "ProductionNativeCoreCertificationServices", purpose: "authenticated_native_telemetry_hold" }),
+  chaos: Object.freeze({ module: "src/production/chaos-certification.ts", export: "ProductionChaosCertificationService", purpose: "original_operation_fault_observation" }),
+  restore: Object.freeze({ module: "src/production/restore-certification.ts", export: "ProductionRestoreCertification", purpose: "fresh_postgres_object_key_restore" }),
+});
+export type CoreNativeBackendSuite = keyof typeof CORE_NATIVE_BACKEND_PROVENANCE;
 /** Named bounded live operations, never a generic callback supplied by HTTP. */
 export type ProductionCertificationServices = Readonly<{
   prepareCohort(input: Readonly<{ operationId: string; candidateId: string; provider: "modal" | "fly"; sample: Readonly<{ id: string; cohort: string }> }>): Promise<unknown>;

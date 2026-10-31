@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createProductionCoreSuiteAdapters } from "../../src/release/deployment/production-core-suite-adapters";
+import { createNativeProductionCoreSuiteAdapters, createProductionCoreSuiteAdapters } from "../../src/release/deployment/production-core-suite-adapters";
 import { CoreControlPayloadSchemas, CoreScheduledSampleSchema, CoreFreshInstanceSchema, CoreRestoreChunkSchema, CORE_RESTORE_CHUNK_BYTES } from "../../src/release/deployment/production-core-suite-protocol";
 import { createWorkerBenchmarkSchedule } from "../../src/admission/benchmark";
 import { IDENTICAL_WORKER_COHORT_PROFILE } from "../../src/certification/live/worker-ports";
@@ -15,6 +15,16 @@ test("core suites cannot turn caller callbacks into real observations", () => {
   let calls = 0;
   const counterfeit = { async execute() { calls++; return { state: "completed", result: {} }; } };
   expect(() => createProductionCoreSuiteAdapters({ candidate, control: counterfeit as never, contextvm: { async generate() { calls++; } } as never })).toThrow("PRODUCTION_CORE_CONTROL_CLIENT_REQUIRED");
+  expect(calls).toBe(0);
+});
+
+test("tracer: native core construction refuses a wrapper-only control path before any effect", () => {
+  let calls = 0;
+  const wrapper = {
+    async execute() { calls++; return { state: "completed", result: {} }; },
+    async observe() { calls++; return { state: "completed", result: {} }; },
+  };
+  expect(() => createNativeProductionCoreSuiteAdapters({ candidate, services: wrapper as never })).toThrow("PRODUCTION_CORE_NATIVE_SERVICES_REQUIRED");
   expect(calls).toBe(0);
 });
 

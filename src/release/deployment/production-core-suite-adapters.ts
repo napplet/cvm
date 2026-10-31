@@ -8,7 +8,8 @@ import type { ProductionLiveProtectedCertificationPorts } from "../../certificat
 import { validateDurabilityInventory, RestoreDrillInputSchema, type RestoreDrillInput } from "../../resilience/fault-harness";
 import { assertContextVmCertificationClient, type ContextVmCertificationClient } from "./contextvm-client";
 import { assertProductionCoreControlClient, type CoreControlKind, type ProductionCoreControlClient } from "./production-core-control";
-import { CORE_RESTORE_CHUNK_BYTES, CORE_RESTORE_MAX_BYTES, CoreControlPayloadSchemas, CoreScheduledSampleSchema, CoreFreshInstanceSchema, CoreRestoreDescriptorSchema, CoreRestoreChunkSchema } from "./production-core-suite-protocol";
+import { CORE_RESTORE_CHUNK_BYTES, CORE_RESTORE_MAX_BYTES, CoreControlPayloadSchemas, CoreScheduledSampleSchema, CoreFreshInstanceSchema, CoreRestoreDescriptorSchema, CoreRestoreChunkSchema, type CoreServiceControlKind } from "./production-core-suite-protocol";
+import { assertProductionNativeCoreCertificationServices, type ProductionNativeCoreCertificationServices } from "../../production/certification-services";
 
 export type ProductionCoreSuiteAdapters = Pick<ProductionLiveProtectedCertificationPorts, "admission" | "telemetry" | "chaos" | "durability">;
 const digest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
@@ -18,26 +19,17 @@ const Identity = z.string().min(1).max(256);
 const AdmissionPrepared = z.object({ requestedCap: z.string().regex(/^[1-9][0-9]*$/u) }).strict();
 const AdmissionObserved = z.object({ candidateId: Digest, provider: z.enum(["modal", "fly"]), sample: WorkerBenchmarkSampleSchema, correlation: z.object({ clientOperationId: Identity, admissionReference: Identity, requestEventId: Digest }).strict() }).strict();
 type Input = Readonly<{ candidate: WorkerCandidate; control: ProductionCoreControlClient; contextvm: ContextVmCertificationClient }>;
+type NativeInput = Readonly<{ candidate: WorkerCandidate; services: ProductionNativeCoreCertificationServices; contextvm?: ContextVmCertificationClient }>;
+type AdapterInput = Readonly<{ candidate: WorkerCandidate; contextvm: ContextVmCertificationClient; control: (kind: CoreServiceControlKind, payload: unknown) => Promise<unknown> }>;
 
 /** All effects are concrete receipt-gated private control or signed ContextVM
  * operations. No callback can supply a benchmark, collector, or restore result.
  * Construction is pure. The server retains the operation's raw observations. */
-export function createProductionCoreSuiteAdapters(input: Input): ProductionCoreSuiteAdapters {
+function createCoreSuiteAdapters(input: AdapterInput): ProductionCoreSuiteAdapters {
   const candidate = WorkerCandidateSchema.parse(input.candidate);
-  assertProductionCoreControlClient(input.control);
   assertContextVmCertificationClient(input.contextvm);
-  async function control(kind: CoreControlKind, payload: unknown): Promise<unknown> {
-    const operationId = `core:${candidate.provider}:${kind.replaceAll(".", "-")}:${digest(payload)}`;
-    // Re-entry makes the client observe the same original operation. A pending
-    // result blocks this run; the suite never supplies a replacement ID.
-    let result = await input.control.execute({ operationId, kind, payload });
-    if (result.state === "unknown" || result.state === "pending") {
-      // One bounded original GET may recover an acknowledgement lost after
-      // the effect. An unresolved result stays blocked; never POST again.
-      result = await input.control.observe({ operationId, kind, requestSha256: result.requestSha256 });
-    }
-    if (result.state !== "completed" || result.result === undefined) throw new Error("CORE_SUITE_ORIGINAL_OPERATION_PENDING");
-    return result.result;
+  async function control(kind: CoreServiceControlKind, payload: unknown): Promise<unknown> {
+    return input.control(kind, payload);
   }
   const admission: ProductionCoreSuiteAdapters["admission"] = Object.freeze({
     evidenceClass: "real" as const,
@@ -134,6 +126,37 @@ export function createProductionCoreSuiteAdapters(input: Input): ProductionCoreS
     },
   });
   return Object.freeze({ admission, telemetry, chaos, durability });
+}
+
+/** Historical private-control transport retained for legacy read/cleanup
+ * callers only. The non-Google successor uses the native constructor below. */
+export function createProductionCoreSuiteAdapters(input: Input): ProductionCoreSuiteAdapters {
+  const candidate = WorkerCandidateSchema.parse(input.candidate);
+  assertProductionCoreControlClient(input.control);
+  return createCoreSuiteAdapters({ candidate, contextvm: input.contextvm, async control(kind, payload) {
+    const operationId = `core:${candidate.provider}:${kind.replaceAll(".", "-")}:${digest(payload)}`;
+    let result = await input.control.execute({ operationId, kind, payload });
+    if (result.state === "unknown" || result.state === "pending") result = await input.control.observe({ operationId, kind, requestSha256: result.requestSha256 });
+    if (result.state !== "completed" || result.result === undefined) throw new Error("CORE_SUITE_ORIGINAL_OPERATION_PENDING");
+    return result.result;
+  } });
+}
+
+/**
+ * Successor adapter composition is direct: every command is dispatched to a
+ * branded project-owned backend service and uncertain outcomes are reconciled
+ * against that same original operation. It never accepts an HTTP descriptor,
+ * caller result, or self-declared `real` label as evidence.
+ */
+export function createNativeProductionCoreSuiteAdapters(input: NativeInput): ProductionCoreSuiteAdapters {
+  const candidate = WorkerCandidateSchema.parse(input.candidate);
+  assertProductionNativeCoreCertificationServices(input.services);
+  if (!input.contextvm) throw new Error("PRODUCTION_CORE_NATIVE_CONTEXTVM_REQUIRED");
+  return createCoreSuiteAdapters({ candidate, contextvm: input.contextvm, async control(kind, payload) {
+    const operationId = `core:${candidate.provider}:${kind.replaceAll(".", "-")}:${digest(payload)}`;
+    try { return await input.services.execute({ operationId, kind, payload }); }
+    catch { return input.services.reconcile({ operationId, kind, payload }); }
+  } });
 }
 
 /** Both providers run the immutable schedule. Reuse observes original samples;

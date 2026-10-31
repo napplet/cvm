@@ -2,7 +2,7 @@ import { DirectPublicationSourceObservationSchema, DirectPublicationSubmissionSc
 import { DIRECT_CLI_NETWORK_IDENTITY } from "../../src/production/pinned-direct-cli-network";
 import { expect, spyOn, test } from "bun:test";
 
-import { createProductionEdgeSuiteAdapters } from "../../src/release/deployment/production-edge-suite-adapters";
+import { createLegacyProductionEdgeSuiteAdapters } from "../../src/release/deployment/production-edge-suite-adapters";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { openContextVmCertificationClient } from "../../src/release/deployment/contextvm-client";
 import { ProductionCoreControlClient } from "../../src/release/deployment/production-core-control";
@@ -14,9 +14,9 @@ import { createNonGoogleAuthorizationRequestV3 } from "../../src/release/contrac
 
 const digest = (letter: string) => letter.repeat(64);
 
-test("production edge suites reject descriptor-only controls before invoking an external operation", () => {
+test("legacy edge suites reject descriptor-only controls before invoking an external operation", () => {
   let calls = 0;
-  expect(() => createProductionEdgeSuiteAdapters({
+  expect(() => createLegacyProductionEdgeSuiteAdapters({
     candidateId: digest("a"),
     control: { execute: async () => { calls += 1; return {}; } },
   })).toThrow("PRODUCTION_EDGE_CONTROL_CLIENT_REQUIRED");
@@ -30,15 +30,15 @@ function control(candidateId = digest("a")) {
   return new ProductionCoreControlClient({ serviceUrl: "https://edge-control.run.app", candidateSha256: candidateId, topologySha256: digest("d"), request: {}, receipt: {}, journal, identity: { async token() { throw new Error("test must not authenticate"); } } });
 }
 
-test("production edge suites require one concrete private control for all four release boundaries", () => {
-  const adapters = createProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: control() });
+test("legacy edge suites retain one concrete Cloud Run control for historical recovery only", () => {
+  const adapters = createLegacyProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: control() });
   expect(Object.keys(adapters)).toEqual(["security-host", "supply-chain", "ContextVM-payment-model", "publication"]);
   expect(Object.values(adapters).every(port => port.evidenceClass === "real" && port.origin === "project-owned")).toBe(true);
-  expect(() => createProductionEdgeSuiteAdapters({ candidateId: digest("b"), control: control() })).toThrow("PRODUCTION_EDGE_CANDIDATE_MISMATCH");
+  expect(() => createLegacyProductionEdgeSuiteAdapters({ candidateId: digest("b"), control: control() })).toThrow("PRODUCTION_EDGE_CANDIDATE_MISMATCH");
 });
 
 test("payment/model port binds a candidate before any signed ContextVM or rail operation", () => {
-  const adapters = createProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: control() });
+  const adapters = createLegacyProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: control() });
   expect(() => adapters["ContextVM-payment-model"].exerciseSignedTransport({ candidateId: digest("b") })).toThrow("PRODUCTION_EDGE_CANDIDATE_MISMATCH");
   expect(typeof openContextVmCertificationClient).toBe("function");
 });
@@ -69,7 +69,7 @@ test("every real edge adapter payload matches its server contract and rejects ch
     return { operationId: command.operationId, kind: command.kind, requestSha256: digest("f"), state: "completed" as const, result: {} };
   });
   try {
-    const adapters = createProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: client });
+    const adapters = createLegacyProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: client });
     const source = { sealedArtifactSha256: digest("b"), aggregateSha256: digest("c") };
     await adapters["security-host"].runSealedBuild({ candidateId: digest("a"), image: `registry.example/worker@sha256:${digest("d")}` });
     await adapters["security-host"].runHostileMatrix({ ...source, manifestSha256: digest("d"), capabilitiesSha256: digest("e") });
@@ -86,7 +86,7 @@ test("every real edge adapter payload matches its server contract and rejects ch
     await adapters.publication.submitOriginalPublication(source);
     await adapters.publication.reconcileOriginalPublication({ intentId: "intent-1", operationIds: { deploy: "deploy:intent-1", ownerManifest: "owner_manifest:intent-1", attestation: "attestation:intent-1" } });
     const reference = { principal: { pubkey: digest("a") }, idempotencyKey: "direct:certification" };
-    const direct = createProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: client, artifactContract: "nip5d-direct-v1", directPublicationReference: reference }).publication;
+    const direct = createLegacyProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: client, artifactContract: "nip5d-direct-v1", directPublicationReference: reference }).publication;
     if (direct.artifactContract !== "nip5d-direct-v1") throw new Error("DIRECT_VARIANT_REQUIRED");
     const original = { ...reference, intentId: `direct-publication:${digest("b")}`, reviewSha256: digest("c") };
     const directSource = DirectPublicationSourceObservationSchema.parse({ version: "direct-publication-observation-v1", status: "verified-source-bytes", artifactContract: "nip5d-direct-v1",

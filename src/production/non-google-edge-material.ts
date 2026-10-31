@@ -4,7 +4,8 @@ import { z } from "zod";
 
 import { canonicalJson } from "../promotion/schema";
 import { assertNonGoogleSuccessorRequestHeld, verifyNonGoogleAuthorizationReceiptV4 } from "../release/contracts";
-import { OpenAiResponsesRateSnapshotSchema } from "../release/costs/non-google-cost-bound";
+import { createSuccessorRoleCostBound, OpenAiResponsesRateSnapshotSchema, type SuccessorGraphInventory, type SuccessorRoleCostFact } from "../release/costs/non-google-cost-bound";
+import type { NonGoogleModelCostCatalogPort } from "../release/costs/production-catalog";
 import { createOpenAiResponsesClient, createOpenAiResponsesHttpPort } from "../release/deployment/openai-responses-client";
 import { createPostgresOpenAiResponsesOperationJournal } from "../release/deployment/postgres-openai-responses-journal";
 import { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
@@ -34,6 +35,38 @@ export const NonGoogleEdgeMaterialSchema = z.object({
   }
 });
 export type NonGoogleEdgeMaterial = z.infer<typeof NonGoogleEdgeMaterialSchema>;
+
+const costAuthorities = new WeakSet<object>();
+export type NonGoogleEdgeCostAuthority = Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+  roleCostBoundSha256: string;
+  rateQuoteSha256: string;
+  model: string;
+  maximumChargeMicros: number;
+}>;
+
+/** Consumes controller-owned cost facts through the canonical successor
+ * resolver. This does not issue authority: it rejects a record unless the
+ * official catalog, source digest, role, usage maximum and v4 bound all agree. */
+export async function consumeNonGoogleEdgeCostAuthority(input: Readonly<{
+  material: unknown;
+  graph: SuccessorGraphInventory;
+  facts: readonly SuccessorRoleCostFact[];
+  modelCatalog: NonGoogleModelCostCatalogPort;
+}>): Promise<NonGoogleEdgeCostAuthority> {
+  const material = NonGoogleEdgeMaterialSchema.parse(input.material);
+  const receipt = await verifyNonGoogleAuthorizationReceiptV4({ request: material.successorAuthorization.request, receipt: material.successorAuthorization.receipt });
+  const bound = await createSuccessorRoleCostBound({ graph: input.graph, facts: input.facts, modelCatalog: input.modelCatalog });
+  const modelFact = bound.facts.find(fact => fact.roleId === "model.openai-responses");
+  if (!modelFact || modelFact.status !== "available" || modelFact.provider !== "openai_responses" || modelFact.disposition !== "authoritative_native_usage" || modelFact.rate === undefined || modelFact.usageIntent === undefined
+    || bound.boundSha256 !== receipt.roleCostBoundSha256 || bound.candidateSha256 !== material.candidateSha256 || bound.topologySha256 !== material.topologySha256
+    || canonicalJson(modelFact.rate) !== canonicalJson(material.openAiResponses.rate) || modelFact.rate.model !== material.openAiResponses.model
+    || modelFact.usageIntent.maximumChargeMicros !== material.openAiResponses.maximumChargeMicros) throw new Error("NON_GOOGLE_EDGE_COST_BINDING_REQUIRED");
+  const authority = Object.freeze({ candidateSha256: material.candidateSha256, topologySha256: material.topologySha256, roleCostBoundSha256: bound.boundSha256, rateQuoteSha256: material.openAiResponses.rate.quoteSha256, model: material.openAiResponses.model, maximumChargeMicros: material.openAiResponses.maximumChargeMicros });
+  costAuthorities.add(authority);
+  return authority;
+}
 
 /** Plan 70 owns the controller-authenticated issuer for this opaque
  * capability. Its private brand prevents mounted JSON, a legacy receipt, or a
@@ -79,6 +112,24 @@ async function assertConsumptionAuthority(input: Readonly<{
   return authority;
 }
 
+function assertCostAuthority(input: Readonly<{ authority: unknown; material: NonGoogleEdgeMaterial; receipt: Readonly<{ roleCostBoundSha256: string }> }>): NonGoogleEdgeCostAuthority {
+  if (!input.authority || typeof input.authority !== "object" || !costAuthorities.has(input.authority)) throw new Error("NON_GOOGLE_EDGE_COST_AUTHORITY_REQUIRED");
+  const authority = input.authority as NonGoogleEdgeCostAuthority;
+  if (authority.candidateSha256 !== input.material.candidateSha256 || authority.topologySha256 !== input.material.topologySha256
+    || authority.roleCostBoundSha256 !== input.receipt.roleCostBoundSha256 || authority.rateQuoteSha256 !== input.material.openAiResponses.rate.quoteSha256
+    || authority.model !== input.material.openAiResponses.model || authority.maximumChargeMicros !== input.material.openAiResponses.maximumChargeMicros) throw new Error("NON_GOOGLE_EDGE_COST_BINDING_REQUIRED");
+  return authority;
+}
+
+/** Pure normal-mount boundary. It validates only supplied bytes and successor
+ * lineage, then preserves the Plan 70 hold before secret, provider, SDK or
+ * database material can be touched. */
+export async function assertMountedNonGoogleEdgePrecredential(material: unknown): Promise<never> {
+  const parsed = NonGoogleEdgeMaterialSchema.parse(material);
+  await verifyNonGoogleAuthorizationReceiptV4({ request: parsed.successorAuthorization.request, receipt: parsed.successorAuthorization.receipt });
+  return assertNonGoogleSuccessorRequestHeld(parsed.successorAuthorization.request);
+}
+
 /** Mount-only resolver. It performs no read during construction and reads only
  * the fixed referenced key after the Responses client has claimed an original
  * operation. It never exposes the key outside the authorization header. */
@@ -117,6 +168,7 @@ export class MountedOpenAiApiKeyBroker {
 export async function createMountedNonGoogleEdgeClient(input: Readonly<{
   material: unknown;
   authority?: unknown;
+  costAuthority?: unknown;
   pool: PostgresSqlPool;
   now?: () => number;
   secretRoot?: string;
@@ -131,6 +183,7 @@ export async function createMountedNonGoogleEdgeClient(input: Readonly<{
   // key, create a client, or issue a request.
   if (input.authority === undefined) assertNonGoogleSuccessorRequestHeld(material.successorAuthorization.request);
   await assertConsumptionAuthority({ authority: input.authority, material, receipt });
+  assertCostAuthority({ authority: input.costAuthority, material, receipt });
 
   const broker = new MountedOpenAiApiKeyBroker({ credentialReference: material.openAiResponses.credentialReference, ...(input.secretRoot === undefined ? {} : { root: input.secretRoot }) });
   const journal = createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(input.pool, {

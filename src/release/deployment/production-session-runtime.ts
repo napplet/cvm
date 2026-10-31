@@ -9,7 +9,7 @@ import {
   type ProductionLiveProtectedCertificationPorts,
 } from "../../certification/live/production-ports";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "./postgres-operation-journal";
-import { createProductionEdgeSuiteAdapters, type ProductionEdgeSuiteAdapters } from "./production-edge-suite-adapters";
+import { createLegacyProductionEdgeSuiteAdapters, type ProductionEdgeSuiteAdapters } from "./production-edge-suite-adapters";
 import { assertProductionCoreControlClient, type ProductionCoreControlClient } from "./production-core-control";
 import type { createGoogleDeploymentClients } from "./google-clients";
 import type { createWorkerDeploymentClients } from "./worker-clients";
@@ -312,7 +312,10 @@ export function assembleProductionSessionRuntime(input: Readonly<{
     discoverCapabilities: 0, discoverAuthentication: 0, plan: 0, apply: 0, observe: 0, cleanup: 0, suites: 0,
   };
   const core = createProductionCoreSuiteAdapters({ candidate: broker.workerCandidate, control: broker.control, contextvm: broker.clients.contextvmCertification });
-  const edge = createProductionEdgeSuiteAdapters({ candidateId: broker.candidateSha256, control: broker.control, ...(broker.clients.directPublication ? { artifactContract: "nip5d-direct-v1", directPublicationReference: broker.clients.directPublicationReference } : {}) });
+  /* Historical Cloud Run/ADC sessions remain recoverable, but this legacy
+   * assembly is not the successor graph. Plan 70 composes the native private
+   * control client only after the v3/v4 issuer is verified. */
+  const edge = createLegacyProductionEdgeSuiteAdapters({ candidateId: broker.candidateSha256, control: broker.control, ...(broker.clients.directPublication ? { artifactContract: "nip5d-direct-v1", directPublicationReference: broker.clients.directPublicationReference } : {}) });
   const rawProtectedPorts = composeProductionProtectedPorts({ core, edge });
   if (!hasExactKeys(rawProtectedPorts, PRODUCTION_LIVE_PROTECTED_PORT_KEYS)) throw new Error("PRODUCTION_SESSION_PROTECTED_PORT_SET_REQUIRED");
   const protectedPorts = Object.freeze(Object.fromEntries(PRODUCTION_LIVE_PROTECTED_PORT_KEYS.map(key => [

@@ -117,12 +117,28 @@ const MAX_OPENAI_MODEL_NODES = 12_000;
 const MAX_OPENAI_MODEL_DEPTH = 128;
 const MAX_OPENAI_MODEL_TEXT_BYTES = 2 * 1024 * 1024;
 const HtmlVoidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+const OpenAiPriceGroupClass = "flex flex-col gap-2 md:flex-row";
+const OpenAiPriceCardClass = "flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4";
+const OpenAiPriceValueClass = "text-2xl font-semibold";
+const OpenAiPrimaryPricingPath = [
+  { childIndex: 1, className: OpenAiPriceGroupClass },
+  { childIndex: 1, className: "flex flex-col gap-4" },
+  { childIndex: 1, className: "flex flex-1 flex-col gap-4" },
+  { childIndex: 4, className: "flex flex-col gap-4 lg:flex-row" },
+  { childIndex: 1, className: "flex flex-col gap-8" },
+  { childIndex: 0, className: "relative mx-4 flex flex-col gap-4 overflow-hidden px-4 pt-8 pb-10 sm:mx-8 md:mx-auto md:w-full md:max-w-6xl md:px-12 xl:px-4" },
+  { childIndex: 0, className: "relative" },
+] as const;
 type OpenAiModelElement = {
   readonly parent?: OpenAiModelElement;
   readonly children: OpenAiModelElement[];
   readonly directText: string[];
   readonly tagName: string;
+  readonly className: string;
   readonly modelIdentity?: string;
+  readonly componentExport?: string;
+  readonly componentUrl?: string;
+  readonly props?: string;
   readonly modelView: boolean;
 };
 type OpenAiPriceCard = Readonly<{ label: "Input" | "Cached input" | "Output"; value: string }>;
@@ -138,22 +154,48 @@ function openAiModelDescendant(element: OpenAiModelElement, ancestor: OpenAiMode
   for (let current: OpenAiModelElement | undefined = element.parent; current; current = current.parent) if (current === ancestor) return true;
   return false;
 }
-function openAiModelContainer(element: OpenAiModelElement): boolean {
+function openAiNestedModelContainer(element: OpenAiModelElement): boolean {
   return element.modelView || ((element.tagName === "article" || element.tagName === "section") && element.modelIdentity !== undefined);
 }
+function openAiModelFamily(model: string): string {
+  const matched = /^([a-z0-9][a-z0-9.-]*)-\d{4}-\d{2}-\d{2}$/u.exec(model);
+  if (!matched?.[1]) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  return matched[1];
+}
+function decodeOpenAiModelViewProps(value: string): unknown {
+  if (/&(?!quot;|amp;|lt;|gt;|#39;)/iu.test(value)) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  return JSON.parse(value.replace(/&(quot|amp|lt|gt|#39);/giu, (_all, entity: string) => ({ quot: "\"", amp: "&", lt: "<", gt: ">", "#39": "'" })[entity.toLowerCase()] ?? ""));
+}
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+function openAiModelViewFamily(element: OpenAiModelElement): string | undefined {
+  if (element.componentExport !== "ModelView" || element.componentUrl === undefined || !/^\/_astro\/ModelView\.react\.[A-Za-z0-9_-]+\.js(?:\?[^\s]*)?$/u.test(element.componentUrl) || element.props === undefined) return undefined;
+  try {
+    const props = decodeOpenAiModelViewProps(element.props);
+    const modelName = isRecord(props) ? props.modelName : undefined;
+    return Array.isArray(modelName) && modelName.length === 2 && modelName[0] === 0 && typeof modelName[1] === "string" && /^[a-z0-9][a-z0-9.-]*$/u.test(modelName[1]) ? modelName[1] : undefined;
+  } catch { return undefined; }
+}
 function openAiPriceCard(element: OpenAiModelElement, text: Map<OpenAiModelElement, string>): OpenAiPriceCard | undefined {
-  if (element.children.length !== 2) return undefined;
+  if (element.className !== OpenAiPriceCardClass || element.children.length !== 2 || element.children[0]!.className !== "" || element.children[1]!.className !== OpenAiPriceValueClass) return undefined;
   const label = openAiModelText(element.children[0]!, text);
   const value = /^\$([0-9]+(?:\.[0-9]{1,6})?)$/u.exec(openAiModelText(element.children[1]!, text))?.[1];
   if ((label !== "Input" && label !== "Cached input" && label !== "Output") || value === undefined) return undefined;
   return { label, value };
 }
 function openAiPriceGroup(element: OpenAiModelElement, text: Map<OpenAiModelElement, string>): readonly [OpenAiPriceCard, OpenAiPriceCard, OpenAiPriceCard] | undefined {
-  if (element.children.length !== 3) return undefined;
+  if (element.className !== OpenAiPriceGroupClass || element.children.length !== 3) return undefined;
   const cards = element.children.map(child => openAiPriceCard(child, text));
   if (cards.some(card => card === undefined)) return undefined;
   const [input, cached, output] = cards as [OpenAiPriceCard, OpenAiPriceCard, OpenAiPriceCard];
   return input.label === "Input" && cached.label === "Cached input" && output.label === "Output" ? [input, cached, output] : undefined;
+}
+function openAiApprovedPrimaryPricingPath(group: OpenAiModelElement, modelView: OpenAiModelElement): boolean {
+  let current: OpenAiModelElement | undefined = group;
+  for (const expected of OpenAiPrimaryPricingPath) {
+    if (!current || current.tagName !== "div" || current.className !== expected.className || !current.parent || current.parent.children.indexOf(current) !== expected.childIndex) return false;
+    current = current.parent;
+  }
+  return current === modelView;
 }
 /** Parse the actual ModelView tree rather than scanning for an early closing
  * tag. A model can only receive rates from its one balanced container and its
@@ -170,10 +212,14 @@ async function parseOfficialHtml(bytes: Uint8Array, model: string) {
       element(element) {
         const parent = stack.at(-1);
         const tagName = element.tagName.toLowerCase();
+        const componentExport = element.getAttribute("component-export");
+        const componentUrl = element.getAttribute("component-url");
         const current: OpenAiModelElement = {
-          ...(parent ? { parent } : {}), children: [], directText: [], tagName,
+          ...(parent ? { parent } : {}), children: [], directText: [], tagName, className: element.getAttribute("class") ?? "",
           ...(element.getAttribute("data-openai-model") === null ? {} : { modelIdentity: element.getAttribute("data-openai-model")! }),
-          modelView: tagName === "astro-island" && (element.getAttribute("component-url")?.includes("ModelView") ?? false),
+          ...(componentExport === null ? {} : { componentExport }), ...(componentUrl === null ? {} : { componentUrl }),
+          ...(element.getAttribute("props") === null ? {} : { props: element.getAttribute("props")! }),
+          modelView: tagName === "astro-island" && (componentExport === "ModelView" || componentUrl?.includes("ModelView") === true),
         };
         if (parent) parent.children.push(current);
         elements.push(current);
@@ -195,12 +241,16 @@ async function parseOfficialHtml(bytes: Uint8Array, model: string) {
   } catch { throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); }
   if (stack.length !== 0) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
   const text = new Map<OpenAiModelElement, string>();
-  const candidates = elements.filter(element => openAiModelContainer(element) && elements.some(code => code.tagName === "code" && openAiModelText(code, text) === model && openAiModelDescendant(code, element)));
-  if (candidates.length === 0) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  const modelViews = elements.filter(element => element.modelView && openAiModelViewFamily(element) !== undefined);
+  if (modelViews.length === 0) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  const selectedFamily = openAiModelFamily(model);
+  const candidates = modelViews.filter(element => openAiModelViewFamily(element) === selectedFamily);
   if (candidates.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
   const container = candidates[0]!;
-  if (elements.some(element => element !== container && openAiModelContainer(element) && openAiModelDescendant(element, container))) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const groups = elements.filter(element => openAiModelDescendant(element, container) && openAiPriceGroup(element, text) !== undefined);
+  const modelCodes = elements.filter(element => element.tagName === "code" && openAiModelDescendant(element, container) && ModelSchema.safeParse(openAiModelText(element, text)).success).map(element => openAiModelText(element, text));
+  if (modelCodes.length !== 1 || modelCodes[0] !== model) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  if (elements.some(element => element !== container && openAiNestedModelContainer(element) && openAiModelDescendant(element, container))) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const groups = elements.filter(element => openAiModelDescendant(element, container) && openAiPriceGroup(element, text) !== undefined && openAiApprovedPrimaryPricingPath(element, container));
   if (groups.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
   const [input, cached, output] = openAiPriceGroup(groups[0]!, text)!;
   return { currency: "USD" as const, inputMicrosPerMillion: micros(input.value), cachedInputMicrosPerMillion: micros(cached.value), outputMicrosPerMillion: micros(output.value) };

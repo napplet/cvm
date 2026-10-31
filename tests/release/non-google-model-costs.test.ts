@@ -27,8 +27,8 @@ const cards = `<div class="flex flex-col gap-2 md:flex-row">
 <div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
 </div>`;
 const modelView = (body: string) => `<astro-island component-export="ModelView" component-url="/_astro/ModelView.react.abc.js" props="{&quot;modelName&quot;:[0,&quot;gpt-4.1&quot;]}">${body}</astro-island>`;
-const primaryCards = `<div class="relative"><div class="relative mx-4 flex flex-col gap-4 overflow-hidden px-4 pt-8 pb-10 sm:mx-8 md:mx-auto md:w-full md:max-w-6xl md:px-12 xl:px-4"><div></div><div class="flex flex-col gap-8"><div></div><div class="flex flex-col gap-4 lg:flex-row"><div></div><div></div><div></div><div></div><div class="flex flex-1 flex-col gap-4"><div></div><div class="flex flex-col gap-4"><div></div>${cards}</div></div></div></div></div></div>`;
-const source = new TextEncoder().encode(`<!doctype html><html><body>${modelView(`<code class="text-xs">gpt-4.1-2025-04-14</code>${primaryCards}`)}</body></html>`);
+const primaryCards = `<div class="relative"><div class="relative mx-4 flex flex-col gap-4 overflow-hidden px-4 pt-8 pb-10 sm:mx-8 md:mx-auto md:w-full md:max-w-6xl md:px-12 xl:px-4"><div></div><div class="flex flex-col gap-8"><div></div><div></div><div></div><div></div><div class="flex flex-col gap-4 lg:flex-row"><div></div><div class="flex flex-1 flex-col gap-4"><div></div><div class="flex flex-col gap-4"><div></div>${cards}</div></div></div></div></div></div>`;
+const source = new TextEncoder().encode(`<!doctype html><html><body>${modelView(`${primaryCards}<code class="text-xs">gpt-4.1-2025-04-14</code>`)}</body></html>`);
 const document = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: source, observedAtMs: now - 1, freshUntilMs: now + 60_000 });
 
 const rate = async () => createOpenAiResponsesRateSnapshot({ document, model: "gpt-4.1-2025-04-14" });

@@ -1056,7 +1056,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     let mountedTerminalResult: unknown;
     try { mountedTerminalResult = await mountedService.resume(workspaceResume); }
     catch (error) { mountedTerminalError = error; }
-    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${canonicalJson(mountedTerminalResult)}`);
+    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
     if (!(mountedTerminalError instanceof Error) || mountedTerminalError.message !== "TERMINAL_PAUSE_WRITE_FAILED")
       throw new Error(`MOUNTED_TERMINAL_WRITE_OUTCOME_INVALID:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
     expect(modelPosts).toBe(3);

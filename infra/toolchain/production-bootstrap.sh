@@ -1,52 +1,54 @@
 #!/bin/sh
 set -eu
+refuse() { printf '%s\n' "CVM_BOOTSTRAP_REFUSED:$1" >&2; exit 126; }
 # This is the only privileged process in the production-worker image.  It
 # establishes the per-lease writable filesystem before the untrusted workload
 # exists, then irreversibly drops every capability.  A provider which denies
 # the mount is intentionally ineligible: an overlay workspace is not a quota.
-[ "$(id -u)" = 0 ] || exit 126
+[ "$(id -u)" = 0 ] || refuse BOOTSTRAP_UID
 # Providers differ in whether the image ENTRYPOINT precedes their explicit
 # command. Normalize only our own immutable wrapper before dropping privilege.
 if [ "${1-}" = /usr/local/bin/napplet-cvm-bootstrap ]; then shift; fi
-command -v mount >/dev/null 2>&1 || exit 126
-command -v findmnt >/dev/null 2>&1 || exit 126
-command -v setpriv >/dev/null 2>&1 || exit 126
-command -v mountpoint >/dev/null 2>&1 || exit 126
+command -v mount >/dev/null 2>&1 || refuse TOOL_MOUNT
+command -v findmnt >/dev/null 2>&1 || refuse TOOL_FINDMNT
+command -v setpriv >/dev/null 2>&1 || refuse TOOL_SETPRIV
+command -v mountpoint >/dev/null 2>&1 || refuse TOOL_MOUNTPOINT
 # Provider exec calls start as the image user.  Enter a fresh network namespace
 # before any untrusted command, bring back loopback for Chromium's local test
 # server, and fail closed if the provider/kernel disallows namespace creation.
 # A fresh namespace has no external interfaces or routes; this is stronger than
 # a provider metadata flag and is independently observed by the trusted probe.
 if [ "${NAPPLET_CVM_NETWORK_NAMESPACE-}" != "1" ]; then
-  command -v unshare >/dev/null 2>&1 || exit 126
-  exec unshare --net -- env NAPPLET_CVM_NETWORK_NAMESPACE=1 "$0" "$@"
+  command -v unshare >/dev/null 2>&1 || refuse TOOL_UNSHARE
+  exec unshare --net -- env NAPPLET_CVM_NETWORK_NAMESPACE=1 "$0" "$@" || refuse NETWORK_NAMESPACE
 fi
 # The provider must create this worker with its own private mount namespace and
 # a read-only image root. Do not create a transient nested mount namespace:
 # fixed-operation `put`/`status` calls must share the same trusted job tmpfs.
 # A writable overlay is never repaired in-process; absent the native launch
 # boundary, fail before mounting or executing anything.
-ROOT_OPTIONS=$(findmnt -n -o OPTIONS --target /) || exit 126
-ROOT_PROPAGATION=$(findmnt -n -o PROPAGATION --target /) || exit 126
-case ",$ROOT_OPTIONS," in *,ro,*) ;; *) exit 126 ;; esac
-case "$ROOT_PROPAGATION" in private) ;; *) exit 126 ;; esac
+ROOT_OPTIONS=$(findmnt -n -o OPTIONS --target /) || refuse ROOT_OPTIONS_QUERY
+ROOT_PROPAGATION=$(findmnt -n -o PROPAGATION --target /) || refuse ROOT_PROPAGATION_QUERY
+case ",$ROOT_OPTIONS," in *,ro,*) ;; *) refuse ROOT_NOT_READONLY ;; esac
+case "$ROOT_PROPAGATION" in private) ;; *) refuse ROOT_NOT_PRIVATE ;; esac
 NET=/toolchain/bin/busybox
-[ -x "$NET" ] || exit 126
-"$NET" ip link set lo up || exit 126
+[ -x "$NET" ] || refuse TOOL_NETWORK
+"$NET" ip link set lo up || refuse NETWORK_LOOPBACK
 ACTIVE_NON_LOOPBACK=$("$NET" ip -o link show | "$NET" grep -v '^1: lo:' | "$NET" grep '<[^>]*UP' || true)
-[ -z "$ACTIVE_NON_LOOPBACK" ] || exit 126
-[ -z "$("$NET" ip route show default)" ] || exit 126
+[ -z "$ACTIVE_NON_LOOPBACK" ] || refuse NETWORK_LINK
+[ -z "$("$NET" ip route show default)" ] || refuse NETWORK_ROUTE
 mount_bounded() {
-  path=$1 size_limit=$2 options=$3 owner=${4-65532} mode=${5-0700}
-  mkdir -p "$path"
+  stage=$1 path=$2 size_limit=$3 options=$4 owner=${5-65532} mode=${6-0700}
+  mkdir -p "$path" || refuse "MOUNT_${stage}_TARGET"
   if ! mountpoint -q "$path"; then
-    mount -t tmpfs -o "size=$size_limit,mode=$mode,nosuid,nodev,$options" tmpfs "$path" || exit 126
+    mount -t tmpfs -o "size=$size_limit,mode=$mode,nosuid,nodev,$options" tmpfs "$path" || refuse "MOUNT_${stage}_CREATE"
   fi
-  [ "$(findmnt -n -o FSTYPE --target "$path")" = "tmpfs" ] || exit 126
-  size=$(findmnt -n -o SIZE --bytes --target "$path")
-  [ "$size" -gt 0 ] && [ "$size" -le "$size_limit" ] || exit 126
-  chown "$owner:$owner" "$path" || exit 126
-  chmod "$mode" "$path" || exit 126
+  [ "$(findmnt -n -o FSTYPE --target "$path")" = "tmpfs" ] || refuse "MOUNT_${stage}_FSTYPE"
+  size=$(findmnt -n -o SIZE --bytes --target "$path") || refuse "MOUNT_${stage}_SIZE_QUERY"
+  case "$size" in ''|*[!0-9]*) refuse "MOUNT_${stage}_SIZE" ;; esac
+  [ "$size" -gt 0 ] && [ "$size" -le "$size_limit" ] || refuse "MOUNT_${stage}_SIZE"
+  chown "$owner:$owner" "$path" || refuse "MOUNT_${stage}_OWNER"
+  chmod "$mode" "$path" || refuse "MOUNT_${stage}_MODE"
 }
 # Generated work, HOME caches, and /tmp are all independently bounded.  Do
 # not accept the image overlay for any writable path: it is not a quota.
@@ -58,22 +60,22 @@ mount_bounded() {
 # Status queries share the existing mount with running builds. Never narrow
 # its traversal permissions even momentarily: a concurrent compiler read can
 # otherwise receive EACCES and report an immutable library as missing.
-mount_bounded /workspace 536870912 exec 0 1777
+mount_bounded WORKSPACE /workspace 536870912 exec 0 1777
 # Sticky, root-owned parent prevents generated code from replacing a trusted
 # job's project directory while still permitting its ordinary workspace files.
-[ ! -L /workspace/jobs ] || exit 126
-mkdir -p /workspace/jobs
-chown 0:0 /workspace/jobs
-chmod 0755 /workspace/jobs
-mount_bounded /run/napplet-cvm-jobs 67108864 noexec 0
-mount_bounded /home/napplet 67108864 noexec
-mount_bounded /tmp 67108864 noexec
-mount_bounded /var/tmp 67108864 noexec
-mount_bounded /work 67108864 noexec
-mount_bounded /run/lock 16777216 noexec
+[ ! -L /workspace/jobs ] || refuse WORKSPACE_JOBS_SYMLINK
+mkdir -p /workspace/jobs || refuse WORKSPACE_JOBS_TARGET
+chown 0:0 /workspace/jobs || refuse WORKSPACE_JOBS_OWNER
+chmod 0755 /workspace/jobs || refuse WORKSPACE_JOBS_MODE
+mount_bounded JOBS /run/napplet-cvm-jobs 67108864 noexec 0
+mount_bounded HOME /home/napplet 67108864 noexec
+mount_bounded TMP /tmp 67108864 noexec
+mount_bounded VARTMP /var/tmp 67108864 noexec
+mount_bounded WORK /work 67108864 noexec
+mount_bounded LOCK /run/lock 16777216 noexec
 # Chromium may use POSIX shared memory; keep that writable surface separately
 # quota-bound instead of inheriting Docker's provider-sized /dev/shm default.
-mount_bounded /dev/shm 67108864 exec
+mount_bounded SHM /dev/shm 67108864 exec
 # The image overlay is never an allowed writable surface.  Seal every existing
 # non-policy mount read-only in the worker's private mount namespace, leaving
 # only the exact bounded tmpfs mounts above writable.  Mount metadata, not
@@ -81,28 +83,28 @@ mount_bounded /dev/shm 67108864 exec
 # a writable descendant.
 seal_base_mounts() {
   list=/run/napplet-cvm-jobs/.mounts-before-seal
-  findmnt -rn -o TARGET,OPTIONS > "$list" || exit 126
+  findmnt -rn -o TARGET,OPTIONS > "$list" || refuse SEAL_MOUNTINFO
   while IFS=' ' read -r target options; do
-    [ -n "$target" ] || continue
+    [ -n "$target" ] && [ -n "$options" ] || refuse SEAL_MOUNTINFO_ROW
     case "$target" in
       /workspace|/run/napplet-cvm-jobs|/home/napplet|/tmp|/var/tmp|/work|/run/lock|/dev/shm) continue ;;
       # These are the complete Docker/Linux base mounts permitted before they
       # are sealed. Any other read-write mount is an injected surface and is
       # refused rather than normalized into an implicit allowlist.
       /|/proc|/dev|/dev/pts|/dev/mqueue|/sys|/sys/fs/cgroup|/etc/resolv.conf|/etc/hostname|/etc/hosts) ;;
-      *) case ",$options," in *,rw,*) exit 126 ;; esac; continue ;;
+      *) case ",$options," in *,rw,*) refuse SEAL_UNKNOWN_RW_MOUNT ;; esac; continue ;;
     esac
     case ",$options," in
-      *,rw,*) mount -o remount,ro "$target" || exit 126 ;;
+      *,rw,*) mount -o remount,ro "$target" || refuse SEAL_BASE_REMOUNT ;;
     esac
   done < "$list"
-  rm -f "$list"
+  rm -f "$list" || refuse SEAL_CLEANUP
 }
 seal_base_mounts
 # Do not leak image/build-time or provider variables to generated code.  The
 # worker's ready check consumes this exact small environment as evidence.
 policy=${NAPPLET_CVM_POLICY_VERSION-}
-[ -n "$policy" ] || exit 126
+[ -n "$policy" ] || refuse POLICY_VERSION
 # Keep only the immutable, timer-only lease supervisor root-owned. A workload
 # sharing its UID could otherwise SIGSTOP it and evade Fly's lifetime bound.
 # It receives no source, stdin instructions, provider credentials, or shell.

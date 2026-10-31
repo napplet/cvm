@@ -13,6 +13,10 @@ const googleControls = new URL("../../src/production/mounted-google-controls.ts"
 const pinnedExecution = new URL("../../src/release/production-execution.ts", import.meta.url);
 const bootstrap = new URL("../../src/production/bootstrap.ts", import.meta.url);
 const sourceBuild = new URL("../../src/production/source-build-verifier.ts", import.meta.url);
+const productionJob = new URL("../../infra/toolchain/production-job.ts", import.meta.url);
+const productionWorker = new URL("../../infra/toolchain/production-worker.ts", import.meta.url);
+const productionJobClient = new URL("../../src/worker-adapters/production-job-client.ts", import.meta.url);
+const artifactVerifier = new URL("../../src/production/artifact-verifier.ts", import.meta.url);
 const mountedRecord = new URL("../../src/production/mounted-session-record.ts", import.meta.url);
 const productionScript = new URL("../../scripts/production.ts", import.meta.url);
 
@@ -48,8 +52,8 @@ test("mounted production session material constructs the complete native provide
   expect(text).toContain("mountedGoogle.billingReports");
 });
 
-test("sealed source-build verifier materializes only a receipt-bound worker result", async () => {
-  const [material, verifier] = await Promise.all([readFile(source, "utf8"), readFile(sourceBuild, "utf8")]);
+test("sealed source-build verifier materializes receipt-bound native hostile and supply observations", async () => {
+  const [material, verifier, job, worker, client, artifact] = await Promise.all([readFile(source, "utf8"), readFile(sourceBuild, "utf8"), readFile(productionJob, "utf8"), readFile(productionWorker, "utf8"), readFile(productionJobClient, "utf8"), readFile(artifactVerifier, "utf8")]);
   expect(material).not.toContain('runSealedBuild({ candidateId: input.config.candidateSha256, image: input.config.worker.image })');
   expect(verifier).toContain("ProductionWorkerJobClient");
   expect(verifier).toContain("capacity.reserveNow");
@@ -59,14 +63,21 @@ test("sealed source-build verifier materializes only a receipt-bound worker resu
   expect(verifier).toContain("PRODUCTION_SOURCE_BUILD_PERSISTENCE_UNKNOWN");
   expect(verifier).toContain("capacity.observeRelease");
   expect(verifier).toContain("capacity.release");
-  expect(verifier).toContain("PRODUCTION_EDGE_ORIGINAL_VERIFIER_REQUIRED");
+  expect(verifier).toContain('command.kind === "edge.security.hostile"');
+  expect(verifier).toContain('command.kind === "edge.supply.primary"');
+  expect(verifier).toContain('command.kind === "edge.supply.secondary"');
+  expect(verifier).toContain('command.kind === "edge.supply.attestation"');
   expect(verifier).toContain("validateAuthorizationReceipt");
   expect(verifier).toContain("request.providerScopes.some");
   expect(verifier).toContain("request.orderedEffects.some");
   expect(verifier).toContain("PRODUCTION_SOURCE_BUILD_WORKER_LIFETIME_REQUIRED");
-  expect(verifier).toContain('command.kind !== "edge.security.build"');
+  expect(verifier).not.toContain('command.kind !== "edge.security.build"');
   expect(verifier).not.toContain("ProductionCoreControlClient");
   expect(verifier).not.toContain("createProductionEdgeSuiteAdapters");
+  expect(job).toContain("edge-audit");
+  expect(worker).toContain("edge-audit");
+  expect(client).toContain("edgeCertification");
+  expect(artifact).toContain("edgeCertification");
 });
 
 test("normal mounted record materialization owns source preapproval and discards placeholder artifact hashes", async () => {

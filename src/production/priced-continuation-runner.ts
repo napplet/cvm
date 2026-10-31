@@ -79,6 +79,10 @@ export class ProductionPricedContinuationRunner {
           await this.#retainUnknown(claim, finalization.providerReceiptReference);
           throw new AccountingPending("PRICED_RUNNER_ACCOUNTING_PENDING");
         }
+        if (finalization.status === "billing_invariant_failed") {
+          await this.#holdKnownAccountingFailure(claim, finalization);
+          return;
+        }
         if (finalization.status !== "completed" && finalization.status !== "failed")
           throw new Error("PRICED_RUNNER_FINALIZATION_STATUS_DENIED");
         try {
@@ -134,5 +138,14 @@ export class ProductionPricedContinuationRunner {
       if (action.actionId !== claim.actionId || action.actionBudgetReference !== claim.actionBudgetReference)
         throw new Error("PRICED_RUNNER_ACTION_BINDING_DENIED");
     });
+  }
+
+  /** A receipt has already made provider acceptance known.  This intentionally
+   * does not complete the priced claim or release cleanup: a deterministic
+   * local accounting failure remains held for the original operation only. */
+  async #holdKnownAccountingFailure(claim: AcceptedPricedContinuation, finalization: import("../persistence/funding-store").MeteredFinalizeInput): Promise<void> {
+    const action = await this.#store.transact(claim.accountId, transaction => transaction.finalizeMeteredAction(finalization));
+    if (action.actionId !== claim.actionId || action.operationId !== claim.operationId || action.status !== "billing_invariant_failed")
+      throw new Error("PRICED_RUNNER_ACCOUNTING_HOLD_DENIED");
   }
 }

@@ -276,14 +276,13 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
         await beforeDeadline(raw.query("ROLLBACK"), this.#now() + Math.min(50, this.#deadlineMs), this.#now).catch(() => undefined);
         last = error;
         const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-        // A COMMIT acknowledgement is ambiguous only for an explicit
-        // connection/transport loss.  A missing code is not enough: ordinary
-        // validation, assembly and test-double errors have no SQLSTATE too,
-        // and treating them as unknown would fabricate a usage-unknown
-        // receipt after their transaction has rolled back.
-        const transportCode = typeof code === "string" && (code.startsWith("08") || ["ECONNABORTED", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(code));
-        const simulatedCommitAckLoss = error instanceof Error && /(?:^|_)COMMIT_ACK_LOST$/u.test(error.message);
-        if (commitAttempted && (transportCode || simulatedCommitAckLoss)) throw new FundingCommitOutcomeUnknownError(error);
+        // A COMMIT acknowledgement can be ambiguous only when the connection
+        // did not give PostgreSQL's outcome back to us.  A PostgreSQL SQLSTATE
+        // is a definitive database result (including deferred trigger and
+        // constraint failures) and must remain a private deterministic error;
+        // treating it as unknown would fabricate usage uncertainty after a
+        // rollback.
+        if (commitAttempted && (code === undefined || String(code).startsWith("08"))) throw new FundingCommitOutcomeUnknownError(error);
         if ((error as { code?: unknown }).code !== "40001" || attempt + 1 === this.#maxAttempts || this.#now() >= deadline) {
           if ((error as { code?: unknown }).code === "40001") throw new SerializationFailure();
           throw error;

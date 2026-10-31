@@ -133,9 +133,10 @@ async function docker(args: string[]): Promise<string> {
   if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${err.slice(0, 300)}`);
   return out.trim();
 }
-function sqlPool(native: Pool, loseCommit?: () => boolean, failRestorePauseWrite?: () => boolean, failTerminalPauseWrite?: () => boolean): PostgresSqlPool {
+function sqlPool(native: Pool, loseCommit?: () => boolean, failRestorePauseWrite?: () => boolean, failTerminalPauseWrite?: () => boolean, observedSql?: string[]): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
     async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+      observedSql?.push(sql);
       if (sql.startsWith("UPDATE production_real.continuation_pauses SET state='restored'") && failRestorePauseWrite?.()) throw new Error("RESTORE_PAUSE_WRITE_FAILED");
       if (sql.startsWith("UPDATE production_real.continuation_pauses SET state='completed'") && failTerminalPauseWrite?.()) throw new Error("TERMINAL_PAUSE_WRITE_FAILED");
       const result = await client.query<Row>(sql, values ? [...values] : undefined);
@@ -1031,11 +1032,12 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     await mountedCapacity.prewarm({ intentReference: workspaceCapacityIntent.capacityIntentReference,
       expectedSessionBindingDigest: workspaceCapacityIntent.sessionBindingDigest });
     let failFirstMountedTerminalWrite = true;
+    const mountedSql: string[] = [];
     const mountedFailurePool = sqlPool(runtime, undefined, undefined, () => {
       const value = failFirstMountedTerminalWrite;
       failFirstMountedTerminalWrite = false;
       return value;
-    });
+    }, mountedSql);
     const mountedService = await ProductionPricedContinuationService.create({ pool: mountedFailurePool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
       capacity: mountedCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
@@ -1056,7 +1058,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     let mountedTerminalResult: unknown;
     try { mountedTerminalResult = await mountedService.resume(workspaceResume); }
     catch (error) { mountedTerminalError = error; }
-    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
+    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)};SQL:${mountedSql.slice(-12).map(sql => sql.replaceAll(/\s+/gu, " ").slice(0, 160)).join("|")}`);
     if (!(mountedTerminalError instanceof Error) || mountedTerminalError.message !== "TERMINAL_PAUSE_WRITE_FAILED")
       throw new Error(`MOUNTED_TERMINAL_WRITE_OUTCOME_INVALID:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
     expect(modelPosts).toBe(3);

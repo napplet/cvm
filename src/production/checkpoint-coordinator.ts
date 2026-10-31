@@ -23,7 +23,7 @@ type StoredEnvelope = Readonly<{
   keyReference: string;
   state: "retained" | "destroyed";
 }>;
-type CoordinatorIntent = Readonly<{ checkpointId: string; requestSha256: string; committedAt: string; formatVersion?: 2; objectWrite?: Readonly<{ key: string; checksum: string }> }>;
+type CoordinatorIntent = Readonly<{ checkpointId: string; requestSha256: string; committedAt: string; formatVersion?: 2 | 3; objectWrite?: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }> }>;
 const coordinators = new WeakSet<object>();
 
 function rowToStored(row: Record<string, unknown>): StoredEnvelope {
@@ -79,7 +79,7 @@ export class ProductionCheckpointCoordinator {
     const checkpointId = Identity.parse(originalRequest.checkpointId);
     const requestSha256 = sha256(canonicalBytes({ ...originalRequest, archive: undefined, archiveSha256: sha256(originalRequest.archive) }));
     const operationId = `checkpoint-seal:${checkpointId}`;
-    const claimed = await this.input.journal.claim<CoordinatorIntent>(operationId, requestSha256, Object.freeze({ formatVersion: 2, checkpointId, requestSha256, committedAt: new Date((this.input.now ?? Date.now)()).toISOString() }));
+    const claimed = await this.input.journal.claim<CoordinatorIntent>(operationId, requestSha256, Object.freeze({ formatVersion: 3, checkpointId, requestSha256, committedAt: new Date((this.input.now ?? Date.now)()).toISOString() }));
     const intent = claimed.record.value;
     if (intent.checkpointId !== checkpointId || intent.requestSha256 !== requestSha256 || Number.isNaN(Date.parse(intent.committedAt))) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
     const request: CheckpointSealRequest = { ...originalRequest, retentionUntil: "retentionUntil" in originalRequest ? originalRequest.retentionUntil : new Date(Date.parse(intent.committedAt) + 2_592_000_000).toISOString() };
@@ -87,7 +87,7 @@ export class ProductionCheckpointCoordinator {
     if (existing) return this.#readback(existing, request);
     // A legacy unresolved operation has no trustworthy upload-dispatch fence.
     // Without its original crypto record, even a new nonce would invent lineage.
-    if (intent.formatVersion !== 2 && !await this.#crypto.readSealed(checkpointId)) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+    if (intent.formatVersion !== 3 && !await this.#crypto.readSealed(checkpointId)) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
 
     const objectStore: ObjectStorePort = {
       createImmutable: value => this.#createOriginalObject(operationId, requestSha256, value),
@@ -241,10 +241,10 @@ export class ProductionCheckpointCoordinator {
    * observes the original key/checksum, including an acknowledgement loss.
    * Old intents without this dispatch fence stay query-only when unresolved. */
   async #createOriginalObject(operationId: string, requestSha256: string, value: Parameters<ObjectStorePort["createImmutable"]>[0]) {
-    const expected = { key: value.key, checksum: sha256(value.bytes) };
+    const expected = { key: value.key, checksum: sha256(value.bytes), originalOperationIdentity: sha256(canonicalBytes({ operationId, requestSha256, key: value.key })) };
     const prior = await this.input.journal.read<CoordinatorIntent>(operationId);
     if (!prior || prior.identitySha256 !== requestSha256 || prior.value.requestSha256 !== requestSha256) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
-    if (prior.value.objectWrite && (prior.value.objectWrite.key !== expected.key || prior.value.objectWrite.checksum !== expected.checksum)) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
+    if (prior.value.objectWrite && (prior.value.objectWrite.key !== expected.key || prior.value.objectWrite.checksum !== expected.checksum || prior.value.objectWrite.originalOperationIdentity !== expected.originalOperationIdentity)) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
     const observe = async () => {
       const found = await this.input.objectStore.observeExactByKey(expected);
       if (!found) return undefined;
@@ -254,14 +254,14 @@ export class ProductionCheckpointCoordinator {
     };
     const existing = await observe();
     if (existing) return existing;
-    if (prior.value.formatVersion !== 2 || prior.value.objectWrite) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+    if (prior.value.formatVersion !== 3 || prior.value.objectWrite) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
     const claimed = await this.input.journal.compareAndSet(operationId, requestSha256, prior.revision, { ...prior.value, objectWrite: expected });
     if (!claimed) {
       const original = await observe();
       if (original) return original;
       throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
     }
-    return this.input.objectStore.createImmutable(value);
+    return this.input.objectStore.createImmutable({ ...value, originalOperationIdentity: expected.originalOperationIdentity });
   }
 
   async #find(checkpointId: string): Promise<StoredEnvelope | undefined> {

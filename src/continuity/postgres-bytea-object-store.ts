@@ -55,7 +55,7 @@ export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
   }>) {
     if (!input.pool || typeof input.pool.connect !== "function") throw new Error("OBJECT_POOL_REQUIRED");
     this.#chunkBytes = input.chunkBytes ?? DEFAULT_CHUNK_BYTES;
-    if (!Number.isSafeInteger(this.#chunkBytes) || this.#chunkBytes < 1 || this.#chunkBytes > 1024 * 1024) throw new Error("OBJECT_CHUNK_SIZE_INVALID");
+    if (!Number.isSafeInteger(this.#chunkBytes) || this.#chunkBytes < 1 || this.#chunkBytes > DEFAULT_CHUNK_BYTES) throw new Error("OBJECT_CHUNK_SIZE_INVALID");
     this.#now = input.now ?? Date.now;
     this.#retentionUntil = input.retentionUntil ?? (() => new Date(this.#now() + 30 * 86_400_000).toISOString());
   }
@@ -68,11 +68,14 @@ export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
     const owned = new Uint8Array(request.bytes);
     try {
       const checksum = sha256(owned);
+      const originalOperationIdentity = request.originalOperationIdentity === undefined
+        ? sha256(new TextEncoder().encode(`legacy-object:${key}:${checksum}`))
+        : Digest.parse(request.originalOperationIdentity);
       const chunkCount = Math.ceil(owned.byteLength / this.#chunkBytes);
       if (!Number.isSafeInteger(chunkCount)) throw new Error("OBJECT_CHUNK_COUNT_INVALID");
       const deadline = new Date(this.#retentionUntil()).toISOString();
       if (Date.parse(deadline) <= this.#now()) throw new Error("OBJECT_RETENTION_INVALID");
-      const header = await this.#claim(key, checksum, owned.byteLength, chunkCount, deadline);
+      const header = await this.#claim(key, checksum, originalOperationIdentity, owned.byteLength, chunkCount, deadline);
       if (header.checksum !== checksum || header.byteCount !== owned.byteLength || header.chunkCount !== chunkCount) throw new Error("OBJECT_IMMUTABLE_CONFLICT");
       if (header.state === "sealed") return Object.freeze({ key, generation: header.generation, checksum });
       if (header.state !== "writing") throw new Error("OBJECT_WRITE_HELD");
@@ -90,12 +93,15 @@ export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
     } finally { owned.fill(0); }
   }
 
-  async observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined> {
+  async observeExactByKey(input: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }>): Promise<ImmutableObjectReference | undefined> {
     const key = Key.safeParse(input.key), checksum = Digest.safeParse(input.checksum);
     if (!key.success || !checksum.success) return undefined;
     const client = await this.#connect();
     try {
-      const row = (await client.query<Record<string, unknown>>("SELECT * FROM production_real.observe_immutable_object($1,$2::char(64))", [key.data, checksum.data])).rows[0];
+      const identity = Digest.safeParse(input.originalOperationIdentity);
+      const row = (await client.query<Record<string, unknown>>(identity.success
+        ? "SELECT * FROM production_real.observe_immutable_object($1,$2::char(64),$3::char(64))"
+        : "SELECT * FROM production_real.observe_immutable_object($1,$2::char(64))", identity.success ? [key.data, checksum.data, identity.data] : [key.data, checksum.data])).rows[0];
       if (!row) return undefined;
       const generation = asSafeInteger(row.generation, "OBJECT_GENERATION_INVALID");
       if (generation < 1 || Digest.parse(row.checksum) !== checksum.data) throw new Error("OBJECT_EXACT_GENERATION_REQUIRED");
@@ -140,9 +146,9 @@ export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
     } finally { finalizer.release(); }
   }
 
-  async #claim(key: string, checksum: string, byteCount: number, chunkCount: number, retentionUntil: string): Promise<Header> {
+  async #claim(key: string, checksum: string, originalOperationIdentity: string, byteCount: number, chunkCount: number, retentionUntil: string): Promise<Header> {
     return this.#serializable(async client => {
-      const row = (await client.query<Record<string, unknown>>("SELECT * FROM production_real.claim_immutable_object($1,$2::char(64),$3,$4,$5::timestamptz)", [key, checksum, byteCount, chunkCount, retentionUntil])).rows[0];
+      const row = (await client.query<Record<string, unknown>>("SELECT * FROM production_real.claim_immutable_object($1,$2::char(64),$3::char(64),$4,$5,$6::timestamptz)", [key, checksum, originalOperationIdentity, byteCount, chunkCount, retentionUntil])).rows[0];
       if (!row) throw new Error("OBJECT_CLAIM_REQUIRED");
       return parseHeader({ ...row, retention_until: retentionUntil });
     });

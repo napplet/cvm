@@ -9,7 +9,10 @@ export const ImmutableObjectReferenceSchema = z.object({
 }).strict();
 
 export type ImmutableObjectReference = z.infer<typeof ImmutableObjectReferenceSchema>;
-export type ImmutableObjectCreateRequest = Readonly<{ key: string; bytes: Uint8Array }>;
+/** `originalOperationIdentity` is an optional durable caller fence. Legacy
+ * callers retain key/checksum semantics; adapters must hold ambiguity rather
+ * than adopting a later same-checksum generation. */
+export type ImmutableObjectCreateRequest = Readonly<{ key: string; bytes: Uint8Array; originalOperationIdentity?: string }>;
 
 const VersionedObjectResponseSchema = z.object({
   generation: z.number().int().positive(),
@@ -39,7 +42,7 @@ export const GcsObjectStoreConfigSchema = z.object({
 export interface ObjectStorePort {
   createImmutable(request: ImmutableObjectCreateRequest): Promise<ImmutableObjectReference>;
   /** Read-only reconciliation by an already journaled immutable key/checksum. */
-  observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined>;
+  observeExactByKey(input: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }>): Promise<ImmutableObjectReference | undefined>;
   readExact(reference: ImmutableObjectReference): Promise<Uint8Array | undefined>;
   scheduleExactDeletion(reference: ImmutableObjectReference, deleteAfter: string): Promise<void>;
 }
@@ -71,9 +74,13 @@ export class GcsObjectStoreAdapter implements ObjectStorePort {
     return ImmutableObjectReferenceSchema.parse({ key: request.key, generation: created.generation, checksum: created.checksum });
   }
 
-  async observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined> {
+  async observeExactByKey(input: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }>): Promise<ImmutableObjectReference | undefined> {
     const key = z.string().min(1).safeParse(input.key); const checksum = Sha256Schema.safeParse(input.checksum);
     if (!key.success || !checksum.success) return undefined;
+    // This historical adapter has no durable original-operation field. Its
+    // legacy two-field lookup remains available, but an identity-bearing
+    // caller must not adopt a later same-checksum generation by accident.
+    if (input.originalOperationIdentity !== undefined) return undefined;
     const observed = await this.#client.findExactByKey({ key: key.data, checksum: checksum.data });
     if (!observed || observed.checksum !== checksum.data) return undefined;
     return ImmutableObjectReferenceSchema.safeParse({ key: key.data, generation: observed.generation, checksum: observed.checksum }).data;
@@ -121,9 +128,10 @@ export class DeterministicObjectStore implements ObjectStorePort {
     return { key: entry.key, generation: entry.generation, checksum: entry.checksum };
   }
 
-  async observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined> {
+  async observeExactByKey(input: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }>): Promise<ImmutableObjectReference | undefined> {
     const key = z.string().min(1).safeParse(input.key); const checksum = Sha256Schema.safeParse(input.checksum);
     if (!key.success || !checksum.success) return undefined;
+    if (input.originalOperationIdentity !== undefined) return undefined;
     const entry = this.#entries.get(key.data);
     return entry?.checksum === checksum.data ? { key: entry.key, generation: entry.generation, checksum: entry.checksum } : undefined;
   }

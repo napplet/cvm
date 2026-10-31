@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { PostgresByteaObjectStoreAdapter } from "../../src/continuity/postgres-bytea-object-store";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
@@ -53,12 +54,39 @@ integration("immutable SQL objects use a restricted role, exact generations, and
       await client.query("SET ROLE napplet_production_object");
       await expect(client.query("SELECT * FROM production_real.ledger_probe")).rejects.toThrow();
       await expect(client.query("UPDATE production_real.immutable_object_generations SET checksum='0' WHERE object_key='checkpoint/object'")).rejects.toThrow();
+      const oversizedKey = `checkpoint/oversized/${suffix}`, oversized = Buffer.alloc(384 * 1024 + 1), oversizedChecksum = createHash("sha256").update(oversized).digest("hex");
+      const claimed = await client.query<{ generation: number }>("SELECT * FROM production_real.claim_immutable_object($1,$2::char(64),$3::char(64),$4,$5,$6::timestamptz)", [oversizedKey, oversizedChecksum, "f".repeat(64), oversized.byteLength, 1, "2031-01-01T00:00:00.000Z"]);
+      await expect(client.query("SELECT production_real.write_immutable_object_chunk($1,$2,$3,$4::bytea)", [oversizedKey, claimed.rows[0]!.generation, 0, oversized])).rejects.toThrow();
     } finally { client.release(); }
   } finally {
     await runtime?.end();
     await admin.query(`REVOKE napplet_production_object FROM ${role}`).catch(() => undefined);
     await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
     await admin.end();
+  }
+}, 30_000);
+
+integration("same-checksum recreation never lets an identity-free recovery adopt a later generation", async () => {
+  const admin = new Pool({ connectionString });
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16), role = `object_aba_${suffix}`;
+  let runtime: Pool | undefined;
+  try {
+    await admin.query("CREATE SCHEMA IF NOT EXISTS production_real");
+    await admin.query("CREATE ROLE napplet_production_real NOLOGIN").catch(() => undefined);
+    await admin.query(await Bun.file("migrations/phase-07/019_postgres_bytea_objects.sql").text());
+    await admin.query(`CREATE ROLE ${role} LOGIN`); await admin.query(`GRANT napplet_production_object TO ${role}`);
+    runtime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${role}@`) });
+    const store = new PostgresByteaObjectStoreAdapter({ pool: sqlPool(runtime), now: () => Date.parse("2030-01-01T00:00:00.000Z") });
+    const payload = new TextEncoder().encode("same-checksum-history"), identityA = "a".repeat(64), identityB = "b".repeat(64);
+    const first = await store.createImmutable({ key: `checkpoint/aba/${suffix}`, bytes: payload, originalOperationIdentity: identityA });
+    await store.scheduleExactDeletion(first, "2029-12-31T23:59:59.000Z");
+    const replacement = await store.createImmutable({ key: first.key, bytes: payload, originalOperationIdentity: identityB });
+    expect(replacement.generation).toBe(first.generation + 1);
+    expect(await store.observeExactByKey({ key: first.key, checksum: first.checksum })).toBeUndefined();
+    expect(await store.observeExactByKey({ key: first.key, checksum: first.checksum, originalOperationIdentity: identityA })).toBeUndefined();
+    expect(await store.observeExactByKey({ key: first.key, checksum: first.checksum, originalOperationIdentity: identityB })).toEqual(replacement);
+  } finally {
+    await runtime?.end(); await admin.query(`REVOKE napplet_production_object FROM ${role}`).catch(() => undefined); await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined); await admin.end();
   }
 }, 30_000);
 

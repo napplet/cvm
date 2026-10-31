@@ -283,6 +283,8 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       expect(preparedV2.pricing.maximumSat).toBe("10");
       const storedV2Quote = await resumeQuotes.findReference(accountId, preparedV2.quoteReference);
       if (!storedV2Quote) throw new Error("RETAINED_V2_STORED_QUOTE_REQUIRED");
+      expect(storedV2Quote.schemaVersion).toBe("resume-pricing-quote-v2");
+      if (storedV2Quote.schemaVersion !== "resume-pricing-quote-v2") throw new Error("RETAINED_V2_LINEAGE_REQUIRED");
       expect(storedV2Quote.sourceProfile).toEqual(originalPricing.profile);
       expect(storedV2Quote.sourceCard).toEqual(originalPricing.card);
       expect(storedV2Quote.pricing.profile.id).toMatch(/^resume-derived:[a-f0-9]{64}$/u);

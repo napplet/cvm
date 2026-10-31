@@ -22,19 +22,50 @@ export const ResumePricingContextSchema = z.object({
 export type ResumePricingContext = z.infer<typeof ResumePricingContextSchema>;
 
 const Pricing = z.object({ profile: ModelProfileSchema, card: PriceCardSchema, conversion: UsdSatConversionSchema }).strict();
-const QuoteBody = z.object({
+/* V1 is immutable historical wire/storage material. Do not add fields here:
+ * its canonical bytes are the quote hash accepted by existing claims. */
+const QuoteBodyV1 = z.object({
   schemaVersion: z.literal("resume-pricing-quote-v1"), context: ResumePricingContextSchema,
+  preparationKey: Identity, preparedAtMs: Time, expiresAtMs: Time, pricing: Pricing,
+  maximumUsdMicros: CanonicalSatSchema, maximumSat: CanonicalSatSchema, priceSourcesSha256: Digest,
+}).strict();
+const QuoteBodyV2 = z.object({
+  schemaVersion: z.literal("resume-pricing-quote-v2"), context: ResumePricingContextSchema,
   preparationKey: Identity, preparedAtMs: Time, expiresAtMs: Time, pricing: Pricing,
   sourceProfile: ModelProfileSchema, sourceCard: PriceCardSchema,
   sourceProfileSha256: Digest, sourceCardSha256: Digest, derivedProfileSha256: Digest, derivedCardSha256: Digest,
   maximumUsdMicros: CanonicalSatSchema, maximumSat: CanonicalSatSchema, priceSourcesSha256: Digest,
 }).strict();
-export const ResumePricingQuoteSchema = QuoteBody.extend({ quoteReference: Identity, quoteSha256: Digest }).strict();
+export const ResumePricingQuoteSchema = z.discriminatedUnion("schemaVersion", [
+  QuoteBodyV1.extend({ quoteReference: Identity, quoteSha256: Digest }).strict(),
+  QuoteBodyV2.extend({ quoteReference: Identity, quoteSha256: Digest }).strict(),
+]);
 export type ResumePricingQuote = z.infer<typeof ResumePricingQuoteSchema>;
 export const ResumePricingApprovalSchema = z.object({ quoteReference: Identity, quoteSha256: Digest, maximumSat: CanonicalSatSchema }).strict();
 export type ResumePricingApproval = z.infer<typeof ResumePricingApprovalSchema>;
 
 const hash = async (value: unknown): Promise<string> => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)))).toString("hex");
+
+async function prepareV1Quote(input: Readonly<{ context: unknown; pricing: unknown; preparationKey: string; nowMs: number; lifetimeMs: number }>): Promise<ResumePricingQuote> {
+  const context = ResumePricingContextSchema.parse(input.context), pricing = Pricing.parse(input.pricing);
+  const preparedAtMs = Time.parse(input.nowMs), lifetimeMs = z.number().int().positive().max(300_000).parse(input.lifetimeMs);
+  const { card, profile, conversion } = pricing;
+  if (card.currency !== "usd_micros" || card.kind !== "source_attributed_provider" || card.provider !== "vertex_ai_gemini"
+    || profile.provider !== card.provider || profile.model !== "gemini-4-argon" || profile.priceCardId !== card.id || !card.sources
+    || canonicalJson(card.sources.conversion) !== canonicalJson(conversion.source)) throw new Error("RESUME_PRICE_AUTHORITY_INVALID");
+  const starts = [card.validity.notBefore, card.sources.provider.observedAt, card.sources.provider.effectiveAt, conversion.source.observedAt, conversion.source.effectiveAt].map(Date.parse);
+  const ends = [card.validity.notAfter, card.sources.provider.freshUntil, conversion.source.freshUntil].map(Date.parse);
+  const expiresAtMs = Math.min(preparedAtMs + lifetimeMs, context.retentionUntilMs, ...ends);
+  if (starts.some(start => !Number.isSafeInteger(start) || start > preparedAtMs)
+    || ends.some(end => !Number.isSafeInteger(end)) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= preparedAtMs) throw new Error("RESUME_PRICE_AUTHORITY_STALE");
+  const maximumUsdMicros = maximumOperationCharge({ card, profile });
+  const maximumSat = convertUsdMicrosToSats({ usdMicros: Number(maximumUsdMicros), conversion, at: new Date(preparedAtMs).toISOString() }).amount;
+  if (BigInt(maximumSat) > BigInt(context.originalCommandMaximum)) throw new Error("RESUME_QUOTE_EXCEEDS_COMMAND_MAXIMUM");
+  const body = QuoteBodyV1.parse({ schemaVersion: "resume-pricing-quote-v1", context, preparationKey: input.preparationKey,
+    preparedAtMs, expiresAtMs, pricing, maximumUsdMicros, maximumSat, priceSourcesSha256: await hash(card.sources) });
+  const quoteSha256 = await hash(body);
+  return ResumePricingQuoteSchema.parse({ ...body, quoteSha256, quoteReference: `resume-quote:${quoteSha256}` });
+}
 
 /** Pure proposal construction. Its caller must use verified server pricing and
  * persist the exact result immutably. A digest alone is not price provenance or
@@ -80,7 +111,7 @@ export async function prepareResumePricingQuote(input: Readonly<{
   const maximumUsdMicros = maximumOperationCharge({ card, profile });
   const maximumSat = convertUsdMicrosToSats({ usdMicros: Number(maximumUsdMicros), conversion, at: new Date(preparedAtMs).toISOString() }).amount;
   if (BigInt(maximumSat) > BigInt(context.originalCommandMaximum)) throw new Error("RESUME_QUOTE_EXCEEDS_COMMAND_MAXIMUM");
-  const body = QuoteBody.parse({ schemaVersion: "resume-pricing-quote-v1", context, preparationKey: input.preparationKey,
+  const body = QuoteBodyV2.parse({ schemaVersion: "resume-pricing-quote-v2", context, preparationKey: input.preparationKey,
     preparedAtMs, expiresAtMs, pricing, sourceProfile, sourceCard, sourceProfileSha256, sourceCardSha256, derivedProfileSha256, derivedCardSha256,
     maximumUsdMicros, maximumSat, priceSourcesSha256: await hash(card.sources) });
   const quoteSha256 = await hash(body);
@@ -99,8 +130,13 @@ export async function verifyStoredResumePricingQuote(input: Readonly<{
   if (canonicalJson(context) !== canonicalJson(quote.context)) throw new Error("RESUME_QUOTE_CONTEXT_MISMATCH");
   if (approval.quoteReference !== quote.quoteReference || approval.quoteSha256 !== quote.quoteSha256 || approval.maximumSat !== quote.maximumSat) throw new Error("RESUME_QUOTE_APPROVAL_MISMATCH");
   if (nowMs < quote.preparedAtMs || nowMs >= quote.expiresAtMs) throw new Error("RESUME_QUOTE_EXPIRED");
-  const rebuilt = await prepareResumePricingQuote({ context, pricing: quote.pricing, preparationKey: quote.preparationKey,
-    sourcePricing: { profile: quote.sourceProfile, card: quote.sourceCard, conversion: quote.pricing.conversion }, nowMs: quote.preparedAtMs, lifetimeMs: quote.expiresAtMs - quote.preparedAtMs });
+  let rebuilt: ResumePricingQuote;
+  try {
+    rebuilt = quote.schemaVersion === "resume-pricing-quote-v1"
+      ? await prepareV1Quote({ context, pricing: quote.pricing, preparationKey: quote.preparationKey, nowMs: quote.preparedAtMs, lifetimeMs: quote.expiresAtMs - quote.preparedAtMs })
+      : await prepareResumePricingQuote({ context, pricing: quote.pricing, preparationKey: quote.preparationKey,
+        sourcePricing: { profile: quote.sourceProfile, card: quote.sourceCard, conversion: quote.pricing.conversion }, nowMs: quote.preparedAtMs, lifetimeMs: quote.expiresAtMs - quote.preparedAtMs });
+  } catch { throw new Error("RESUME_QUOTE_RECORD_INVALID"); }
   if (canonicalJson(rebuilt) !== canonicalJson(quote)) throw new Error("RESUME_QUOTE_RECORD_INVALID");
   return quote;
 }

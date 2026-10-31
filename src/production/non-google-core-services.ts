@@ -7,7 +7,6 @@ import { assertNonGoogleNativeCoreMaterial, type NonGoogleCoreBinding, NonGoogle
 import { NonGoogleTelemetryCertification } from "./non-google-telemetry-certification";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const suites = new WeakSet<object>();
 
 /** Concrete Plan-68 component graph. Construction is I/O-free; it only seals
  * controller-owned PostgreSQL/capacity/collector/fault/restore implementations.
@@ -31,7 +30,7 @@ export class NonGoogleNativeCoreServices {
     this.telemetry = new NonGoogleTelemetryCertification({ binding, journal: material.input.journal, collector: material.input.telemetry });
     this.chaos = new NonGoogleChaosCertification({ binding, journal: material.input.journal, transport: material.input.chaos });
     this.restore = new NonGoogleFreshRestoreProvisioner({ binding, journal: material.input.journal, transport: material.input.restore });
-    suites.add(this); Object.freeze(this);
+    Object.freeze(this);
   }
   async execute(input: Readonly<{ operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
     switch (input.kind) {
@@ -61,7 +60,7 @@ export class NonGoogleNativeCoreServices {
   }
 }
 export function assertNonGoogleNativeCoreServices(value: unknown): asserts value is NonGoogleNativeCoreServices {
-  if (!value || typeof value !== "object" || !suites.has(value)) throw new Error("NON_GOOGLE_NATIVE_CORE_SERVICES_REQUIRED");
+  if (!(value instanceof NonGoogleNativeCoreServices)) throw new Error("NON_GOOGLE_NATIVE_CORE_SERVICES_REQUIRED");
 }
 
 export function createNonGoogleNativeCoreServices(input: Readonly<{ candidateSha256: string; topologySha256: string; material: NonGoogleNativeCoreMaterial }>): NonGoogleNativeCoreServices {

@@ -97,18 +97,17 @@ export type NonGoogleChaosEffectPort = Readonly<{
   injectOriginal(input: Readonly<{ operationId: string; sessionId: string; schedule: unknown; binding: NonGoogleCoreBinding }>): Promise<Readonly<{ status: "applied" | "pending" | "blocked"; operationId: string; sessionId: string }>>;
   observeOriginal(input: Readonly<{ operationId: string; sessionId: string; binding: NonGoogleCoreBinding }>): Promise<Readonly<{ status: "observed" | "pending" | "missing" | "blocked"; operationId: string; sessionId: string }>>;
 }>;
-const chaosPorts = new WeakSet<object>();
 /** Fixed project-owned transport wrapper; it never accepts a caller result. */
 export class NonGoogleChaosTransport {
   constructor(private readonly port: NonGoogleChaosEffectPort) {
     if (!port || typeof port.injectOriginal !== "function" || typeof port.observeOriginal !== "function") throw new Error("NON_GOOGLE_CHAOS_TRANSPORT_REQUIRED");
-    chaosPorts.add(this); Object.freeze(this);
+    Object.freeze(this);
   }
   async injectOriginal(input: Parameters<NonGoogleChaosEffectPort["injectOriginal"]>[0]) { return this.port.injectOriginal(input); }
   async observeOriginal(input: Parameters<NonGoogleChaosEffectPort["observeOriginal"]>[0]) { return this.port.observeOriginal(input); }
 }
 export function assertNonGoogleChaosTransport(value: unknown): asserts value is NonGoogleChaosTransport {
-  if (!value || typeof value !== "object" || !chaosPorts.has(value)) throw new Error("NON_GOOGLE_CHAOS_TRANSPORT_REQUIRED");
+  if (!(value instanceof NonGoogleChaosTransport)) throw new Error("NON_GOOGLE_CHAOS_TRANSPORT_REQUIRED");
 }
 
 export type NonGoogleFreshRestorePort = Readonly<{
@@ -119,14 +118,13 @@ export type NonGoogleFreshRestorePort = Readonly<{
   attachOriginal(input: Readonly<{ freshInstanceId: string; sourceInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string; binding: NonGoogleCoreBinding }>): Promise<ProductionFreshRestoreInstance>;
   observeCleanup(input: Readonly<{ freshInstanceId: string; sourceInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string; binding: NonGoogleCoreBinding }>): Promise<Readonly<{ state: "absent" | "unknown" }>>;
 }>;
-const restorePorts = new WeakSet<object>();
 /** The low-level provisioner is deliberately distinct from historical Google
  * controls: its source IDs are persisted before any create and it only exposes
  * exact fresh-instance observation/cleanup. */
 export class NonGoogleFreshRestoreTransport {
   constructor(private readonly port: NonGoogleFreshRestorePort) {
     if (!port || typeof port.planOriginal !== "function" || typeof port.prepareOriginal !== "function" || typeof port.importOriginal !== "function" || typeof port.createOriginal !== "function" || typeof port.attachOriginal !== "function" || typeof port.observeCleanup !== "function") throw new Error("NON_GOOGLE_FRESH_RESTORE_TRANSPORT_REQUIRED");
-    restorePorts.add(this); Object.freeze(this);
+    Object.freeze(this);
   }
   planOriginal(input: Parameters<NonGoogleFreshRestorePort["planOriginal"]>[0]) { return this.port.planOriginal(input); }
   async prepareOriginal(input: Parameters<NonGoogleFreshRestorePort["prepareOriginal"]>[0]) { return this.port.prepareOriginal(input); }
@@ -136,19 +134,18 @@ export class NonGoogleFreshRestoreTransport {
   async observeCleanup(input: Parameters<NonGoogleFreshRestorePort["observeCleanup"]>[0]) { return this.port.observeCleanup(input); }
 }
 export function assertNonGoogleFreshRestoreTransport(value: unknown): asserts value is NonGoogleFreshRestoreTransport {
-  if (!value || typeof value !== "object" || !restorePorts.has(value)) throw new Error("NON_GOOGLE_FRESH_RESTORE_TRANSPORT_REQUIRED");
+  if (!(value instanceof NonGoogleFreshRestoreTransport)) throw new Error("NON_GOOGLE_FRESH_RESTORE_TRANSPORT_REQUIRED");
 }
 
-const materials = new WeakSet<object>();
 export class NonGoogleNativeCoreMaterial {
   constructor(readonly input: Readonly<{ journal: NonGoogleCoreJournal; capacity: NonGoogleNativeCapacity; telemetry: NonGoogleAuthenticatedTelemetryProducer; chaos: NonGoogleChaosTransport; restore: NonGoogleFreshRestoreTransport }>) {
     if (!(input.journal instanceof NonGoogleCoreJournal) || !(input.capacity instanceof NonGoogleNativeCapacity) || !(input.telemetry instanceof NonGoogleAuthenticatedTelemetryProducer)) throw new Error("NON_GOOGLE_CORE_NATIVE_MATERIAL_REQUIRED");
     assertNonGoogleChaosTransport(input.chaos); assertNonGoogleFreshRestoreTransport(input.restore);
-    materials.add(this); Object.freeze(this);
+    Object.freeze(this);
   }
 }
 export function assertNonGoogleNativeCoreMaterial(value: unknown): asserts value is NonGoogleNativeCoreMaterial {
-  if (!value || typeof value !== "object" || !materials.has(value)) throw new Error("NON_GOOGLE_CORE_NATIVE_MATERIAL_REQUIRED");
+  if (!(value instanceof NonGoogleNativeCoreMaterial)) throw new Error("NON_GOOGLE_CORE_NATIVE_MATERIAL_REQUIRED");
 }
 
 /** Deterministic test-only native mechanism wiring. It proves service control

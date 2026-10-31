@@ -9,6 +9,7 @@ import { createOperatorFundingPrerequisiteController } from "../../src/release/d
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const candidate = { id: digest("candidate"), provider: "modal" as const, image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
 const input = { datasetSha256: digest("dataset"), profileSha256: digest("profile"), topologySha256: digest("topology"), command: ["bun", "test"] };
+const deploymentBlocked = { progress: "deployment_blocked", reasonCode: "GOOGLE_CLOUD_DEPLOYMENT_DISABLED" };
 
 async function isolatedReleaseWorkspace(prefix: string): Promise<string> {
   const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
@@ -29,13 +30,8 @@ test("incomplete execution is reported before expired funding readiness and pres
     });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(1);
-    expect(stderr).not.toContain("RELEASE_AUTHORIZATION_OPERATOR_FUNDING_INVALID");
-    const result = JSON.parse(stdout);
-    expect(result.progress).toBe("preapproval_blocked");
-    expect(result.readiness.execution.status).toBe("blocked");
-    expect(result).not.toHaveProperty("setup");
-    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBeTrue();
-    expect(result).not.toHaveProperty("review");
+    expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+    expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
     expect(await readFile(path, "utf8")).toBe(stored);
   } finally { await rm(workspace, { recursive: true, force: true }); }
 });
@@ -73,43 +69,27 @@ test("one product command is registered without hand-authored certification inpu
   expect(packageJson.scripts?.["release:certify"]).not.toContain("--registry");
 });
 
-test("fresh documented default workspace prepares itself before no-effect refusal", async () => {
+test("fresh documented default workspace stays untouched by activation refusal", async () => {
   const workspace = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
   try {
     const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(1);
-    expect(`${stdout}${stderr}`).not.toContain("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
-    const result = JSON.parse(stdout);
-    expect(result).toMatchObject({ progress: "preapproval_blocked", readiness: { execution: { status: "blocked" } } });
-    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBeTrue();
+    expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+    expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
   } finally { await rm(workspace, { recursive: true, force: true }); }
 });
 
-test("documented no-env command materializes a bounded authorization request without provider effects", async () => {
+test("documented no-env candidate activation refuses before provider effects", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-no-env-");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent" } as Record<string, string>;
   try {
     const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(1);
-    expect(stderr).not.toContain("RELEASE_CERTIFICATION_USAGE");
-    const result = JSON.parse(stdout);
-    expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    expect(JSON.stringify(result)).not.toContain("fixture-catalog");
-    for (const resume of [result.stateSha256, result.resumeStateSha256, "0".repeat(64)]) {
-      const status = Bun.spawn([Bun.which("bun")!, "scripts/certify-release.ts", "--status", "--require-state=authorization_required", "--resume", resume], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-      const [statusCode, statusOutput, statusError] = await Promise.all([status.exited, new Response(status.stdout).text(), new Response(status.stderr).text()]);
-      if (resume === "0".repeat(64)) {
-        expect(statusCode).toBe(1);
-        expect(statusError).toContain("RELEASE_CERTIFICATION_RESUME_MISMATCH");
-      } else {
-        expect(statusCode).toBe(0);
-        expect(JSON.parse(statusOutput).resumeStateSha256).toBe(result.resumeStateSha256);
-        expect(statusError).toBe("");
-      }
-    }
+    expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+    expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -162,22 +142,23 @@ test("status require-state exits zero only on the documented exact match", async
   }
 });
 
-test("a non-dry-run request rejects local evidence-only config before any provider command", async () => {
+test("a non-dry-run candidate activation refuses before any provider command", async () => {
   const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json"], { cwd: process.cwd(), env: { ...process.env, PATH: "/nonexistent" }, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code).toBe(1);
-  expect(`${stdout}${stderr}`).toContain("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
-  expect(`${stdout}${stderr}`).not.toContain("RELEASE_LIVE_PROVIDER_FAMILY_UNIMPLEMENTED");
+  expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+  expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
 });
 
-test("workspace overrides are confined and status/resume remain candidate-bound", async () => {
+test("candidate activation does not consult workspace overrides", async () => {
   const unsafe = Bun.spawn(["bun", "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env: { ...process.env, NAPPLET_CVM_RELEASE_WORKSPACE: "/tmp/unsafe-release-workspace" }, stdout: "pipe", stderr: "pipe" });
   const [unsafeCode, unsafeStdout, unsafeStderr] = await Promise.all([unsafe.exited, new Response(unsafe.stdout).text(), new Response(unsafe.stderr).text()]);
   expect(unsafeCode).toBe(1);
-  expect(`${unsafeStdout}${unsafeStderr}`).toContain("RELEASE_CERTIFICATION_WORKSPACE_REJECTED");
+  expect(unsafeStderr).toContain("error: script \"release:certify\" exited with code 1");
+  expect(JSON.parse(unsafeStdout)).toEqual(deploymentBlocked);
 });
 
-test("a lexically confined workspace symlink is rejected before the CLI writes outside", async () => {
+test("a lexically confined workspace symlink remains untouched by activation refusal", async () => {
   const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
   const outside = await mkdtemp("/tmp/napplet-cvm-cli-workspace-escape-");
   const redirect = join(workspaceRoot, "redirect");
@@ -189,8 +170,8 @@ test("a lexically confined workspace symlink is rejected before the CLI writes o
     });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(1);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(stderr).toContain("error: script \"release:certify\" exited with code 1");
+    expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
     expect(await readdir(outside)).toEqual([]);
   } finally {
     await rm(redirect, { force: true });
@@ -198,15 +179,15 @@ test("a lexically confined workspace symlink is rejected before the CLI writes o
   }
 });
 
-test("an unavailable receipt reference cannot bypass exact controller record lookup", async () => {
+test("receipt activation refuses before controller record lookup", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-receipt-");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent" } as Record<string, string>;
   try {
     const receiptChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--receipt", "a".repeat(64)], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [receiptCode, receiptStdout, receiptStderr] = await Promise.all([receiptChild.exited, new Response(receiptChild.stdout).text(), new Response(receiptChild.stderr).text()]);
     expect(receiptCode).toBe(1);
-    expect(receiptStdout).toBe("");
-    expect(receiptStderr).toContain("RELEASE_AUTHORIZATION_RECEIPT_UNAVAILABLE");
+    expect(receiptStderr).toContain("error: script \"release:certify\" exited with code 1");
+    expect(JSON.parse(receiptStdout)).toEqual(deploymentBlocked);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -222,34 +203,21 @@ test("immutable bundle verification rejects an absolute caller-selected path bef
   expect(stderr).toContain("RELEASE_CERTIFICATION_USAGE");
 });
 
-test("request reports missing implementation before funding setup or remote price discovery", async () => {
+test("request refuses before funding setup or remote price discovery", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-setup-required-");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
   try {
     const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(1);
-    expect(stderr).not.toContain("token");
-    const result = JSON.parse(stdout);
-    expect(result).toMatchObject({
-      progress: "preapproval_blocked",
-      readiness: { execution: { status: "blocked", reasonCode: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" } },
-    });
-    expect(Object.values(result.zeroEffectCounters)).toEqual(expect.arrayContaining([0]));
-    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBe(true);
-    expect(result).not.toHaveProperty("review");
-    expect(result).not.toHaveProperty("consentLaunches");
-    expect(result).not.toHaveProperty("setup");
-    expect(result.readiness).not.toHaveProperty("pricing");
-    expect(result).not.toHaveProperty("prerequisites");
-    expect(JSON.stringify(result)).not.toContain("secret");
-    expect(JSON.stringify(result)).not.toContain("NWC");
+    expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+    expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("product request blocks missing execution without asking for credentials or funds", async () => {
+test("product request refuses without asking for credentials or funds", async () => {
   const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
   await mkdir(workspaceRoot, { recursive: true });
   const workspace = await mkdtemp(join(workspaceRoot, "certify-preapproval-blocked-"));
@@ -263,18 +231,8 @@ test("product request blocks missing execution without asking for credentials or
     const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(1);
-    expect(stderr).not.toContain("token");
-    const result = JSON.parse(stdout);
-    expect(result).toMatchObject({
-      progress: "preapproval_blocked",
-      readiness: { execution: { status: "blocked", reasonCode: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" } },
-    });
-    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBe(true);
-    expect(result).not.toHaveProperty("review");
-    expect(result).not.toHaveProperty("consentLaunches");
-    expect(JSON.stringify(result)).not.toContain("fixture-catalog");
-
-    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+    expect(JSON.parse(stdout)).toEqual(deploymentBlocked);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

@@ -1,4 +1,15 @@
+# Current direction
+
+The 2026-10-31 provider-neutral/Ansible/homelab-or-VPS clarification supersedes the provider-specific execution handoffs below. Do not resume the rejected Google or parallel replacement architecture. Existing private service/data remain preserved; real-money wiring is incomplete.
+
+## Historical blocker record
+
 # Phase 7 execution readiness — 2026-10-14
+
+> **2026-10-31 user override:** Google Cloud is excluded. Google-specific steps in this unfinished plan are superseded and must not execute. Revise the target under [the current decision](07-NO-GOOGLE-CLOUD-DECISION.md), preserving all safety/evidence thresholds and historical compatibility.
+
+
+**Resumption — 2026-10-31:** The user resumed production gap execution on2026-10-27. The findings below are the historical2026-10-14 baseline, not the current source inventory. Current continuation is tracked in [STATE](../../STATE.md), the [billing transport handoff](07-65-BILLING-TRANSPORT-BOUNDS-HANDOFF.md), and the active priced-resume execution/review handoffs. Cashu serialization PR102, authoritative billing PR103, Modal collector PR104 and mounted priced-resume PR101 have passed independent review and exact CI, merged normally and been imported with private integration proof. Their implementation does not satisfy real production gates. Optional Linux collector packaging PR105 is now under independent review and hosted image proof. All eight real candidate-bound certifications, final bounded authorization and deployment remain open. The existing private Beta is preserved.
 
 **Scope correction:** The user subsequently deferred production readiness. These findings block production release only, not local development. See [the deferred-production runbook](../../../docs/runbooks/production-readiness-deferred.md) for the active decision and resumption conditions.
 

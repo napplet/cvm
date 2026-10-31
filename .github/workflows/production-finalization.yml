@@ -57,7 +57,7 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Finalizer output, independent authority and original-operation recovery
-        run: bun test tests/production/release-cleanup.test.ts tests/release/finalized-bundle.test.ts tests/release/materialize-certifier.test.ts tests/release/live-controller.test.ts tests/release/deployment-forced-resume.test.ts tests/release/certify-release.test.ts --timeout 15000
+        run: bun test tests/production/provider-policy.test.ts tests/production/release-cleanup.test.ts tests/release/finalized-bundle.test.ts tests/release/materialize-certifier.test.ts tests/release/live-controller.test.ts tests/release/deployment-forced-resume.test.ts tests/release/certify-release.test.ts --timeout 15000
       - name: Native owned cleanup and sealed mounted composition
         run: bun test tests/release/cloud-run-provider.test.ts tests/release/cloud-sql-provider.test.ts tests/release/collector-provider.test.ts tests/production/mounted-session-material.test.ts tests/production/mounted-modal-billing.test.ts tests/release/modal-billing-report.test.ts tests/release/production-execution.test.ts tests/release/production-factory.test.ts tests/release/host-signer-live-provider.test.ts tests/release/gcs-provider.test.ts tests/phase-07/restore-drill.test.ts
       - name: Restricted PostgreSQL atomic pointer and lost commit recovery

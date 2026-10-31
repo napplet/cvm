@@ -83,7 +83,7 @@ A user can describe one focused applet and receive a safe, conformant napplet th
 - ContextVM transports MCP/JSON-RPC messages over signed Nostr events. Public keys provide the persistent identity used for authorization and account association.
 - CEP-8 separates capability-price discovery from settlement and negotiates payment methods through PMIs. In v1, a separate top-up capability accepts Lightning and Cashu, while generation debits actual usage from the resulting account balance.
 - Top-ups do not automatically restart a checkpoint older than ten minutes. Explicit resume prevents surprising expenditure of newly deposited funds.
-- The preferred infrastructure should be highly available, start isolated workers in seconds, and bill at second- or minute-level granularity. AWS is disfavored; vendor selection requires current ecosystem research. Cloud SQL for PostgreSQL is the selected v1 database authority; `ReleaseProviderPort` and the release controller remain provider-neutral so worker and deployment evidence can select providers without rewriting the core.
+- Use a provider-neutral application with ordinary container deployment through Ansible on homelab or a VPS. Reuse the existing Coolify deployment; Google Cloud is excluded. Do not introduce an enterprise platform or parallel provider graph.
 - The napplet and ContextVM ecosystems are experimental and evolving, so protocol/package versions and authoritative constraints must be verified against current official sources during planning.
 
 ## Constraints
@@ -98,7 +98,7 @@ A user can describe one focused applet and receive a safe, conformant napplet th
 - **Security**: Treat prompts, generated code, tool output, dependencies, and napplet runtime messages as untrusted; enforce layered input, agent, filesystem/network, capability, output, and publication controls.
 - **Key custody**: The CVM never receives or stores a user's Nostr private key.
 - **Deployment**: Use `@napplet/cli` and its manifest/deployment contract rather than reimplementing publication.
-- **Infrastructure**: Avoid AWS where practical; prefer rapidly starting, usage-metered compute with multi-region/high-availability options.
+- **Infrastructure**: Provider-neutral adapters; simple Ansible/container deployment to homelab or a VPS. Google Cloud is excluded.
 
 ## Key Decisions
 

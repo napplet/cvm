@@ -1,7 +1,6 @@
-import { prepareReleaseWorkspace, ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
+import { inspectExistingHistoricalUsageRecovery, prepareReleaseWorkspace, ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
-import { loadFinalizedReleaseVerificationAuthority } from "../src/release/production-execution";
 import { CERTIFIER_CONFIG_SHA256_ENV, loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseAuthoritativeUsageRecoverySession, loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
@@ -30,6 +29,14 @@ const repositoryRoot = resolve(import.meta.dir, "..");
 const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
 const canonicalCandidatePath = join(repositoryRoot, "toolchains", "candidates", "initial.json");
 const requireStatePrefix = "--require-state=";
+const deploymentBlocked = Object.freeze({
+  progress: "deployment_blocked",
+  reasonCode: "GOOGLE_CLOUD_DEPLOYMENT_DISABLED",
+});
+
+function emitDeploymentBlocked(): void {
+  console.log(JSON.stringify(deploymentBlocked));
+}
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -143,16 +150,26 @@ async function readControllerReceipt(workspace: string, receiptSha256: string): 
   }
 }
 
+/** A receipt may pass the activation guard only when it identifies the exact
+ * durable original-operation recovery state. This is a local state lookup,
+ * not a receipt read, provider discovery, or authorization decision. */
+async function hasBoundHistoricalUsageRecovery(input: Readonly<{
+  candidatePath: string;
+  workspace: string;
+  receiptSha256?: string;
+}>): Promise<boolean> {
+  return (await inspectExistingHistoricalUsageRecovery(input)) !== undefined;
+}
+
 /** Read-only verification is deliberately kept on the product CLI so the
  * operator lifecycle has one stable root. The bundle remains unable to choose
  * its verifier: only the configured, pinned trust root is accepted. */
 async function verifyImmutableBundle(bundleSha256: string) {
   if (!/^[a-f0-9]{64}$/u.test(bundleSha256)) throw new Error("RELEASE_CERTIFICATION_USAGE");
   const config = await loadCertifierConfig();
-  if (config.mode !== "protected") throw new Error("TRUST_ROOT_CONFIGURATION_INVALID");
+  if (config.mode !== "protected" || !config.trustRoot) return undefined;
   const workspace = controllerWorkspace();
-  const authority = config.trustRoot ? { config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! } : await loadFinalizedReleaseVerificationAuthority({ config, workspace, bundleSha256 });
-  return verifyFinalizedRelease({ workspace, bundleSha256, ...authority });
+  return verifyFinalizedRelease({ workspace, bundleSha256, config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! });
 }
 
 /** Materialization is a bounded local write of measured, redacted readiness
@@ -280,10 +297,32 @@ async function main(): Promise<number> {
   try {
     if (verifyBundle) {
       const decision = await verifyImmutableBundle(verifyBundle);
+      if (!decision) {
+        emitDeploymentBlocked();
+        return 1;
+      }
       console.log(JSON.stringify({ progress: decision.status === "promoted" ? "bundle_verified" : "bundle_blocked", status: decision.status, bundleSha256: decision.bundleSha256, evidenceSha256: decision.evidenceSha256, cleanup: decision.cleanup }));
       return decision.status === "promoted" ? 0 : 1;
     }
-    const workspace = controllerWorkspace();
+    let historicalRecoveryWorkspace: string | undefined;
+    if (!status) {
+      try {
+        const workspace = controllerWorkspace();
+        if (await hasBoundHistoricalUsageRecovery({
+          candidatePath: candidatePath!,
+          workspace,
+          ...(receipt === undefined ? {} : { receiptSha256: receipt }),
+        })) historicalRecoveryWorkspace = workspace;
+      } catch {
+        // Ordinary activation remains closed without revealing workspace facts.
+      }
+    }
+    const historicalUsageRecovery = historicalRecoveryWorkspace !== undefined;
+    if (!status && !historicalUsageRecovery) {
+      emitDeploymentBlocked();
+      return 1;
+    }
+    const workspace = historicalRecoveryWorkspace ?? controllerWorkspace();
     const workspaceCapability = await prepareReleaseWorkspace(workspace);
     /* Resolve an opaque receipt reference before any candidate discovery. A
      * nonexistent ID is not allowed to trigger pricing/provider reads just to

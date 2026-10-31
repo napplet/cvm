@@ -27,10 +27,10 @@ export const releaseManifest = () => ({
   requirements: RELEASE_CLAIM_INVENTORY.map((item) => ({ ...item, freshnessMs: 60_000 })),
   waivers: [],
 });
-export const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: string, claim: string, live: boolean, status: "passed" | "blocked" = "passed") => ({
+export const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: string, claim: string, live: boolean, status: "passed" | "blocked" = "passed", atMs = 1_000) => ({
   version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: manifest.sourceSha256 },
   input: { datasetSha256: digest("9"), profileSha256: digest("f"), topologySha256: digest("0"), command: ["certify"] },
-  startedAtMs: 1_000, completedAtMs: 1_001, expiresAtMs: 61_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" as const : "TOPOLOGY_UNAVAILABLE" as const,
+  startedAtMs: atMs, completedAtMs: atMs + 1, expiresAtMs: atMs + 60_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" as const : "TOPOLOGY_UNAVAILABLE" as const,
   releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs },
 });
 
@@ -58,7 +58,7 @@ export function bindSupplyChainObservation<T extends ReturnType<typeof observati
   return value.claims.includes("release.supply_chain") ? { ...value, verificationDigests: { reproducibilityEvidenceSha256: records.reproducibility.evidenceSha256, supplyChainEvidenceSha256: records.supplyChain.evidenceSha256 } } as T : value;
 }
 
-export async function finalizationFixture(root: string) {
+export async function finalizationFixture(root: string, nowMs = 2_000) {
   const manifest = releaseManifest();
   manifest.sourceSha256 = await sha256String("source");
   const candidateId = await sha256String(root);
@@ -71,21 +71,21 @@ export async function finalizationFixture(root: string) {
     authorization: { authorizationReceiptSha256, authorizationRequestSha256: digest("c") },
     source: { sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256 }, secretReferences: {},
   });
-  const verificationRecords = await protectedVerificationRecords(manifest, candidateId);
+  const verificationRecords = await protectedVerificationRecords(manifest, candidateId, nowMs);
   const claims = [
     ["release.deterministic_fault_matrix", "release.admission_slo", "release.worker"], ["release.telemetry_policy"],
     ["release.database_failover", "release.control_plane"], ["release.checkpoint_object"], ["release.compatible_host", "release.owner_signer"],
     ["release.supply_chain", "release.promoted_cli"], ["release.contextvm_relay", "release.cep8_lightning", "release.cashu", "release.model_reconciliation"], ["release.sealed_upload", "release.publication_relay"],
   ];
   const observations = await Promise.all(PROTECTED_SUITES.map((suite, index) => {
-    const base = observation(manifest, candidateId, claims[index]![0]!, true);
+    const base = observation(manifest, candidateId, claims[index]![0]!, true, "passed", nowMs);
     return writeCertificationObservation(join(root, "fixture-observations"), CertificationObservationInputSchema.parse(bindSupplyChainObservation({
       ...base, claims: claims[index]!, input: { ...base.input, command: ["certify-phase-07", `suite:${suite}`] },
     }, verificationRecords)));
   }));
   const trust = { materialized, workspace: root, repositoryRoot: process.cwd(), candidateId, topologySha256, authorizationReceiptSha256,
     releaseManifest: manifest, observations, reproducibilityRecord: verificationRecords.reproducibility, supplyChainRecord: verificationRecords.supplyChain,
-    sourceArchive: { root, relativePath: "source.tar", canonicalSourceReference: `git+https://github.com/acme/napplet-cvm@${manifest.sourceRevision}`, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256 }, nowMs: 2_000 };
+    sourceArchive: { root, relativePath: "source.tar", canonicalSourceReference: `git+https://github.com/acme/napplet-cvm@${manifest.sourceRevision}`, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256 }, nowMs };
   return { trust, manifest, candidateId, topologySha256, authorizationReceiptSha256, verificationRecords, observations };
 }
 

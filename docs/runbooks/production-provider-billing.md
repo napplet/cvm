@@ -1,3 +1,5 @@
+> Historical implementation reference. Google-specific deployment choices and the subsequent replacement architecture are withdrawn. Use [the simple provider-neutral deployment direction](../architecture/provider-neutral-deployment.md). Existing readers and reconciliation code are retained; this document does not select production infrastructure.
+
 # Production provider billing
 
 Production generation is Vertex AI **Gemini 4 Argon** at the `global`

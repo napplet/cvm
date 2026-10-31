@@ -1,3 +1,5 @@
+> Historical implementation reference. Google-specific deployment choices and the subsequent replacement architecture are withdrawn. Use [the simple provider-neutral deployment direction](provider-neutral-deployment.md). Existing readers and reconciliation code are retained; this document does not select production infrastructure.
+
 # Production checkpoint storage
 
 Apply `migrations/phase-07/003_production_checkpoints.sql` after production

@@ -505,6 +505,195 @@ export async function prepareReleaseWorkspace(workspace: string, synchronizer: (
   return capability;
 }
 
+type AuthorityReader = (relativePath: string) => Promise<string>;
+type CanonicalCurrent = Readonly<{
+  state: ReleaseControllerState;
+  pointer: z.infer<typeof ReleaseControllerCurrentPointerSchema>;
+  pointerBytes: string;
+}>;
+
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function readCanonicalState(reader: AuthorityReader, stateSha256: string, seen = new Set<string>()): Promise<ReleaseControllerState> {
+  if (seen.has(stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  seen.add(stateSha256);
+  let raw: unknown;
+  try { raw = JSON.parse(await reader(join("states", `${stateSha256}.json`))); }
+  catch { throw new Error("RELEASE_CONTROLLER_STATE_INVALID"); }
+  const state = ReleaseControllerStateSchema.safeParse(raw);
+  if (!state.success || state.data.stateSha256 !== stateSha256 || state.data.stateSha256 !== await digest(withoutDigest(state.data, "stateSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  if (state.data.providerOperationRecordSha256s && state.data.providerOperationRecordSha256s.length !== state.data.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  if (state.data.status === "discovering" && (state.data.priorStateSha256 !== null || state.data.authorizationRequestSha256 !== null)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  if (state.data.status === "authorization_required") {
+    if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    const prior = await readCanonicalState(reader, state.data.priorStateSha256, seen);
+    if (prior.status !== "discovering" || prior.authorizationRequestSha256 !== null || prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256 || prior.createdAtMs > state.data.createdAtMs || canonicalJson(prior.capabilities) !== canonicalJson(state.data.capabilities)) {
+      throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    }
+  }
+  if (state.data.version === 2) {
+    if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256 || !state.data.authorizationReceiptSha256
+      || !["receipt_valid", "bootstrap", "provisioning", "observing", "topology_ready", "billing_observing", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed", "blocked"].includes(state.data.status)) {
+      throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    }
+    const prior = await readCanonicalState(reader, state.data.priorStateSha256, seen);
+    if (prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256
+      || prior.createdAtMs > state.data.createdAtMs || (state.data.status === "receipt_valid" && prior.status !== "authorization_required")
+      || (state.data.status !== "receipt_valid" && prior.version !== 2 && !(state.data.status === "materializing" && prior.status === "topology_ready"))
+      || (prior.authorizationReceiptSha256 !== null && prior.authorizationReceiptSha256 !== state.data.authorizationReceiptSha256)) {
+      throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    }
+  }
+  return state.data;
+}
+
+async function readCanonicalStateTransition(reader: AuthorityReader, priorStateSha256: string): Promise<StateTransition | undefined> {
+  let raw: unknown;
+  try { raw = JSON.parse(await reader(join("state-transitions", `${priorStateSha256}.json`))); }
+  catch (error) {
+    if (isMissingFile(error)) return undefined;
+    throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  }
+  const parsed = z.object({ version: z.literal(1), priorStateSha256: DigestSchema, nextStateSha256: DigestSchema, transitionSha256: DigestSchema }).strict().safeParse(raw);
+  if (!parsed.success || parsed.data.priorStateSha256 !== priorStateSha256 || parsed.data.transitionSha256 !== await digest(withoutDigest(parsed.data, "transitionSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  return parsed.data;
+}
+
+async function readCanonicalCurrent(reader: AuthorityReader): Promise<CanonicalCurrent> {
+  let pointerBytes: string;
+  let raw: unknown;
+  try {
+    pointerBytes = await reader("current.json");
+    raw = JSON.parse(pointerBytes);
+  } catch (error) {
+    if (isMissingFile(error)) throw error;
+    throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
+  }
+  const pointer = ReleaseControllerCurrentPointerSchema.safeParse(raw);
+  if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
+  let state = await readCanonicalState(reader, pointer.data.stateSha256);
+  const seen = new Set<string>();
+  while (true) {
+    if (seen.has(state.stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    seen.add(state.stateSha256);
+    const transition = await readCanonicalStateTransition(reader, state.stateSha256);
+    if (!transition) break;
+    state = await readCanonicalState(reader, transition.nextStateSha256);
+  }
+  if (state.candidate.candidateSha256 !== pointer.data.candidateSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  return { state, pointer: pointer.data, pointerBytes };
+}
+
+async function readCanonicalRequest(reader: AuthorityReader, authorizationRequestSha256: string): Promise<ReleaseAuthorizationRequest> {
+  let raw: unknown;
+  try { raw = JSON.parse(await reader(join("authorization-requests", `${authorizationRequestSha256}.json`))); }
+  catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
+  try {
+    const request = await validateAuthorizationRequest(raw);
+    if (request.authorizationRequestSha256 !== authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    return request;
+  } catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
+}
+
+async function assertCanonicalRequestBinding(input: Readonly<{
+  state: ReleaseControllerState;
+  pointer: z.infer<typeof ReleaseControllerCurrentPointerSchema>;
+  candidatePath: string;
+  request: ReleaseAuthorizationRequest;
+}>): Promise<void> {
+  if (input.state.candidate.candidateSha256 !== input.pointer.candidateSha256 || !input.state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+  if ((await candidateIdentity(input.candidatePath)).candidateSha256 !== input.state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
+  const plannedCost = input.request.orderedEffects.reduce((total, effect) => total + effect.estimatedCostMicros, 0);
+  if (
+    (input.state.status === "authorization_required" && input.request.controllerStateSha256 !== input.state.priorStateSha256)
+    || input.request.candidateSha256 !== input.state.candidate.candidateSha256
+    || input.request.topologySha256 !== input.state.topologySha256
+    || input.request.providerCapabilitiesSha256 !== await digest(input.state.capabilities)
+    || input.request.maximumAuthorizedCostMicros !== plannedCost
+    || input.request.expiresAtMs <= input.state.createdAtMs
+  ) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+}
+
+/** Opens only an already-existing, confined authority tree. It never creates,
+ * syncs, follows links, or retries a changing entry; callers use its absence or
+ * invalidity as a closed admission result. */
+async function existingWorkspaceReader(workspace: string): Promise<Readonly<{ workspace: string; read: AuthorityReader }> | undefined> {
+  if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
+  const requested = resolve(workspace);
+  const projectRoot = resolve(process.cwd());
+  if (!containedBy(PROJECT_WORKSPACE_ROOT, requested)) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  let canonicalProjectRoot: string;
+  try { canonicalProjectRoot = await realpath(projectRoot); }
+  catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  await validateTrustedProjectAncestors(canonicalProjectRoot, coordinatorUid());
+  let canonicalWorkspace = canonicalProjectRoot;
+  for (const segment of relative(projectRoot, requested).split(sep).filter(Boolean)) {
+    canonicalWorkspace = join(canonicalWorkspace, segment);
+    let metadata;
+    try { metadata = await lstat(canonicalWorkspace); }
+    catch (error) {
+      if (isMissingFile(error)) return undefined;
+      throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    }
+    try { assertCoordinatorDirectory(metadata, coordinatorUid()); }
+    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  }
+  if (await realpath(canonicalWorkspace) !== canonicalWorkspace) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  let readsRemaining = 96;
+  const read: AuthorityReader = async (relativePath) => {
+    if (readsRemaining-- <= 0) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    const candidate = resolve(canonicalWorkspace, relativePath);
+    if (!containedBy(canonicalWorkspace, candidate) || candidate === canonicalWorkspace) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    const segments = relative(canonicalWorkspace, candidate).split(sep).filter(Boolean);
+    let current = canonicalWorkspace;
+    for (const [index, segment] of segments.entries()) {
+      current = join(current, segment);
+      const before = await lstat(current);
+      if (index === segments.length - 1) assertCoordinatorFile(before, coordinatorUid());
+      else assertCoordinatorDirectory(before, coordinatorUid());
+      if (index === segments.length - 1) {
+        const bytes = await readFile(current, "utf8");
+        const after = await lstat(current);
+        assertCoordinatorFile(after, coordinatorUid());
+        if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+          throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+        }
+        return bytes;
+      }
+    }
+    throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  };
+  return Object.freeze({ workspace: canonicalWorkspace, read });
+}
+
+/** Read-only admission inspector for the one original-operation usage recovery.
+ * It accepts no general legacy/mode override and holds closed for every absent,
+ * invalid, changing, non-recovery, or unbound authority snapshot. */
+export async function inspectExistingHistoricalUsageRecovery(input: Readonly<{
+  candidatePath: string;
+  workspace: string;
+  receiptSha256?: string;
+}>): Promise<ReleaseCertificationResult | undefined> {
+  try {
+    const authority = await existingWorkspaceReader(input.workspace);
+    if (!authority) return undefined;
+    const current = await readCanonicalCurrent(authority.read);
+    if (current.state.status !== "billing_observing" || !current.state.authorizationRequestSha256 || !current.state.authorizationReceiptSha256) return undefined;
+    const request = await readCanonicalRequest(authority.read, current.state.authorizationRequestSha256);
+    await assertCanonicalRequestBinding({ ...current, candidatePath: input.candidatePath, request });
+    const receiptRaw = JSON.parse(await authority.read(join("authorization-receipts", `${current.state.authorizationReceiptSha256}.json`)));
+    const binding = await validateAuthorizationReceiptIntegrity({ request, receipt: receiptRaw });
+    if (binding.receipt.authorizationReceiptSha256 !== current.state.authorizationReceiptSha256
+      || (input.receiptSha256 !== undefined && input.receiptSha256.toLowerCase() !== current.state.authorizationReceiptSha256)
+      || await authority.read("current.json") !== current.pointerBytes) return undefined;
+    return Object.freeze({ exitCode: 1, state: current.state, authorizationRequest: request });
+  } catch {
+    return undefined;
+  }
+}
+
 async function syncDirectoryChain(path: string, anchor: string, synchronizer: (path: string) => Promise<void>): Promise<void> {
   let current = await realpath(path);
   const stableAnchor = await realpath(anchor);
@@ -674,30 +863,16 @@ export class ReleaseCertificationController {
 
   async status(): Promise<ReleaseCertificationResult | undefined> {
     await this.#ensureDurableWorkspace();
-    const pointerPath = await this.#authorityPath(join(this.#workspace, "current.json"));
-    let pointerRaw: unknown;
-    try { pointerRaw = JSON.parse(await readFile(pointerPath, "utf8")); }
+    let current: CanonicalCurrent;
+    try { current = await this.#loadCurrent(); }
     catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-      throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
+      if (isMissingFile(error)) return undefined;
+      throw error;
     }
-    const pointer = ReleaseControllerCurrentPointerSchema.safeParse(pointerRaw);
-    if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
-    const state = (await this.#loadCurrent()).state;
-    if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    if ((await candidateIdentity(this.#candidatePath)).candidateSha256 !== state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
-    const request = await this.#readRequest(state.authorizationRequestSha256);
-    await validateAuthorizationRequest(request);
-    const plannedCost = request.orderedEffects.reduce((total, effect) => total + effect.estimatedCostMicros, 0);
-    if (
-      (state.status === "authorization_required" && request.controllerStateSha256 !== state.priorStateSha256)
-      || request.candidateSha256 !== state.candidate.candidateSha256
-      || request.topologySha256 !== state.topologySha256
-      || request.providerCapabilitiesSha256 !== await digest(state.capabilities)
-      || request.maximumAuthorizedCostMicros !== plannedCost
-      || request.expiresAtMs <= state.createdAtMs
-    ) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
-    return { exitCode: 1, state, authorizationRequest: request };
+    if (!current.state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    const request = await this.#readRequest(current.state.authorizationRequestSha256);
+    await assertCanonicalRequestBinding({ ...current, candidatePath: this.#candidatePath, request });
+    return { exitCode: 1, state: current.state, authorizationRequest: request };
   }
 
   async dryRun(): Promise<ReleaseCertificationResult> {
@@ -1191,23 +1366,8 @@ export class ReleaseCertificationController {
     await this.#replaceSynced(join(this.#workspace, "current.json"), `${canonicalJson({ ...pointerBase, pointerSha256: await digest(pointerBase) })}\n`);
   }
 
-  async #loadCurrent(): Promise<Readonly<{ state: ReleaseControllerState; pointer: z.infer<typeof ReleaseControllerCurrentPointerSchema> }>> {
-    let raw: unknown;
-    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "current.json"))); }
-    catch { throw new Error("RELEASE_CONTROLLER_POINTER_INVALID"); }
-    const pointer = ReleaseControllerCurrentPointerSchema.safeParse(raw);
-    if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
-    let state = await this.#readState(pointer.data.stateSha256);
-    const seen = new Set<string>();
-    while (true) {
-      if (seen.has(state.stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-      seen.add(state.stateSha256);
-      const transition = await this.#readStateTransition(state.stateSha256);
-      if (!transition) break;
-      state = await this.#readState(transition.nextStateSha256);
-    }
-    if (state.candidate.candidateSha256 !== pointer.data.candidateSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    return { state, pointer: pointer.data };
+  async #loadCurrent(): Promise<CanonicalCurrent> {
+    return readCanonicalCurrent((relativePath) => this.#readAuthorityFile(join(this.#workspace, relativePath)));
   }
 
   async #commitStateTransition(priorStateSha256: string, next: ReleaseControllerState): Promise<ReleaseControllerState> {
@@ -1226,15 +1386,7 @@ export class ReleaseCertificationController {
   }
 
   async #readStateTransition(priorStateSha256: string): Promise<StateTransition | undefined> {
-    let raw: unknown;
-    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "state-transitions", `${priorStateSha256}.json`))); }
-    catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-      throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    }
-    const parsed = z.object({ version: z.literal(1), priorStateSha256: DigestSchema, nextStateSha256: DigestSchema, transitionSha256: DigestSchema }).strict().safeParse(raw);
-    if (!parsed.success || parsed.data.priorStateSha256 !== priorStateSha256 || parsed.data.transitionSha256 !== await digest(withoutDigest(parsed.data, "transitionSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    return parsed.data;
+    return readCanonicalStateTransition((relativePath) => this.#readAuthorityFile(join(this.#workspace, relativePath)), priorStateSha256);
   }
 
   async #claimDispatch(state: ReleaseControllerState, record: CurrentProviderOperationRecord): Promise<boolean> {
@@ -1391,47 +1543,11 @@ export class ReleaseCertificationController {
   }
 
   async #readState(stateSha256: string, seen = new Set<string>()): Promise<ReleaseControllerState> {
-    if (seen.has(stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    seen.add(stateSha256);
-    let raw: unknown;
-    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "states", `${stateSha256}.json`))); }
-    catch { throw new Error("RELEASE_CONTROLLER_STATE_INVALID"); }
-    const state = ReleaseControllerStateSchema.safeParse(raw);
-    if (!state.success || state.data.stateSha256 !== stateSha256 || state.data.stateSha256 !== await digest(withoutDigest(state.data, "stateSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    if (state.data.providerOperationRecordSha256s && state.data.providerOperationRecordSha256s.length !== state.data.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    if (state.data.status === "discovering" && (state.data.priorStateSha256 !== null || state.data.authorizationRequestSha256 !== null)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-    if (state.data.status === "authorization_required") {
-      if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-      const prior = await this.#readState(state.data.priorStateSha256, seen);
-      if (prior.status !== "discovering" || prior.authorizationRequestSha256 !== null || prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256 || prior.createdAtMs > state.data.createdAtMs || canonicalJson(prior.capabilities) !== canonicalJson(state.data.capabilities)) {
-        throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-      }
-    }
-    if (state.data.version === 2) {
-      if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256 || !state.data.authorizationReceiptSha256
-        || !["receipt_valid", "bootstrap", "provisioning", "observing", "topology_ready", "billing_observing", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed", "blocked"].includes(state.data.status)) {
-        throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-      }
-      const prior = await this.#readState(state.data.priorStateSha256, seen);
-      if (prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256
-        || prior.createdAtMs > state.data.createdAtMs || (state.data.status === "receipt_valid" && prior.status !== "authorization_required")
-        || (state.data.status !== "receipt_valid" && prior.version !== 2 && !(state.data.status === "materializing" && prior.status === "topology_ready"))
-        || (prior.authorizationReceiptSha256 !== null && prior.authorizationReceiptSha256 !== state.data.authorizationReceiptSha256)) {
-        throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
-      }
-    }
-    return state.data;
+    return readCanonicalState((relativePath) => this.#readAuthorityFile(join(this.#workspace, relativePath)), stateSha256, seen);
   }
 
   async #readRequest(authorizationRequestSha256: string): Promise<ReleaseAuthorizationRequest> {
-    let raw: unknown;
-    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "authorization-requests", `${authorizationRequestSha256}.json`))); }
-    catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
-    try {
-      const request = await validateAuthorizationRequest(raw);
-      if (request.authorizationRequestSha256 !== authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
-      return request;
-    } catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
+    return readCanonicalRequest((relativePath) => this.#readAuthorityFile(join(this.#workspace, relativePath)), authorizationRequestSha256);
   }
 }
 

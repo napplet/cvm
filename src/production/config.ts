@@ -42,6 +42,15 @@ export const ProductionConfigSchema = z.object({
 
 export type ProductionConfig = Readonly<z.infer<typeof ProductionConfigSchema>>;
 
+/** The legacy Google-only configuration stays readable for historical
+ * recovery. Deployment policy disables its activation. Reuse the existing
+ * provider interfaces for application wiring; do not add a parallel graph. */
+export const GOOGLE_CLOUD_DEPLOYMENT_DISABLED = "GOOGLE_CLOUD_DEPLOYMENT_DISABLED";
+
+export function assertProductionDeploymentAllowed(_config: ProductionConfig): void {
+  throw new Error(GOOGLE_CLOUD_DEPLOYMENT_DISABLED);
+}
+
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const child of Object.values(value as Record<string, unknown>)) immutable(child);

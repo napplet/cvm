@@ -2,8 +2,10 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { describe, expect, test } from "bun:test";
+import * as filesystem from "node:fs/promises";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
+  MODAL_BILLING_PYTHON,
   createMemoryModalBillingReportJournal,
   createModalBillingReportCollector,
   createModalBillingObservationGrant,
@@ -58,6 +60,30 @@ function grant(executableSha256: string) {
 }
 
 describe("pinned Modal billing report collector", () => {
+  test.each(["changed-executable", "changed-interpreter"] as const)("rejects %s before credential resolution and durably recovers the known launch failure", async (mutation) => {
+    const executable = await fixture(`#!${MODAL_BILLING_PYTHON}\nprint("must not run")\n`);
+    const journal = createMemoryModalBillingReportJournal();
+    let resolves = 0, artifacts = 0;
+    const metadata = mutation === "changed-interpreter" ? spyOn(filesystem, "lstat").mockRejectedValue(new Error("TEST_INTERPRETER_MUTABLE")) : undefined;
+    try {
+      if (mutation === "changed-executable") await writeFile(executable.executable, "unapproved bytes");
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { resolves++; return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifactOrigin: "memory://origin/", artifacts: {
+        async createImmutable(): Promise<never> { artifacts++; throw new Error("UNEXPECTED_ARTIFACT"); },
+        async readExact(): Promise<never> { artifacts++; throw new Error("UNEXPECTED_ARTIFACT"); },
+      } });
+      const approved = grant(executable.sha256), captured = await collector.capture(approved);
+      expect(resolves).toBe(0);
+      expect(artifacts).toBe(0);
+      expect(captured).toMatchObject({ status: "held", reason: "child_failure" });
+      if (metadata) expect(metadata).toHaveBeenCalledWith(MODAL_BILLING_PYTHON);
+      const saved = await journal.read(captured.reportRequestSha256);
+      expect(saved?.record.attempts).toMatchObject([{ state: "completed", disposition: "launch_unavailable" }]);
+      expect(await collector.recover(approved)).toEqual(captured);
+      expect(await collector.capture(approved)).toEqual(captured);
+      expect(resolves).toBe(0);
+    } finally { metadata?.mockRestore(); await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
   test("runs a bounded real child with fixed argv and a closed environment", async () => {
     const executable = await fixture(`#!/usr/bin/env bun
 const expected = ["environment", "billing", "report", "cvm-prod", "--start", "2026-10-30T10:00:00.000Z", "--end", "2026-10-30T11:00:00.000Z", "--resolution", "h", "--tag-names", "cvm_account,cvm_operation", "--show-resources", "--json"];

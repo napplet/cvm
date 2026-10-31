@@ -63,12 +63,12 @@ export class NonGoogleSuccessorControl {
     const terminal = StoredSchema.parse({ ...current, state: "completed", result });
     return StoredSchema.parse((await this.input.journal.compareAndSet(current.operationId, current.requestSha256, record.revision, terminal))?.value ?? (await this.input.journal.read<unknown>(operationId))?.value);
   }
-  #assert(value: Readonly<{ kind: CertificationEdgeKind; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string }>, originalRecorded: boolean): void {
+  #assert(value: Readonly<{ operationId: string; kind: CertificationEdgeKind; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string }>, originalRecorded: boolean): void {
     if (value.candidateSha256 !== this.input.candidateSha256 || value.topologySha256 !== this.input.topologySha256 || value.roleCostBoundSha256 !== this.input.roleCostBoundSha256) throw new Error("NON_GOOGLE_SUCCESSOR_CONTROL_BINDING_REQUIRED");
     // The signed v3 request is the successor grant identity. The separately
     // recomputed command digest remains the durable original-operation
     // identity; a GET control URL can never substitute either value.
     const facts = { scope: scopeFor(value.kind), effect: value.kind, candidateSha256: value.candidateSha256, topologySha256: value.topologySha256, requestSha256: this.input.authorizationRequestSha256, roleCostBoundSha256: value.roleCostBoundSha256 };
-    if (originalRecorded) this.input.authority.assertOriginalObservation({ ...facts, originalRecorded: true }); else this.input.authority.assertDispatch(facts);
+    if (originalRecorded) this.input.authority.assertOriginalObservation({ ...facts, originalRecorded: true, operationId: value.operationId, operationSha256: value.requestSha256 }); else this.input.authority.assertDispatch(facts);
   }
 }

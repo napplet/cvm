@@ -18,15 +18,17 @@ import { OpenAiResponsesCandidateModelGateway } from "../../src/production/opena
 
 const hex = (character: string) => character.repeat(64);
 const now = 1_000_000;
-/** Verbatim pricing-card structure retained from the fixed public OpenAI
- * gpt-4.1 model document.  The production capture retains the whole document;
- * this bounded fixture preserves the source syntax and quoted values. */
-const source = new TextEncoder().encode(`<!doctype html><html><body><article data-openai-model="gpt-4.1-2025-04-14">
-<code class="text-xs">gpt-4.1-2025-04-14</code>
-<div>Input</div><div class="text-2xl font-semibold">$2.00</div></div>
-<div class="card"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div>
-<div class="card"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
-</article></body></html>`);
+/** Verbatim card ownership shape from the fixed public OpenAI ModelView.
+ * Production captures retain the full page; this bounded document preserves
+ * the model-bound island and its exact three-card sibling group. */
+const cards = `<div class="flex flex-col gap-2 md:flex-row">
+<div class="flex flex-1 flex-col gap-1"><div>Input</div><div class="text-2xl font-semibold">$2.00</div></div>
+<div class="flex flex-1 flex-col gap-1"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div>
+<div class="flex flex-1 flex-col gap-1"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
+</div>`;
+const source = new TextEncoder().encode(`<!doctype html><html><body><astro-island component-url="/_astro/ModelView.react.abc.js">
+<code class="text-xs">gpt-4.1-2025-04-14</code>${cards}
+</astro-island></body></html>`);
 const document = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: source, observedAtMs: now - 1, freshUntilMs: now + 60_000 });
 
 const rate = async () => createOpenAiResponsesRateSnapshot({ document, model: "gpt-4.1-2025-04-14" });
@@ -119,6 +121,13 @@ test("non-Google catalog accepts only a fresh parsed source-bound model rate and
   await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body>${new TextDecoder().decode(source)}${new TextDecoder().decode(source)}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
   const navigationSelectedOtherHeading = `<!doctype html><html><body><nav><code>gpt-4.1-2025-04-14</code></nav><article data-openai-model="other-2025-04-14"><h2>other-2025-04-14</h2><div>Input</div><div>$1.00</div></div><div><div>Cached input</div><div>$0.10</div></div><div><div>Output</div><div>$2.00</div></div></article></body></html>`;
   await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(navigationSelectedOtherHeading) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  for (const nested of [
+    `<section data-openai-model="gpt-4.1-2025-04-14"><code>gpt-4.1-2025-04-14</code><section data-openai-model="other-2025-04-14">${cards}</section></section>`,
+    `<article data-openai-model="gpt-4.1-2025-04-14"><code>gpt-4.1-2025-04-14</code><article data-openai-model="other-2025-04-14">${cards}</article></article>`,
+    `<astro-island component-url="/_astro/ModelView.react.abc.js"><code>gpt-4.1-2025-04-14</code><astro-island component-url="/_astro/ModelView.react.abc.js"><code>other-2025-04-14</code>${cards}</astro-island></astro-island>`,
+  ]) {
+    await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body>${nested}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  }
 });
 
 publicSourceIntegration("the retained fixed OpenAI HTML source reaches source-bound native receipt math", async () => {

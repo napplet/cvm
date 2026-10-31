@@ -1,6 +1,7 @@
 import { canonicalJson } from "../../promotion/schema";
 import { z } from "zod";
 import { OPENAI_RESPONSES_PRICING_URL, type OpenAiResponsesPricingDocument } from "./official-sources";
+import type { NonGoogleModelCostCatalogPort, OfficialPricingSourcePort } from "./production-catalog";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PositiveMicrosSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -65,7 +66,7 @@ export type OpenAiResponsesUsage = z.infer<typeof UsageSchema>;
  * available accounting fact by choosing a provider label or clock. */
 const CostEvidenceSchema = z.object({
   artifactReference: z.string().regex(/^evidence:[a-z0-9._:-]{3,255}$/u),
-  sourceKind: z.enum(["official_openai_model", "contextvm_transport_policy", "operator_homelab_policy", "operator_approval_policy", "unknown"]),
+  sourceKind: z.enum(["official_openai_model", "official_modal_pricing", "official_fly_pricing", "contextvm_transport_policy", "operator_homelab_policy", "operator_approval_policy", "funding_fee_contract", "publication_contract", "unknown"]),
   sourceUrl: z.string().url().max(2048),
   sourceArtifactSha256: DigestSchema,
   sourceDocumentSha256: DigestSchema,
@@ -93,12 +94,322 @@ export const NonGoogleCostFactSchema = z.discriminatedUnion("role", [NativeFactS
 export type NonGoogleCostFact = z.infer<typeof NonGoogleCostFactSchema>;
 export type CostEvidenceArtifactResolver = Readonly<{ read(reference: string): Promise<Readonly<{ sourceUrl: string; bytes: Uint8Array }>> }>;
 
+/** The successor graph deliberately has no relation to the historic sixteen
+ * provider IDs.  These are the only certification suites a later native
+ * factory may satisfy, and Plan 67 represents them as explicit requirements
+ * while their backends remain unavailable. */
+const SuccessorSuiteSchema = z.enum([
+  "admission", "telemetry", "chaos", "restore", "security-host", "supply-chain",
+  "contextvm-payment-model", "publication",
+]);
+const GraphRevisionSchema = z.literal("non-google-v1");
+const RoleIdentifierSchema = z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u);
+const EffectIdentifierSchema = z.string().regex(/^[a-z][a-z0-9.-]{2,127}$/u);
+const ModulePathSchema = z.string().min(1).max(256);
+const ExportNameSchema = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{2,127}$/u);
+const PurposeSchema = z.string().regex(/^[a-z][a-z0-9-]{2,127}$/u);
+const NamespaceSchema = z.string().regex(/^[a-z][a-z0-9-]{1,63}:[a-z][a-z0-9-]{1,63}$/u);
+const LEGACY_SUCCESSOR_ROLE_IDS = new Set<string>([
+  "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "contextvm",
+  "cep8_lightning", "cashu", "model", "compatible_host", "signer", "promoted_cli",
+  "upload", "owner_relay", "attestation_relay",
+]);
+
+const SuccessorRoleSchema = z.object({
+  roleId: RoleIdentifierSchema,
+  effectId: EffectIdentifierSchema,
+  costComponentId: RoleIdentifierSchema,
+  suite: SuccessorSuiteSchema,
+  constructor: z.object({
+    modulePath: ModulePathSchema,
+    exportName: ExportNameSchema,
+    purpose: PurposeSchema,
+    namespace: NamespaceSchema,
+  }).strict(),
+  /** `native` identifies a reviewed concrete constructor seam; it is never a
+   * claim that the constructor was run. `unconstructed` remains an explicit
+   * no-effect hold until plans 68–70 supply and prove it. */
+  construction: z.enum(["native", "unconstructed"]),
+}).strict();
+type SuccessorRole = z.infer<typeof SuccessorRoleSchema>;
+export type SuccessorGraphRole = SuccessorRole;
+
+/** Closed, product-owned provenance. `unconstructed` references only an
+ * existing checkpoint seam and is never authority to construct that backend. */
+const PRODUCT_SUCCESSOR_ROLE_REGISTRY = Object.freeze([
+  { roleId: "model.openai-responses", effectId: "model.generate", costComponentId: "model.api-usage", suite: "contextvm-payment-model", constructor: { modulePath: "src/release/deployment/openai-responses-client.ts", exportName: "createOpenAiResponsesClient", purpose: "openai-responses", namespace: "openai:responses" }, construction: "native" },
+  { roleId: "worker.modal", effectId: "worker.start", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "src/release/native/modal.ts", exportName: "createModalLiveWorkerProvider", purpose: "worker-sandbox", namespace: "modal:sandbox" }, construction: "unconstructed" },
+  { roleId: "object.postgres-bytea", effectId: "object.seal", costComponentId: "object.postgres-storage", suite: "restore", constructor: { modulePath: "src/continuity/postgres-bytea-object-store.ts", exportName: "PostgresByteaObjectStoreAdapter", purpose: "immutable-objects", namespace: "postgres:objects" }, construction: "unconstructed" },
+  { roleId: "telemetry.otlp", effectId: "telemetry.record", costComponentId: "telemetry.otlp", suite: "telemetry", constructor: { modulePath: "src/telemetry/redaction.ts", exportName: "redactLifecycleObservation", purpose: "telemetry", namespace: "otlp:collector" }, construction: "unconstructed" },
+  { roleId: "chaos.fault-harness", effectId: "chaos.exercise", costComponentId: "chaos.harness", suite: "chaos", constructor: { modulePath: "src/resilience/fault-harness.ts", exportName: "runFaultScenario", purpose: "chaos", namespace: "fault:harness" }, construction: "unconstructed" },
+  { roleId: "security.host", effectId: "security.inspect", costComponentId: "security.host", suite: "security-host", constructor: { modulePath: "src/certification/live/security-host.ts", exportName: "runLiveSecurityHostCertification", purpose: "security-host", namespace: "security:host" }, construction: "unconstructed" },
+  { roleId: "supply.chain", effectId: "supply.verify", costComponentId: "supply.chain", suite: "supply-chain", constructor: { modulePath: "src/certification/supply-chain.ts", exportName: "verifySupplyChainCertification", purpose: "supply-chain", namespace: "supply:chain" }, construction: "unconstructed" },
+  { roleId: "publication.napplet", effectId: "publication.verify", costComponentId: "publication.transport", suite: "publication", constructor: { modulePath: "src/publication/contracts.ts", exportName: "PublicationEffectIntentSchema", purpose: "publication", namespace: "napplet:publication" }, construction: "unconstructed" },
+  { roleId: "worker.fly", effectId: "worker.reclaim", costComponentId: "worker.fly-seconds", suite: "admission", constructor: { modulePath: "src/release/native/fly.ts", exportName: "createFlyLiveWorkerProvider", purpose: "worker-sandbox", namespace: "fly:machines" }, construction: "unconstructed" },
+] as const satisfies readonly SuccessorRole[]);
+
+export type SuccessorGraphInventory = Readonly<{
+  graphRevision: "non-google-v1";
+  candidateSha256: string;
+  topologySha256: string;
+  roles: readonly (SuccessorRole & Readonly<{ constructorSha256: string }>)[];
+  inventorySha256: string;
+}>;
+
+/** Rebuilds the graph from product code, rather than accepting a caller's
+ * role list as a provenance authority at the controller boundary. */
+export async function createProductSuccessorGraphInventory(input: Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+}>): Promise<SuccessorGraphInventory> {
+  return createSuccessorGraphInventory({
+    graphRevision: "non-google-v1",
+    candidateSha256: input.candidateSha256,
+    topologySha256: input.topologySha256,
+    roles: PRODUCT_SUCCESSOR_ROLE_REGISTRY,
+  });
+}
+
+const SuccessorCostDispositionSchema = z.enum([
+  "authoritative_native_usage",
+  "documented_scoped_zero",
+  "included_parent",
+  "explicit_approved_shared_standing",
+  "unknown_held",
+]);
+const SuccessorNativeModelUsageIntentSchema = z.object({
+  maximumInputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  maximumOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  maximumChargeMicros: PositiveMicrosSchema,
+}).strict();
+const SuccessorRoleCostFactSchema = z.object({
+  roleId: RoleIdentifierSchema,
+  effectId: EffectIdentifierSchema,
+  costComponentId: RoleIdentifierSchema,
+  constructorSha256: DigestSchema,
+  disposition: SuccessorCostDispositionSchema,
+  status: z.enum(["available", "held"]),
+  provider: z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u),
+  holdReason: z.string().min(8).max(1024).optional(),
+  rate: OpenAiResponsesRateSnapshotSchema.optional(),
+  usageIntent: SuccessorNativeModelUsageIntentSchema.optional(),
+  evidence: CostEvidenceSchema,
+}).strict().superRefine((value, context) => {
+  if ((value.status === "held") !== (value.disposition === "unknown_held")) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_STATUS_INVALID" });
+  if (value.status === "held" && value.holdReason === undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_REQUIRED" });
+  if (value.status === "available" && value.holdReason !== undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_INVALID" });
+  const isModel = value.roleId === "model.openai-responses";
+  if (isModel && value.status === "available" && (value.rate === undefined || value.usageIntent === undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REQUIRED" });
+  if (!isModel && (value.rate !== undefined || value.usageIntent !== undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED" });
+  if (isModel && value.status === "available" && (value.evidence.sourceKind !== "official_openai_model" || value.evidence.sourceUrl !== OPENAI_RESPONSES_PRICING_URL || value.rate === undefined
+    || value.rate.sourceUrl !== value.evidence.sourceUrl || value.rate.sourceArtifactSha256 !== value.evidence.sourceArtifactSha256
+    || value.rate.sourceDocumentSha256 !== value.evidence.sourceDocumentSha256 || value.rate.observedAtMs !== value.evidence.observedAtMs
+    || value.rate.freshUntilMs !== value.evidence.freshUntilMs)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_EVIDENCE_UNBOUND" });
+});
+export type SuccessorRoleCostFact = z.infer<typeof SuccessorRoleCostFactSchema>;
+
+export type SuccessorRoleCostBound = Readonly<{
+  schemaVersion: "non-google-successor-role-cost-v1";
+  graphRevision: "non-google-v1";
+  candidateSha256: string;
+  topologySha256: string;
+  inventorySha256: string;
+  boundSha256: string;
+  facts: readonly SuccessorRoleCostFact[];
+  heldRoleIds: readonly string[];
+}>;
+const WorkerPricingSnapshotSchema = z.object({
+  sourceId: z.string().min(3).max(128),
+  bytes: z.instanceof(Uint8Array).refine((bytes) => bytes.byteLength > 0 && bytes.byteLength <= 8 * 1024 * 1024, "SUCCESSOR_GRAPH_WORKER_SOURCE_BYTES_REJECTED"),
+  observedAtMs: z.number().int().positive(),
+  freshUntilMs: z.number().int().positive(),
+  quotes: z.array(z.object({
+    provider: z.enum(["modal", "fly"]),
+    componentId: z.string().min(3).max(128),
+    skuId: z.string().min(3).max(128),
+    region: z.string().min(1).max(128),
+    currency: z.literal("USD"),
+    unit: z.string().min(1).max(128),
+    priceMicros: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }).strict()).min(1).max(8),
+}).strict();
+
 function freeze<T>(value: T): T { return Object.freeze(value); }
 async function sha256(value: Uint8Array): Promise<string> { return Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer)).toString("hex"); }
 async function hashCanonical(value: unknown): Promise<string> { return sha256(new TextEncoder().encode(canonicalJson(value))); }
 function ceilDiv(numerator: bigint, denominator: bigint): bigint { return (numerator + denominator - 1n) / denominator; }
 function safeMicros(value: bigint): number { if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OPENAI_USAGE_COST_OVERFLOW"); return Number(value); }
 function charge(tokens: number, microsPerMillion: number): number { return safeMicros(ceilDiv(BigInt(tokens) * BigInt(microsPerMillion), 1_000_000n)); }
+
+/** Builds a disjoint, candidate-bound successor inventory.  It accepts only
+ * repository constructor provenance, never configuration-provided provider
+ * labels or transport maps.  The result is a preparation record, not a
+ * factory or an authority to resolve credentials, create clients, or issue a
+ * request. */
+export async function createSuccessorGraphInventory(input: Readonly<{
+  graphRevision: "non-google-v1";
+  candidateSha256: string;
+  topologySha256: string;
+  roles: readonly SuccessorRole[];
+}>): Promise<SuccessorGraphInventory> {
+  if (GraphRevisionSchema.parse(input.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
+  const candidateSha256 = DigestSchema.parse(input.candidateSha256);
+  const topologySha256 = DigestSchema.parse(input.topologySha256);
+  const roles = input.roles.map((candidate) => SuccessorRoleSchema.parse(candidate));
+  if (roles.length === 0 || new Set(roles.map((role) => role.roleId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_ROLE_COVERAGE_REQUIRED");
+  if (new Set(roles.map((role) => role.effectId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_EFFECT_DUPLICATE");
+  if (new Set(roles.map((role) => role.costComponentId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_COST_COMPONENT_DUPLICATE");
+  for (const role of roles) {
+    if (LEGACY_SUCCESSOR_ROLE_IDS.has(role.roleId)) throw new Error("SUCCESSOR_GRAPH_LEGACY_ROLE_REJECTED");
+    const approved = PRODUCT_SUCCESSOR_ROLE_REGISTRY.find((entry) => entry.roleId === role.roleId);
+    if (!approved || canonicalJson(role) !== canonicalJson(approved)) throw new Error("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
+  }
+  if (roles.length !== PRODUCT_SUCCESSOR_ROLE_REGISTRY.length) throw new Error("SUCCESSOR_GRAPH_ROLE_COVERAGE_REQUIRED");
+  const boundRoles = await Promise.all(roles.map(async (role) => Object.freeze({
+    ...role,
+    constructorSha256: await hashCanonical({
+      modulePath: role.constructor.modulePath,
+      exportName: role.constructor.exportName,
+      purpose: role.constructor.purpose,
+      namespace: role.constructor.namespace,
+    }),
+  })));
+  const inventorySha256 = await hashCanonical({ graphRevision: "non-google-v1", candidateSha256, topologySha256, roles: boundRoles });
+  return freeze({ graphRevision: "non-google-v1" as const, candidateSha256, topologySha256, roles: freeze(boundRoles), inventorySha256 });
+}
+
+/** Captures a bounded public Modal/Fly source as the role's own evidence
+ * producer. The result intentionally remains held: a public price cannot
+ * establish the selected placement, account arrangement, availability or
+ * native backend. It therefore cannot be mistaken for an OpenAI rate or a
+ * production authorization line. */
+export async function createHeldSuccessorWorkerCostFact(input: Readonly<{
+  graph: SuccessorGraphInventory;
+  roleId: "worker.modal" | "worker.fly";
+  source: OfficialPricingSourcePort;
+}>): Promise<SuccessorRoleCostFact> {
+  const role = input.graph.roles.find((candidate) => candidate.roleId === input.roleId);
+  if (!role) throw new Error("SUCCESSOR_GRAPH_WORKER_ROLE_REQUIRED");
+  const provider = input.roleId === "worker.modal" ? "modal" : "fly";
+  const snapshot = WorkerPricingSnapshotSchema.parse(await input.source.readOfficialPricing({ provider }));
+  if (snapshot.freshUntilMs <= snapshot.observedAtMs
+    || snapshot.quotes.length !== 1
+    || snapshot.quotes[0]?.provider !== provider
+    || snapshot.quotes[0]?.currency !== "USD"
+    || snapshot.quotes[0]?.unit !== "worker-100-seconds") {
+    throw new Error("SUCCESSOR_GRAPH_WORKER_SOURCE_INVALID");
+  }
+  const sourceDocumentSha256 = await sha256(snapshot.bytes);
+  const sourceUrl = provider === "modal" ? "https://modal.com/pricing" : "https://docs.fly.io/about/pricing";
+  return SuccessorRoleCostFactSchema.parse({
+    roleId: role.roleId,
+    effectId: role.effectId,
+    costComponentId: role.costComponentId,
+    constructorSha256: role.constructorSha256,
+    disposition: "unknown_held",
+    status: "held",
+    provider,
+    holdReason: "official price captured but selected placement, account contract and native backend remain unverified",
+    evidence: {
+      artifactReference: `evidence:official-${provider}-worker:${sourceDocumentSha256}`,
+      sourceKind: provider === "modal" ? "official_modal_pricing" : "official_fly_pricing",
+      sourceUrl,
+      sourceArtifactSha256: sourceDocumentSha256,
+      sourceDocumentSha256,
+      observedAtMs: snapshot.observedAtMs,
+      freshUntilMs: snapshot.freshUntilMs,
+      currency: "USD",
+      fx: { kind: "native_usd", sourceDocumentSha256, numerator: 1, denominator: 1 },
+      unit: snapshot.quotes[0].unit,
+      precision: 6,
+      scope: `${provider} worker candidate source only; no placement or account authority`,
+      candidateSha256: input.graph.candidateSha256,
+      topologySha256: input.graph.topologySha256,
+    },
+  });
+}
+
+/** Links a concrete successor role/effect to its own source-bound cost fact.
+ * It is intentionally incapable of producing a maximum charge.  A later
+ * native factory must supply all backends and the precise pricing/usage
+ * adapters; until then, every held component blocks preapproval. */
+export async function createSuccessorRoleCostBound(input: Readonly<{
+  graph: SuccessorGraphInventory;
+  facts: readonly SuccessorRoleCostFact[];
+  modelCatalog?: NonGoogleModelCostCatalogPort;
+}>): Promise<SuccessorRoleCostBound> {
+  const graph = input.graph;
+  if (GraphRevisionSchema.parse(graph.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
+  const facts = input.facts.map((fact) => SuccessorRoleCostFactSchema.parse(fact));
+  if (facts.length !== graph.roles.length || new Set(facts.map((fact) => fact.roleId)).size !== graph.roles.length) throw new Error("SUCCESSOR_GRAPH_COST_COVERAGE_REQUIRED");
+  const byRole = new Map(graph.roles.map((role) => [role.roleId, role]));
+  for (const fact of facts) {
+    const role = byRole.get(fact.roleId);
+    if (!role || role.effectId !== fact.effectId || role.costComponentId !== fact.costComponentId || role.constructorSha256 !== fact.constructorSha256) throw new Error("SUCCESSOR_GRAPH_COST_BINDING_INVALID");
+    if (fact.evidence.candidateSha256 !== graph.candidateSha256 || fact.evidence.topologySha256 !== graph.topologySha256) throw new Error("SUCCESSOR_GRAPH_COST_SCOPE_INVALID");
+    if (fact.provider === "openai_responses" && role.roleId !== "model.openai-responses") throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+    if (role.roleId === "model.openai-responses" && fact.status === "available" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+    if (role.roleId === "model.openai-responses" && fact.status === "available") {
+      const rate = OpenAiResponsesRateSnapshotSchema.parse(fact.rate);
+      const usageIntent = SuccessorNativeModelUsageIntentSchema.parse(fact.usageIntent);
+      if (!input.modelCatalog) throw new Error("SUCCESSOR_GRAPH_MODEL_CATALOG_REQUIRED");
+      const trustedRate = OpenAiResponsesRateSnapshotSchema.parse(await input.modelCatalog.readModelRate());
+      if (canonicalJson(rate) !== canonicalJson(trustedRate)) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_UNBOUND");
+      const maximum = priceOpenAiResponsesUsage({ rate, usage: { inputTokens: usageIntent.maximumInputTokens, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: usageIntent.maximumOutputTokens, reasoningTokens: 0 } });
+      if (maximum.status !== "priced" || maximum.costMicros > usageIntent.maximumChargeMicros) throw new Error("SUCCESSOR_GRAPH_MODEL_MAXIMUM_INVALID");
+    }
+    /* Plan 67 can capture a non-model source but not turn it into a price or
+     * a free resource. Plans 68–70 must add the matching native usage or
+     * approved-standing consumer before any non-model role can be available. */
+    if (role.roleId !== "model.openai-responses" && fact.status === "available") throw new Error("SUCCESSOR_GRAPH_NONMODEL_AVAILABILITY_UNIMPLEMENTED");
+  }
+  const heldRoleIds = facts.filter((fact) => fact.status === "held").map((fact) => fact.roleId);
+  const boundSha256 = await hashCanonical({
+    schemaVersion: "non-google-successor-role-cost-v1",
+    graphRevision: "non-google-v1",
+    candidateSha256: graph.candidateSha256,
+    topologySha256: graph.topologySha256,
+    inventorySha256: graph.inventorySha256,
+    facts,
+  });
+  return freeze({
+    schemaVersion: "non-google-successor-role-cost-v1" as const,
+    graphRevision: "non-google-v1" as const,
+    candidateSha256: graph.candidateSha256,
+    topologySha256: graph.topologySha256,
+    inventorySha256: graph.inventorySha256,
+    boundSha256,
+    facts: freeze(facts),
+    heldRoleIds: freeze(heldRoleIds),
+  });
+}
+
+/** Plan 67's sole normal-path result. It checks canonical graph bytes and
+ * returns a typed throw before any credential/client/provider boundary. */
+export async function assertSuccessorGraphPreapprovalHeld(input: Readonly<{
+  graph: SuccessorGraphInventory;
+  bound: SuccessorRoleCostBound;
+  nowMs: number;
+  evidence: CostEvidenceArtifactResolver;
+}>): Promise<never> {
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("SUCCESSOR_GRAPH_CLOCK_INVALID");
+  if (input.bound.graphRevision !== input.graph.graphRevision || input.bound.candidateSha256 !== input.graph.candidateSha256 || input.bound.topologySha256 !== input.graph.topologySha256 || input.bound.inventorySha256 !== input.graph.inventorySha256) throw new Error("SUCCESSOR_GRAPH_BINDING_INVALID");
+  for (const fact of input.bound.facts) {
+    if (fact.evidence.freshUntilMs <= input.nowMs) throw new Error("SUCCESSOR_GRAPH_COST_STALE");
+    const artifact = await input.evidence.read(fact.evidence.artifactReference);
+    if (!(artifact.bytes instanceof Uint8Array)
+      || artifact.sourceUrl !== fact.evidence.sourceUrl
+      || await sha256(artifact.bytes) !== fact.evidence.sourceArtifactSha256
+      || fact.evidence.sourceArtifactSha256 !== fact.evidence.sourceDocumentSha256) {
+      throw new Error("SUCCESSOR_GRAPH_COST_EVIDENCE_INVALID");
+    }
+  }
+  const missingSuites = SuccessorSuiteSchema.options.filter((suite) => !input.graph.roles.some((role) => role.suite === suite));
+  if (missingSuites.length > 0) throw new Error("SUCCESSOR_GRAPH_SUITE_BACKEND_MISSING");
+  if (input.graph.roles.some((role) => role.construction !== "native")) throw new Error("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
+  if (input.bound.heldRoleIds.length > 0) throw new Error("SUCCESSOR_GRAPH_COST_HELD");
+  throw new Error("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
+}
 
 const CapturedPricingDocumentSchema = z.object({
   sourceUrl: z.literal(OPENAI_RESPONSES_PRICING_URL),

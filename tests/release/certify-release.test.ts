@@ -212,6 +212,7 @@ test("request refuses before funding setup or remote price discovery", async () 
     expect(code).toBe(1);
     expect(stderr).not.toContain("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
     expect(JSON.parse(stdout)).toEqual(architectureRevisionRequired);
+    expect(await readdir(workspace)).toEqual([]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

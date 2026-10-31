@@ -20,7 +20,7 @@ import { createOfficialFundingRailFeePort, type SealedFundingFeePolicyProjection
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "../src/release/costs/live-estimator";
 import { createDeploymentExecutionConfig } from "../src/release/deployment/config";
-import { loadPreparedCollectorPreapproval, materializePreapproval } from "../src/release/preapproval-materializer";
+import { loadPreparedCollectorPreapproval, materializePreapproval, prepareNonGoogleSuccessorPreapprovalHold } from "../src/release/preapproval-materializer";
 import { prepareProductionCollectorImage, type PreparedCollectorImage } from "../src/release/collector-image";
 import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity } from "../src/release/authorization";
 import { verifyFinalizedRelease } from "../src/release/verify-finalization";
@@ -138,6 +138,20 @@ async function sha256Json(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** Executes the real successor preparation on the public normal-request path
+ * while the architecture guard is active. Plan 67 has no controller-owned
+ * successor topology/config/state records, so this is an explicit pre-v3
+ * hold: candidate or historical config bytes cannot be relabelled as those
+ * missing authorities. */
+async function prepareHeldSuccessorFromCandidate(): Promise<void> {
+  try {
+    await prepareNonGoogleSuccessorPreapprovalHold({ nowMs: Date.now() });
+  } catch (error) {
+    if (error instanceof Error && error.message === "SUCCESSOR_GRAPH_TOPOLOGY_OR_CONFIG_UNAVAILABLE") return;
+    throw error;
+  }
+}
+
 /** `--receipt` is an opaque controller receipt ID, never receipt JSON. The
  * canonical structured receipt must already have been written by the sole
  * consent/controller path under the confined workspace. */
@@ -189,12 +203,14 @@ async function materializeRequestPreapproval(input: Readonly<{
     throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
   }
   const execution = certifier.releaseExecution;
-  const deployment = createDeploymentExecutionConfig(JSON.parse(await readFile(execution.configPath, "utf8")));
+  const deploymentBytes = new Uint8Array(await readFile(execution.configPath));
+  const deployment = createDeploymentExecutionConfig(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(deploymentBytes)));
   if (deployment.candidateSha256 !== input.candidateSha256 || deployment.sourceRevision !== certifier.controller.sourceRevision || deployment.factoryModuleSha256 !== execution.sha256 || deployment.publicSettings.regions.length !== 2) {
     throw new Error("PREAPPROVAL_DEPLOYMENT_BINDING_REJECTED");
   }
   const catalogSha256 = await sha256Json(input.facts);
   const providerScopesSha256 = await sha256Json(input.authorization.providerScopes);
+  await prepareNonGoogleSuccessorPreapprovalHold({ nowMs: Date.now() });
   return materializePreapproval({
     workspace: input.workspace,
     repositoryRoot: execution.root,
@@ -319,6 +335,7 @@ async function main(): Promise<number> {
     }
     const historicalUsageRecovery = historicalRecoveryWorkspace !== undefined;
     if (!status && !historicalUsageRecovery) {
+      if (request) await prepareHeldSuccessorFromCandidate();
       emitArchitectureRevisionRequired();
       return 1;
     }

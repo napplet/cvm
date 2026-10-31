@@ -106,6 +106,14 @@ export class ContinuationService {
       const spendable = this.#spendable(funding);
       const requiredAdditionalFunding = shortfall(actionMaximum, spendable);
       const requiredCapApproval = shortfall(actionMaximum, funding.remainingCap);
+      // A live authorization has already consumed this admission's cap.  An
+      // ordinary start/revision cannot turn that deterministic budget fence
+      // into a durable funding pause: no top-up can make the existing cap
+      // reservation available.  The priced V2 preparer continues to consume
+      // the residual `remainingCap` view directly.
+      if (funding.authorizedActionBudget > 0n && requiredCapApproval > 0n) {
+        throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
+      }
       if (requiredAdditionalFunding === 0n && requiredCapApproval === 0n) return undefined;
       const deadline = (this.options.clock ?? { nowMs: Date.now }).nowMs() + GRACE_WINDOW_MS;
       const protectedCommand = this.options.pendingCommands ? await this.options.pendingCommands.seal({ command: input.command, intent, retentionUntilMs: deadline + 2_592_000_000 }) : undefined;

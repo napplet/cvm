@@ -39,7 +39,12 @@ export type UsageReceiptRecord = Readonly<{ accountId: string; operationId: stri
 export type MeteredFinalizationInput = MeteredFinalizeInput;
 export type MeteredFinalizationResult = MeteredAction;
 export type ContinuationRecord = Readonly<{ intent: PendingActionIntent; result: NeedsTopUpResult; state: ContinuationPause["state"] }>;
-export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint }>;
+/**
+ * `remainingCap` is deliberately the residual after every live authorized
+ * action budget.  The accompanying total lets an ordinary action distinguish
+ * a real affordability pause from a competing already-authorized action.
+ */
+export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint; authorizedActionBudget: bigint }>;
 /**
  * Durable, owner-bound pause state.  The complete intent is stored with the
  * pause rather than in a parallel compatibility record: wake, checkpoint, and
@@ -445,7 +450,12 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           const account = accountFor(state, accountId);
           const hold = account.holds.find((candidate) => candidate.reference === admissionReference);
           if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
-          return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap: hold.heldAmount });
+          const authorizedActionBudget = [...state.actionBudgets.values()]
+            .filter((budget) => budget.accountId === accountId && budget.admissionReference === admissionReference && budget.state === "authorized")
+            .reduce((total, budget) => total + budget.amount, 0n);
+          const remainingCap = hold.heldAmount - authorizedActionBudget;
+          if (remainingCap < 0n) throw new Error("ACTION_BUDGET_CAP_INVARIANT_FAILED");
+          return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap, authorizedActionBudget });
         },
         findContinuation: async (idempotencyKey) => {
           const pause = state.continuationPauses.get(commandKey(accountId, idempotencyKey));

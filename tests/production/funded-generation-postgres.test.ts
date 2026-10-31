@@ -99,7 +99,11 @@ integration("production funded start spends its own accepted cap without requiri
     const reservations = await Promise.allSettled(["left", "right"].map(key => database.funding.transact(admission.accountId, transaction => transaction.reserveActionBudget({ accountId: admission.accountId, admissionReference: secondAdmission.reference, idempotencyKey: `race:${key}`, fingerprint: (key === "left" ? "8" : "9").repeat(64), reference: `budget:${key}`, amount: 3250n }))));
     expect(reservations.filter(value => value.status === "fulfilled")).toHaveLength(1);
     expect(reservations.filter(value => value.status === "rejected")).toHaveLength(1);
+    const pausesBeforeBudgetCollision = await admin.query("SELECT count(*)::int AS count FROM production_real.continuation_pauses");
     await expect(open().startSession({ ...command, admissionReference: secondAdmission.reference, idempotencyKey: "blocked-by-active-budget" })).rejects.toThrow("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
+    // A competing active budget is an authorization failure, not a recoverable
+    // funding pause.  It must therefore create no new pause or external work.
+    expect(await admin.query("SELECT count(*)::int AS count FROM production_real.continuation_pauses")).toEqual(pausesBeforeBudgetCollision);
     expect({ dispatches, builds }).toEqual({ dispatches: 1, builds: 1 });
     const pricingInput = {
       observation: { sourceUrl: "https://cloud.google.com/vertex-ai/generative-ai/pricing", bytes: new TextEncoder().encode("explicit local pricing-catalog fixture"), observedAtMs: now, freshUntilMs: now + 60_000, currency: "USD" as const, location: "global" as const, model: "gemini-4-argon" as const, inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 },

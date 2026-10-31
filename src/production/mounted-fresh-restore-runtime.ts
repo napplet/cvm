@@ -25,6 +25,12 @@ const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 type OpenedPool = Awaited<ReturnType<typeof openFreshRestorePostgresPool>>;
 type RuntimeBinding = Readonly<{ freshInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string }>;
 
+/** Only a checkpoint carries a recoverable worker workspace. Other retained
+ * kinds require their own recovered authority and archive reader. */
+export function assertMountedFreshWorkspaceSubject(subject: z.infer<typeof DurabilitySubjectSchema>): void {
+  if (subject.kind !== "checkpoint") throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_AUTHORITY_REQUIRED");
+}
+
 /**
  * Concrete restore runtime. The only values it accepts from the provisioner
  * are already-journaled resource identities; private IPs are observed from
@@ -92,6 +98,10 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         publication: { server: input.config.publication.uploadServer },
       });
       const checkpointFacts = async (expected: Expected, subject?: z.infer<typeof DurabilitySubjectSchema>) => {
+        /* The checkpoint coordinator is the sole authority that can open a
+         * workspace envelope. A durability registry row cannot convert an
+         * artifact, evidence, receipt, or publication record into one. */
+        if (subject) assertMountedFreshWorkspaceSubject(subject);
         const client = await recovered.pool.connect();
         try {
           const rows = await client.query<Record<string, unknown>>(
@@ -111,6 +121,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         objectStore: input.artifactStore,
         async startAfterRestore() { const client = await recovered.pool.connect(); try { await client.query("SELECT 1"); } finally { client.release(); } },
         async openRetainedArchive(value) {
+          assertMountedFreshWorkspaceSubject(value.subject);
           const facts = await checkpointFacts(value.expected, value.subject);
           const archive = await checkpoint.restore({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           return Object.freeze({ ...value.expected, archive });

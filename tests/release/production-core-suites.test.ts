@@ -5,6 +5,7 @@ import { createWorkerBenchmarkSchedule } from "../../src/admission/benchmark";
 import { IDENTICAL_WORKER_COHORT_PROFILE } from "../../src/certification/live/worker-ports";
 import { D122_FAULT_MATRIX, DURABILITY_SUBJECT_KINDS } from "../../src/resilience/fault-harness";
 import { runLiveRestoreCertification, type LiveRestorePort } from "../../src/certification/live/restore";
+import { assertMountedFreshWorkspaceSubject } from "../../src/production/mounted-fresh-restore-runtime";
 
 const hash = "a".repeat(64);
 const candidate = { id: hash, provider: "modal" as const, image: `registry/worker@sha256:${hash}`, sourceSha256: hash };
@@ -30,6 +31,14 @@ test("restore protocol rejects same-instance restore and unbounded chunk request
   expect(CoreFreshInstanceSchema.safeParse({ freshInstanceId: "source", sourceInstanceId: "source", databaseInstanceId: "new-sql", applicationInstanceId: "new-app", restoredBackupSha256: hash }).success).toBe(false);
   expect(CoreFreshInstanceSchema.safeParse({ freshInstanceId: "new", sourceInstanceId: "source", databaseInstanceId: "source", applicationInstanceId: "new-app", restoredBackupSha256: hash }).success).toBe(false);
   expect(CoreRestoreChunkSchema.safeParse({ freshInstanceId: "new", sourceIdentity: "subject", offset: 0, totalBytes: 1, bytesBase64: "A".repeat(CORE_RESTORE_CHUNK_BYTES * 2) }).success).toBe(false);
+});
+
+test("mounted fresh recovery never coerces non-workspace subjects into checkpoint restores", () => {
+  for (const kind of DURABILITY_SUBJECT_KINDS) {
+    const subject = { kind, sourceIdentity: `${kind}:original`, object: { key: `retained/${kind}`, generation: 1, checksum: hash }, payloadSha256: hash, ownerId: "owner", retentionUntil: "2030-01-01T00:00:00.000Z", deletionState: "retained" as const };
+    if (kind === "checkpoint") expect(() => assertMountedFreshWorkspaceSubject(subject)).not.toThrow();
+    else expect(() => assertMountedFreshWorkspaceSubject(subject)).toThrow("MOUNTED_FRESH_RESTORE_SUBJECT_AUTHORITY_REQUIRED");
+  }
 });
 
 test("restore cleans the fresh instance after a failed subject and blocks unconfirmed cleanup", async () => {

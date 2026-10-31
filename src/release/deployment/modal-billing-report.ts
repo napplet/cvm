@@ -251,6 +251,11 @@ export const ModalBillingReportCaptureSchema = z.object({ status: z.literal("hel
 export const ModalBillingReportJournalRecordSchema = z.object({ schemaVersion: z.literal("modal-billing-report-journal-v2"), grantSha256: Digest, reportRequestSha256: Digest, attempts: z.array(AttemptSchema).max(8), result: ModalBillingReportCaptureSchema.optional() }).strict().superRefine((value, context) => {
   if (value.attempts.some((attempt, index) => attempt.attempt !== index + 1)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_ATTEMPTS_INVALID" });
   if (value.attempts.some((attempt, index) => attempt.state === "dispatch_intent" && index !== value.attempts.length - 1)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_INTENT_INVALID" });
+  for (const attempt of value.attempts) {
+    if (attempt.state === "completed" && (attempt.disposition === undefined || attempt.reason === undefined || attempt.finishedAtMs === undefined)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_AUDIT_INCOMPLETE" });
+    if ((attempt.stdout === undefined) !== (attempt.stdoutSha256 === undefined)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_ARTIFACT_INVALID" });
+    if (["passed", "non_zero_exit", "timeout", "output_overflow"].includes(attempt.disposition ?? "") && (attempt.startedAtMs === undefined || attempt.exitCode === undefined)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_CHILD_AUDIT_INCOMPLETE" });
+  }
   if (value.result && value.result.grantSha256 !== value.grantSha256 || value.result && value.result.reportRequestSha256 !== value.reportRequestSha256) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_RESULT_INVALID" });
 });
 type Attempt = Readonly<z.infer<typeof AttemptSchema>>;

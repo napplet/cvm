@@ -7,6 +7,7 @@ import {
   createMemoryModalBillingReportJournal,
   createModalBillingReportCollector,
   createModalBillingObservationGrant,
+  ModalBillingReportJournalRecordSchema,
   parseModalBillingReport,
   runPinnedModalBillingReport,
 } from "../../src/release/deployment/modal-billing-report";
@@ -235,5 +236,15 @@ process.stdout.write(${JSON.stringify(report)});
       await expect(collector.capture(grant(executable.sha256))).resolves.toMatchObject({ reason: "artifact_unavailable" });
       expect(objects.objects.size).toBe(1);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test("strictly round-trips complete audit rows and rejects an incomplete child audit", () => {
+    const record = ModalBillingReportJournalRecordSchema.parse({
+      schemaVersion: "modal-billing-report-journal-v2", grantSha256: hex("grant"), reportRequestSha256: hex("request"),
+      attempts: [{ attempt: 1, state: "completed", atMs: 1, startedAtMs: 2, finishedAtMs: 3, disposition: "passed", argvSha256: hex("argv"), executableSha256: hex("exe"), exitCode: 0, stderrByteLength: 0, stderrSha256: hex("stderr"), reason: "finality_unproven", coverage: "unknown" }],
+      result: { status: "held", reason: "finality_unproven", grantSha256: hex("grant"), reportRequestSha256: hex("request") },
+    });
+    expect(ModalBillingReportJournalRecordSchema.parse(record)).toEqual(record);
+    expect(() => ModalBillingReportJournalRecordSchema.parse({ ...record, attempts: [{ ...record.attempts[0], finishedAtMs: undefined }] })).toThrow("MODAL_BILLING_JOURNAL_AUDIT_INCOMPLETE");
   });
 });

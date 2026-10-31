@@ -59,33 +59,42 @@ async function workspaceBounded() {
   const probe = join(WORKSPACE, `.write-${crypto.randomUUID()}`);
   try { await writeFile(probe, "x", { flag: "wx" }); await rm(probe, { force: true }); return true; } catch { return false; }
 }
-async function writableSurfaceConfined() {
+type WritableSurfaceAudit = Readonly<{ ok: boolean; stage: string }>;
+async function writableSurfaceConfined(): Promise<WritableSurfaceAudit> {
   // `find / -xdev` omits every separately-mounted filesystem. Enumerate the
   // kernel mount table instead, then ask the current (unprivileged) UID which
   // mount roots it can actually write. A writable mount not in this list is a
   // refusal, not a best-effort finding.
   const allowed = new Map<string, number>([[WORKSPACE, 512 * 1024 * 1024], ["/home/napplet", 64 * 1024 * 1024], ["/tmp", 64 * 1024 * 1024], ["/var/tmp", 64 * 1024 * 1024], ["/work", 64 * 1024 * 1024], ["/run/lock", 16 * 1024 * 1024], ["/dev/shm", 64 * 1024 * 1024]]);
+  const label = (path: string) => {
+    const fixed: Record<string, string> = { [WORKSPACE]: "WORKSPACE", "/home/napplet": "HOME", "/tmp": "TMP", "/var/tmp": "VARTMP", "/work": "WORK", "/run/lock": "LOCK", "/dev/shm": "SHM", "/proc/interrupts": "PROC_INTERRUPTS", "/proc/kcore": "PROC_KCORE", "/proc/keys": "PROC_KEYS", "/proc/latency_stats": "PROC_LATENCY_STATS", "/proc/sched_debug": "PROC_SCHED_DEBUG", "/proc/timer_list": "PROC_TIMER_LIST", "/proc/timer_stats": "PROC_TIMER_STATS" };
+    return fixed[path] ?? "OTHER";
+  };
+  const failed = (stage: string): WritableSurfaceAudit => Object.freeze({ ok: false, stage });
   const unescapeMount = (value: string) => value.replace(/\\040|\\011|\\012|\\134/gu, token => ({ "\\040": " ", "\\011": "\t", "\\012": "\n", "\\134": "\\" })[token]!);
-  const lines = (await readFile("/proc/self/mountinfo", "utf8")).trim().split("\n").filter(Boolean);
-  const mounts = lines.map(line => {
-    const separator = line.indexOf(" - "); const fields = separator < 0 ? [] : line.slice(0, separator).split(" ");
-    if (fields.length < 6 || !fields[4]?.startsWith("/")) throw new Error("WORKER_MOUNTINFO_INVALID");
-    return Object.freeze({ path: unescapeMount(fields[4]), readOnly: fields[5]!.split(",").includes("ro") });
-  });
-  if (new Set(mounts.map(mount => mount.path)).size !== mounts.length) return false;
-  for (const mount of mounts) {
-    const { path } = mount;
-    // Mount-root permissions do not describe writable descendants. The exact
-    // policy therefore rejects every unlisted read-write mount by mountinfo
-    // metadata before consulting discretionary access bits.
-    if (!mount.readOnly && !allowed.has(path)) return false;
-    const writable = await access(path, constants.W_OK).then(() => true).catch(() => false);
-    if (!writable) continue;
-    const maximum = allowed.get(path); if (maximum === undefined) return false;
-    const fs = await statfs(path);
-    if (Number(fs.type) !== 0x01021994 || Number(fs.bsize) * Number(fs.blocks) <= 0 || Number(fs.bsize) * Number(fs.blocks) > maximum) return false;
-  }
-  return true;
+  try {
+    const lines = (await readFile("/proc/self/mountinfo", "utf8")).trim().split("\n").filter(Boolean);
+    const mounts = lines.map(line => {
+      const separator = line.indexOf(" - "); const fields = separator < 0 ? [] : line.slice(0, separator).split(" ");
+      if (fields.length < 6 || !fields[4]?.startsWith("/")) throw new Error("WORKER_MOUNTINFO_INVALID");
+      return Object.freeze({ path: unescapeMount(fields[4]), readOnly: fields[5]!.split(",").includes("ro") });
+    });
+    if (new Set(mounts.map(mount => mount.path)).size !== mounts.length) return failed("MOUNTINFO_DUPLICATE_TARGET");
+    for (const mount of mounts) {
+      const { path } = mount;
+      // Mount-root permissions do not describe writable descendants. The exact
+      // policy therefore rejects every unlisted read-write mount by mountinfo
+      // metadata before consulting discretionary access bits.
+      if (!mount.readOnly && !allowed.has(path)) return failed(`RW_${label(path)}`);
+      const writable = await access(path, constants.W_OK).then(() => true).catch(() => false);
+      if (!writable) continue;
+      const maximum = allowed.get(path); if (maximum === undefined) return failed(`WRITABLE_${label(path)}`);
+      const fs = await statfs(path);
+      if (Number(fs.type) !== 0x01021994) return failed(`FSTYPE_${label(path)}`);
+      if (Number(fs.bsize) * Number(fs.blocks) <= 0 || Number(fs.bsize) * Number(fs.blocks) > maximum) return failed(`SIZE_${label(path)}`);
+    }
+    return Object.freeze({ ok: true, stage: "OK" });
+  } catch { return failed("MOUNTINFO_READ"); }
 }
 async function cgroupV2Limits() {
   const membership = (await readFile("/proc/self/cgroup", "utf8")).trim().split("\n").find(line => line.startsWith("0::"));
@@ -148,10 +157,11 @@ async function ready() {
   const remainingLifetimeMs = deadlineEpochMs - Date.now();
   if (!Number.isSafeInteger(deadlineEpochMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("WORKER_PROVIDER_FACTS_INVALID");
   const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
-  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)].map(check => check.catch(() => false)));
+  const [boundedWorkspace, writableSurfaceAudit, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded().catch(() => false), writableSurfaceConfined(), networkDenied().catch(() => false), namespaceConfined().catch(() => false), kernelIsolation().catch(() => false), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)]);
+  const writableSurface = writableSurfaceAudit.ok;
   const ports = await noInboundListeners().catch(() => false);
   if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) {
-    console.error(JSON.stringify({ code: "WORKER_ISOLATION_REFUSED", checks: { workspaceBounded, writableSurface, network, namespace, kernel, toolchain, ports, environmentClean, nonRoot: process.getuid?.() === 65532 } }));
+    console.error(JSON.stringify({ code: "WORKER_ISOLATION_REFUSED", checks: { workspaceBounded, writableSurface, ...(writableSurface ? {} : { writableSurfaceStage: writableSurfaceAudit.stage }), network, namespace, kernel, toolchain, ports, environmentClean, nonRoot: process.getuid?.() === 65532 } }));
     throw new Error("WORKER_ISOLATION_REFUSED");
   }
   console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
@@ -165,7 +175,8 @@ async function edgeAudit() {
   const topologySha256 = digest(arg("--topology-sha256"), "EDGE_AUDIT_TOPOLOGY_REQUIRED");
   if (process.argv.length !== 7 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("EDGE_AUDIT_ARGUMENTS_REQUIRED");
   const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
-  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain, limits, ports] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true), cgroupV2Limits(), noInboundListeners()]);
+  const [boundedWorkspace, writableSurfaceAudit, network, namespace, kernel, toolchain, limits, ports] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true), cgroupV2Limits(), noInboundListeners()]);
+  const writableSurface = writableSurfaceAudit.ok;
   if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("EDGE_AUDIT_HARD_STOP_REQUIRED");
   // Provider image identity and expiry are intentionally absent. They are not
   // observable inside the sandbox and must come from authenticated

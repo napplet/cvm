@@ -6,6 +6,7 @@ import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding
 import { bindAccountingRealmPool, createAccountingRealm } from "../../src/funding/accounting-realm";
 import { FundingService } from "../../src/funding/funding-service";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { ContinuationService } from "../../src/continuity/continuation-service";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { ProductionCheckpointCoordinator } from "../../src/production/checkpoint-coordinator";
 import { ProductionRetainedSubjectPreparer } from "../../src/production/retained-subject-preparer";
@@ -19,6 +20,9 @@ import { ProductionBuildAttestationSigner } from "../../src/production/attestati
 import { ProductionWorkerArtifactStore } from "../../src/production/worker-artifact-store";
 import { canonicalJson } from "../../src/promotion/schema";
 import { assertProductionRetainedSubjectSchema } from "../../src/production/checkpoint-schema";
+import { ProductionRestoreCertification } from "../../src/production/restore-certification";
+import { MigrationArchiveCipher, ProductionMigrationSource } from "../../src/production/migration-control";
+import { CoreFreshInstanceSchema, CoreRestoreDescriptorSchema } from "../../src/release/deployment/production-core-suite-protocol";
 
 /* This is deliberately an opt-in local integration test.  The source records,
  * funding account, provider receipt, and signed events below are explicit
@@ -96,8 +100,8 @@ function generationAwareObjects(now: () => number): GcsObjectStoreAdapter {
 
 integration("canonical SQL prepares, clones, reattaches, and erases all seven retained subjects without replaying ambiguous provider effects", async () => {
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
-  const container = `cvm-retained-${suffix}`, sourceDatabase = `retained_source_${suffix}`, cloneDatabase = `retained_clone_${suffix}`, role = `retained_${suffix}`;
-  let admin: Pool | undefined, source: Pool | undefined, runtime: Pool | undefined, recovered: Pool | undefined;
+  const container = `cvm-retained-${suffix}`, sourceDatabase = `retained_source_${suffix}`, cloneDatabase = `retained_clone_${suffix}`, migrationDatabase = `retained_migration_${suffix}`, role = `retained_${suffix}`;
+  let admin: Pool | undefined, source: Pool | undefined, runtime: Pool | undefined, recovered: Pool | undefined, migration: Pool | undefined;
   try {
     await docker(["run", "--rm", "--detach", "--name", container, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await docker(["port", container, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -120,7 +124,8 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
     expect(verifyEvent(wire(fixture.ownerEvent))).toBe(true);
     expect(verifyEvent(wire({ ...fixture.ownerEvent, content: "tampered" }))).toBe(false);
-    const funding = new FundingService(new PostgresFundingDatabase(pool, { realm: "production-real" }).funding);
+    const fundingDatabase = new PostgresFundingDatabase(pool, { realm: "production-real" });
+    const funding = new FundingService(fundingDatabase.funding);
     const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: "10", externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
     const accountId = credited.accountId, sessionId = "session:retained", actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
     // Explicit zero-funded producer fixtures. They are records consumed by the
@@ -149,7 +154,15 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     const persistedArtifact = await new ProductionWorkerArtifactStore({ journal, objects, toolchainSha256: hex("toolchain") }).persist({ request: artifactRequest, accountId, ownerId: fixture.ownerId, bytes: fixture.artifact, scannerReportSha256: hex("scanner"), conformanceReportSha256: hex("conformance"), result: artifactResult });
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
-    await checkpoint.seal({ ...manifest, archive } satisfies CheckpointSealRequest);
+    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: hex("retained-idea"), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture", priceCardId: "retained-price", profileId: "retained-profile", toolchainId: "fixture-toolchain", actionMaximum: "11", admissionReference: "fixture:admission" };
+    const pause = await new ContinuationService({ store: fundingDatabase.continuationFunding, includeAdmissionHold: true, clock: { nowMs: () => now } }).pauseForFunding({ intent: pauseIntent });
+    if (!pause) throw new Error("RETAINED_SUBJECT_PAUSE_REQUIRED");
+    const paused = await fundingDatabase.continuationFunding.findContinuationPause(accountId, sessionId, 1);
+    if (!paused?.liveLeaseToken) throw new Error("RETAINED_SUBJECT_LIVE_LEASE_REQUIRED");
+    await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.beginDeadlineCheckpoint({ sessionId, pauseGeneration: 1, liveLeaseToken: paused.liveLeaseToken! }));
+    const sealedCheckpoint = await checkpoint.seal({ ...manifest, archive } satisfies CheckpointSealRequest);
+    await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.commitDeadlineCheckpoint({ accountId, sessionId, pauseGeneration: 1, checkpointId, expectedSessionVersion: 0, expectedArtifactVersion: 1, manifestReference: `manifest:${sealedCheckpoint.envelope.manifestSha256}`, objectKey: sealedCheckpoint.envelope.object.key, objectGeneration: String(sealedCheckpoint.envelope.object.generation), objectChecksum: sealedCheckpoint.envelope.object.checksum, keyReference: sealedCheckpoint.envelope.crypto.keyReference, compatibilityIdentity: "fixture-toolchain", checkpointCommittedAtMs: now }));
+    await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.claimResume({ accountId, sessionId, checkpointId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach-claim"), pendingFingerprint: pauseIntent.fingerprint, expectedCheckpointVersion: 1, expectedSessionVersion: 0, nowMs: now, newLeaseToken: "lease:retained:reattach", allocationIntentReference: "allocation:retained", actionId, operationId: "operation:retained-reattach", actionBudgetReference: "budget:retained" }));
     await source.query("INSERT INTO production_real.usage_receipts(id,account_id,action_id,operation_id,provider,model,provider_receipt_id,normalized_receipt,protected_evidence_reference) VALUES('receipt:retained',$1,$2,'provider:retained','fixture-provider','fixture-model','receipt-original',$3,'evidence:receipt')", [accountId, actionId, fixture.normalizedReceipt]);
     await source.query("INSERT INTO production_real.session_artifacts(id,account_id,session_id,action_id,version,lineage,validation_evidence_reference,verified) VALUES($1,$2,$3,$4,1,$5,'validation:retained',true)", [artifactId, accountId, sessionId, actionId, { lineage: "original", releaseEvidence: false }]);
     const artifact = { accountId, sessionId, artifactId, artifactVersion: 1, aggregateSha256: artifactReference.checksum, manifestSha256: hex("manifest"), verificationEvidenceSha256: hex("verification"), sealedObjectGeneration: String(artifactReference.generation), sealedObjectSha256: artifactReference.checksum, sealedFiles: [{ path: "/index.html", mimeType: "text/html", sha256: artifactReference.checksum, size: fixture.artifact.byteLength }], entrypoint: "/index.html", normalizedDTag: "retained-fixture", requiredCapabilities: [], optionalCapabilities: [], policyIdentity: "fixture-policy", toolchainIdentity: "fixture-toolchain", runtimeCompatibilityIdentity: "fixture-runtime" };
@@ -180,34 +193,88 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect(createCalls).toBe(6); // all six retained copies; lost ACK did not duplicate its subject.
     const inventory = await createProductionDurabilitySubjectRegistry(pool).inventory(scope);
     expect(inventory).toHaveLength(7);
-    await runtime.end(); runtime = undefined; await source.end(); source = undefined;
+    await runtime.end(); runtime = undefined;
     await admin.query(`CREATE DATABASE ${cloneDatabase} TEMPLATE ${sourceDatabase}`);
+    await admin.query(`CREATE DATABASE ${migrationDatabase}`);
     recovered = new Pool({ connectionString: connection(role, cloneDatabase), connectionTimeoutMillis: 2_000 });
+    migration = new Pool({ connectionString: connection("postgres", migrationDatabase), connectionTimeoutMillis: 2_000 });
     const recoveredPool = bindAccountingRealmPool(sqlPool(recovered), createAccountingRealm("production-real"));
     const freshPreparer = new ProductionRetainedSubjectPreparer({ pool: recoveredPool, objectStore: effects, journal: new PostgresOperationJournal(recoveredPool, { namespace: "retained-subjects-postgres", scopeSha256: hex("scope") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const recoveredInventory = await createProductionDurabilitySubjectRegistry(recoveredPool).inventory(scope);
     expect(recoveredInventory).toEqual(inventory);
-    const recoveredCheckpoint = new ProductionCheckpointCoordinator({ pool: recoveredPool, objectStore: effects, journal: new PostgresOperationJournal(recoveredPool, { namespace: "retained-subjects-postgres", scopeSha256: hex("scope") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
+    const recoveredJournal = new PostgresOperationJournal(recoveredPool, { namespace: "retained-subjects-postgres", scopeSha256: hex("scope") });
+    const recoveredCheckpoint = new ProductionCheckpointCoordinator({ pool: recoveredPool, objectStore: effects, journal: recoveredJournal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const checkpointSubject = recoveredInventory.find(subject => subject.kind === "checkpoint");
     if (!checkpointSubject) throw new Error("CHECKPOINT_SUBJECT_REQUIRED");
     expect(await recoveredCheckpoint.restore({ checkpointId, accountId, sessionId })).toEqual(archive);
     const recoveredCrypto = new MountedKekCheckpointCrypto({ pool: recoveredPool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
+    if (!source || !migration) throw new Error("RETAINED_SUBJECT_FRESH_DATABASE_REQUIRED");
+    const sourcePool = sqlPool(source), migrationPool = sqlPool(migration);
     const retainedKeys = new Map<string, string>();
     for (const subject of recoveredInventory) if (subject.kind !== "checkpoint") {
       const stored = await recoveredCrypto.readSealed(retainedSubjectCustodyId({ checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity }));
       if (!stored) throw new Error("RETAINED_SUBJECT_KEY_REQUIRED");
       retainedKeys.set(subject.kind, stored.keyReference);
-      const opened = await openRetainedSubject({ crypto: recoveredCrypto, objectStore: effects, checkpointId, accountId, sessionId, actionId, subject });
-      await freshPreparer.validateOpened(scope, subject, opened);
-      await expect(freshPreparer.validateOpened({ ...scope, ownerId: "f".repeat(64) }, subject, opened)).rejects.toThrow();
     }
-    // Lost delete ACK is reconciled only by the new controller observing the
-    // original operation: it must not dispatch replacement deletes or keys.
+    let checkpointFences = 0, checkpointRestores = 0, checkpointObservations = 0;
+    const freshInstance = {
+      freshInstanceId: "fresh-retained", sourceInstanceId: "source-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore",
+      pool: recoveredPool, migrationTargetPool: migrationPool, objectStore: effects,
+      async startAfterRestore() { await recovered!.query("SELECT 1"); },
+      async openRetainedArchive(value: { subject: (typeof recoveredInventory)[number]; expected: Awaited<ReturnType<typeof CoreRestoreDescriptorSchema.parse>>["expected"] }) {
+        const archive = value.subject.kind === "checkpoint"
+          ? await recoveredCheckpoint.restore({ checkpointId, accountId, sessionId })
+          : await openRetainedSubject({ crypto: recoveredCrypto, objectStore: effects, checkpointId, accountId, sessionId, actionId, subject: value.subject });
+        return { ...value.expected, archive };
+      },
+      async reattachOriginal(value: { subject: (typeof recoveredInventory)[number]; sourceIdentity: string; archive: Uint8Array; expected: Awaited<ReturnType<typeof CoreRestoreDescriptorSchema.parse>>["expected"] }) {
+        if (value.subject.kind === "checkpoint") { checkpointFences++; checkpointRestores++; expect(value.archive).toEqual(archive); return { status: "reattached" as const, workerId: "workspace:retained" }; }
+        await freshPreparer.validateOpened(scope, value.subject, value.archive);
+        return { status: "reattached" as const };
+      },
+      async observeReattach(value: { subject: (typeof recoveredInventory)[number]; sourceIdentity: string; archiveSha256: string; expected: Awaited<ReturnType<typeof CoreRestoreDescriptorSchema.parse>>["expected"] }) {
+        if (value.subject.kind === "checkpoint") { checkpointObservations++; return { status: "reattached" as const, workerId: "workspace:retained" }; }
+        const opened = await openRetainedSubject({ crypto: recoveredCrypto, objectStore: effects, checkpointId, accountId, sessionId, actionId, subject: value.subject });
+        await freshPreparer.validateOpened(scope, value.subject, opened);
+        return { status: "reattached" as const };
+      },
+      async exerciseExpiryDeletion(value: typeof scope) {
+        await freshPreparer.destroyExpired(value);
+        if (!await freshPreparer.observeExpired(value)) throw new Error("RETAINED_SUBJECT_ERASURE_PENDING");
+        await recoveredCheckpoint.destroyExpired({ checkpointId, accountId, sessionId });
+        if (!await recoveredCheckpoint.observeDestroyed({ checkpointId, accountId, sessionId })) throw new Error("CHECKPOINT_ERASURE_PENDING");
+        return { expired: true as const, deleted: true as const };
+      },
+      async observeExpiryDeletion(value: typeof scope) {
+        if (!await freshPreparer.observeExpired(value) || !await recoveredCheckpoint.observeDestroyed({ checkpointId, accountId, sessionId })) throw new Error("RETAINED_SUBJECT_ERASURE_PENDING");
+        return { expired: true as const, deleted: true as const };
+      },
+      async observeTopology() { return { releaseEvidence: false }; },
+      async cleanup() { return { state: "absent" as const }; },
+      async observeCleanup() { return { state: "absent" as const }; },
+    };
+    const restore = new ProductionRestoreCertification({ sourceInstanceId: "source-retained", scope, sourcePool, migrationSource: new ProductionMigrationSource({ pool: sourcePool, source: { sourceIdentity: "source-retained", serviceIdentity: hex("service"), sourceRevision: hex("revision"), schemaVersions: migrations, migrationDigests: Object.fromEntries(migrations.map(path => [path, hex(path)])), writers: [], records: [], objects: [], externalOperations: [] } }), migrationCipher: new MigrationArchiveCipher(new Uint8Array(32).fill(23)), backupStore: objects, journal, provisioner: { async create() { return freshInstance; }, async attach() { return freshInstance; }, async observeCleanup() { return { state: "absent" as const }; } }, candidateSha256: hex("candidate"), topologySha256: hex("topology") });
+    const fresh = CoreFreshInstanceSchema.parse(await restore.restore({ operationId: "restore:retained", action: "restore.create", payload: {} }));
+    for (const subject of recoveredInventory) {
+      const descriptor = CoreRestoreDescriptorSchema.parse(await restore.restore({ operationId: `restore:describe:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "describe" } }));
+      await expect(restore.restore({ operationId: `restore:reattach:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "reattach", archiveSha256: subject.payloadSha256, expected: descriptor.expected } })).resolves.toMatchObject({ status: "reattached" });
+    }
+    await restore.restore({ operationId: "restore:retained", action: "restore.lose-local", payload: {} });
+    for (const subject of recoveredInventory) {
+      const descriptor = CoreRestoreDescriptorSchema.parse(await restore.restore({ operationId: "restore:retained", action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "describe" } }));
+      await expect(restore.reconcile({ operationId: "restore:retained", kind: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "reattach", archiveSha256: subject.payloadSha256, expected: descriptor.expected } })).resolves.toMatchObject({ status: "reattached" });
+    }
+    expect(checkpointFences).toBe(1); expect(checkpointRestores).toBe(1); expect(checkpointObservations).toBe(1);
+    // Lost delete ACK is reconciled only by the fresh controller observing the
+    // original intent; retry completes all six retained copies and checkpoint.
     now += retentionMs;
-    await expect(freshPreparer.destroyExpired(scope)).rejects.toThrow("DELETE_ACK_LOST");
-    expect(await freshPreparer.observeExpired(scope)).toBe(false);
-    await freshPreparer.destroyExpired(scope); expect(await freshPreparer.observeExpired(scope)).toBe(true);
-    expect(deleteCalls).toBe(6);
+    await expect(restore.restore({ operationId: "restore:expiry", action: "restore.expiry", payload: { freshInstanceId: fresh.freshInstanceId } })).rejects.toThrow("DELETE_ACK_LOST");
+    await expect(restore.restore({ operationId: "restore:expiry", action: "restore.expiry", payload: { freshInstanceId: fresh.freshInstanceId } })).resolves.toEqual({ expired: true, deleted: true });
+    await expect(restore.reconcile({ operationId: "restore:expiry", kind: "restore.expiry", payload: { freshInstanceId: fresh.freshInstanceId } })).resolves.toEqual({ expired: true, deleted: true });
+    expect(deleteCalls).toBe(7);
+    expect(await effects.readExact(checkpointSubject.object)).toBeUndefined();
+    expect(await recoveredCrypto.isDestroyed(sealedCheckpoint.envelope.crypto.keyReference)).toBe(true);
+    expect(await recoveredCheckpoint.observeDestroyed({ checkpointId, accountId, sessionId })).toBe(true);
     for (const subject of recoveredInventory) if (subject.kind !== "checkpoint") {
       expect(await effects.readExact(subject.object)).toBeUndefined();
       expect(await recoveredCrypto.isDestroyed(retainedKeys.get(subject.kind) ?? "missing-key")).toBe(true);
@@ -218,7 +285,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect((await recovered.query("SELECT e.event_json,ae.observation_json FROM production_real.publication_records p JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' WHERE p.intent_id='publication:retained'")).rows).toEqual(originalEvents.rows);
     console.log(JSON.stringify({ retainedSubjectsPostgres: true, subjects: 7, freshClone: true, releaseEvidence: false }));
   } finally {
-    await recovered?.end(); await runtime?.end(); await source?.end(); await admin?.end();
+    await migration?.end(); await recovered?.end(); await runtime?.end(); await source?.end(); await admin?.end();
     await docker(["rm", "--force", container]).catch(() => undefined);
   }
 }, 120_000);

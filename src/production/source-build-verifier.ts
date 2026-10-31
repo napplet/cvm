@@ -20,6 +20,8 @@ const Request = z.object({
   candidateSha256: Digest, topologySha256: Digest, payload: z.record(z.string(), z.unknown()), observation: z.unknown().optional(),
 }).strict();
 const BuildPayload = z.object({ candidateId: Digest, image: z.string().min(1).max(1_024) }).strict();
+const EdgePayload = z.object({ candidateId: Digest }).passthrough();
+const NativeEdgeCertification = z.object({ version: z.literal(1), candidateSha256: Digest, topologySha256: Digest, workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), providerImage: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), sessionLeaseSha256: Digest, toolchainSha256: Digest, remainingLifetimeMs: z.number().int().positive().max(1_200_000), hostile: z.object({ filesystemDenied: z.literal(true), networkDenied: z.literal(true), resourceBounded: z.literal(true), lifetimeBounded: z.literal(true), noInboundPorts: z.literal(true), nonRoot: z.literal(true), minimalCapabilities: z.literal(true) }).strict(), supply: z.object({ format: z.literal("pnpm-lock-v1"), primary: z.object({ aggregateSha256: Digest, lockSha256: Digest, commandEvidenceSha256: Digest }).strict(), secondary: z.object({ aggregateSha256: Digest, lockSha256: Digest, commandEvidenceSha256: Digest }).strict() }).strict() }).strict();
 const DryRun = z.object({ manifests: z.array(z.unknown()).length(1) }).passthrough();
 const Workspace = z.object({
   version: z.literal(1),
@@ -33,7 +35,7 @@ const ImmutableReference = ImmutableObjectReferenceSchema;
 export const MountedSourceBuildEvidenceSchema = z.object({
   version: z.literal(1),
   artifact: z.object({ sealedObjectSha256: Digest, aggregateSha256: Digest, files: z.array(z.object({ path: z.string().max(256).regex(/^[A-Za-z0-9._/-]+$/u).refine(value => value.split("/").every(part => part !== "" && part !== "." && part !== "..")), sha256: Digest, size: z.number().int().nonnegative().max(16_777_216), bytesBase64: z.string().max(22_369_624) }).strict()).min(1).max(256) }).strict(),
-  receipts: z.object({ manifest: z.unknown(), manifestSha256: Digest, capabilities: z.object({ content: z.string().max(30_000), capabilitiesSha256: Digest }).strict(), workerArtifactSha256: Digest, commandEvidenceSha256: Digest }).strict(),
+  receipts: z.object({ manifest: z.unknown(), manifestSha256: Digest, capabilities: z.object({ content: z.string().max(30_000), capabilitiesSha256: Digest }).strict(), workerArtifactSha256: Digest, commandEvidenceSha256: Digest, edgeCertification: NativeEdgeCertification.optional() }).strict(),
   operation: z.object({ operationId: z.string().min(1), planJobId: Digest, authorizationRequestSha256: Digest, topologySha256: Digest }).merge(MountedSourceBuildResultSchema).strict(),
 }).strict();
 export type MountedSourceBuildEvidence = z.infer<typeof MountedSourceBuildEvidenceSchema>;
@@ -43,6 +45,17 @@ const MAX_EVIDENCE_BYTES = 24 * 1_024 * 1_024;
 function abortAfter(ms: number): Readonly<{ signal: AbortSignal; dispose(): void }> {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), ms);
   return Object.freeze({ signal: controller.signal, dispose: () => clearTimeout(timer) });
+}
+
+function selectNativeEdgeObservation(kind: string, result: MountedSourceBuildResult, edge: unknown): unknown {
+  if (kind === "edge.security.build") return result;
+  const observed = NativeEdgeCertification.parse(edge);
+  if (observed.supply.primary.aggregateSha256 !== observed.supply.secondary.aggregateSha256 || observed.supply.primary.lockSha256 !== observed.supply.secondary.lockSha256) throw new Error("PRODUCTION_EDGE_REPRODUCTION_REQUIRED");
+  if (kind === "edge.security.hostile") return Object.freeze({ candidateId: result.candidateId, sealedArtifactSha256: result.sealedArtifactSha256, manifestSha256: result.manifestSha256, capabilitiesSha256: result.capabilitiesSha256, aggregateSha256: result.aggregateSha256, nativeObservation: observed.hostile });
+  if (kind === "edge.supply.primary") return Object.freeze({ candidateId: result.candidateId, build: "primary" as const, nativeObservation: observed.supply.primary });
+  if (kind === "edge.supply.secondary") return Object.freeze({ candidateId: result.candidateId, build: "secondary" as const, nativeObservation: observed.supply.secondary });
+  if (kind === "edge.supply.attestation") return Object.freeze({ candidateId: result.candidateId, nativeObservation: Object.freeze({ sbomFormat: observed.supply.format, primary: observed.supply.primary, secondary: observed.supply.secondary }) });
+  throw new Error("PRODUCTION_EDGE_ORIGINAL_VERIFIER_REQUIRED");
 }
 
 /** Durable evidence is claimed before immutable upload. A fresh process can
@@ -197,9 +210,16 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
   return Object.freeze({ authority: "production-real", async verify(raw: unknown): Promise<unknown> {
     const command = Request.parse(raw);
     if (command.candidateSha256 !== input.config.candidateSha256 || command.topologySha256 !== input.config.topologySha256) throw new Error("PRODUCTION_SOURCE_BUILD_SCOPE_REQUIRED");
-    if (command.kind !== "edge.security.build") throw new Error("PRODUCTION_EDGE_ORIGINAL_VERIFIER_REQUIRED");
-    const payload = BuildPayload.parse(command.payload);
-    if (payload.candidateId !== input.config.candidateSha256 || payload.image !== build.image) throw new Error("PRODUCTION_SOURCE_BUILD_PAYLOAD_REQUIRED");
+    const nativeKind = command.kind === "edge.security.build" || command.kind === "edge.security.hostile"
+      || command.kind === "edge.supply.primary" || command.kind === "edge.supply.secondary" || command.kind === "edge.supply.attestation";
+    if (!nativeKind) throw new Error("PRODUCTION_EDGE_ORIGINAL_VERIFIER_REQUIRED");
+    if (command.kind === "edge.security.build") {
+      const payload = BuildPayload.parse(command.payload);
+      if (payload.candidateId !== input.config.candidateSha256 || payload.image !== build.image) throw new Error("PRODUCTION_SOURCE_BUILD_PAYLOAD_REQUIRED");
+    } else {
+      const payload = EdgePayload.parse(command.payload);
+      if (payload.candidateId !== input.config.candidateSha256) throw new Error("PRODUCTION_SOURCE_BUILD_PAYLOAD_REQUIRED");
+    }
     const request = await validateAuthorizationRequest(input.authorization.request);
     const receipt = await validateAuthorizationReceipt({ request, receipt: input.authorization.receipt, nowMs: (input.now ?? Date.now)() });
     if (request.authorizationRequestSha256 !== input.authorization.authorizationRequestSha256 || receipt.authorizationReceiptSha256 !== input.authorization.authorizationReceiptSha256
@@ -213,7 +233,9 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
         if (record.workerOperationId !== run.workerOperationId || record.expectedSessionBindingDigest !== run.sessionBindingDigest || record.intentReference !== run.capacityIntentReference) throw new Error("PRODUCTION_SOURCE_BUILD_WORKER_BINDING_REQUIRED");
         await observeMountedSourceBuildCapacityCleanup({ journal: input.dependencies.jobJournal, capacity, run, record });
       }
-      return prior;
+      if (command.kind === "edge.security.build") return prior;
+      const evidence = await readMountedSourceBuildEvidence({ journal: input.dependencies.jobJournal, artifactStore: input.dependencies.artifactStore, candidateSha256: input.config.candidateSha256, run });
+      return selectNativeEdgeObservation(command.kind, evidence.result, evidence.evidence.receipts.edgeCertification);
     }
 
     let record = await capacity.inspect({ intentReference: run.capacityIntentReference });
@@ -226,7 +248,7 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
       if (reserved.status !== "available") throw new Error("PRODUCTION_SOURCE_BUILD_WORKER_UNAVAILABLE");
       record = exactCapacity(await capacity.inspect({ intentReference: run.capacityIntentReference }), run);
     }
-    const job = new ProductionWorkerJobClient({ provider, workerOperationId: record.workerOperationId, clients: input.dependencies.workers, workerJournal: input.dependencies.workerJournal, jobJournal: input.dependencies.jobJournal, toolchainSha256: input.config.worker.toolchainSha256, publication: plan.publication, now: input.now });
+    const job = new ProductionWorkerJobClient({ provider, workerOperationId: record.workerOperationId, clients: input.dependencies.workers, workerJournal: input.dependencies.workerJournal, jobJournal: input.dependencies.jobJournal, toolchainSha256: input.config.worker.toolchainSha256, edgeCertification: { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256 }, publication: plan.publication, now: input.now });
     const requestForWorker = workerRequest(run);
     const initial = await job.start(requestForWorker);
     if (initial.state === "unknown") throw new Error("PRODUCTION_SOURCE_BUILD_ORIGINAL_UNKNOWN");
@@ -243,14 +265,18 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
       if (!capabilities) throw new Error("PRODUCTION_SOURCE_BUILD_CAPABILITIES_REQUIRED");
       const dryRun = DryRun.parse(JSON.parse(materialized.commandEvidence[7]!.stdout));
       const manifestSha256 = sha256(canonicalJson(dryRun.manifests[0]!)), capabilitiesSha256 = sha256(capabilities.content);
+      const edgeCertification = NativeEdgeCertification.parse(artifact.edgeCertification);
+      if (edgeCertification.candidateSha256 !== input.config.candidateSha256 || edgeCertification.topologySha256 !== input.config.topologySha256 || edgeCertification.workerOperationId !== record.workerOperationId || edgeCertification.providerImage !== build.image || edgeCertification.toolchainSha256 !== input.config.worker.toolchainSha256) throw new Error("PRODUCTION_EDGE_NATIVE_BINDING_REQUIRED");
       const files = await Promise.all(artifact.files.map(async file => ({ path: file.path, sha256: file.sha256, size: file.bytes, bytesBase64: Buffer.from(await readVerifiedProductionArtifactFile(artifact.distRoot, file)).toString("base64") })));
       if (canonicalJson(workspace.artifact.files) !== canonicalJson(files)) throw new Error("PRODUCTION_SOURCE_BUILD_ARTIFACT_INVENTORY_REQUIRED");
+      if (edgeCertification.supply.primary.aggregateSha256 !== sha256(canonicalJson(files))) throw new Error("PRODUCTION_EDGE_PRIMARY_ARTIFACT_BINDING_REQUIRED");
       const result = MountedSourceBuildResultSchema.parse({ candidateId: input.config.candidateSha256, sealedArtifactSha256: artifact.sealedObjectSha256, manifestSha256, capabilitiesSha256, aggregateSha256: artifact.aggregateSha256, jobId: completed.jobId, workerOperationId: record.workerOperationId, capacityReference: record.reference });
-      const evidence = new TextEncoder().encode(canonicalJson({ version: 1, artifact: { sealedObjectSha256: artifact.sealedObjectSha256, aggregateSha256: artifact.aggregateSha256, files }, receipts: { manifest: dryRun.manifests[0]!, manifestSha256, capabilities: { content: capabilities.content, capabilitiesSha256 }, workerArtifactSha256: completed.artifactSha256, commandEvidenceSha256: artifact.verificationEvidenceSha256 }, operation: { operationId: run.operationId, planJobId: plan.jobId, authorizationRequestSha256: run.authorizationRequestSha256, topologySha256: input.config.topologySha256, ...result } }));
+      const evidence = new TextEncoder().encode(canonicalJson({ version: 1, artifact: { sealedObjectSha256: artifact.sealedObjectSha256, aggregateSha256: artifact.aggregateSha256, files }, receipts: { manifest: dryRun.manifests[0]!, manifestSha256, capabilities: { content: capabilities.content, capabilitiesSha256 }, workerArtifactSha256: completed.artifactSha256, commandEvidenceSha256: artifact.verificationEvidenceSha256, edgeCertification }, operation: { operationId: run.operationId, planJobId: plan.jobId, authorizationRequestSha256: run.authorizationRequestSha256, topologySha256: input.config.topologySha256, ...result } }));
       const stored = StoredEvidence.parse({ key: `certification/source-build/${input.config.candidateSha256}/${run.jobId}/evidence.json`, checksum: sha256(evidence), result });
       const evidenceObject = await persistMountedSourceBuildEvidence({ journal: input.dependencies.jobJournal, artifactStore: input.dependencies.artifactStore, run, value: stored, bytes: evidence });
       await releaseMountedSourceBuildCapacity({ journal: input.dependencies.jobJournal, capacity, run, record });
-      return Object.freeze({ status: "passed" as const, ...result, artifactReceipt: Object.freeze({ evidenceObject }) });
+      const passed = Object.freeze({ status: "passed" as const, ...result, artifactReceipt: Object.freeze({ evidenceObject }) });
+      return command.kind === "edge.security.build" ? passed : selectNativeEdgeObservation(command.kind, result, edgeCertification);
     } finally { await materialized.cleanup(); }
   } });
 }

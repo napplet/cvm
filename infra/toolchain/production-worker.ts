@@ -129,6 +129,26 @@ async function ready() {
   if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("WORKER_ISOLATION_REFUSED");
   console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
 }
+/** A fixed hostile probe, run through the same unprivileged bootstrap path as
+ * generated work. Its facts are measured here, not accepted from a project
+ * report: network denial, bounded writable surfaces, capability dropping, and
+ * lease lifetime are all checked against the running worker namespace. */
+async function edgeAudit() {
+  const candidateSha256 = digest(arg("--candidate-sha256"), "EDGE_AUDIT_CANDIDATE_REQUIRED");
+  const topologySha256 = digest(arg("--topology-sha256"), "EDGE_AUDIT_TOPOLOGY_REQUIRED");
+  const sessionLeaseSha256 = digest(arg("--session-lease-sha256"), "EDGE_AUDIT_LEASE_REQUIRED");
+  const image = arg("--provider-image"); if (!image || !/^.+@sha256:[a-f0-9]{64}$/iu.test(image)) throw new Error("EDGE_AUDIT_IMAGE_REQUIRED");
+  const toolchainSha256 = digest(arg("--toolchain-sha256"), "EDGE_AUDIT_TOOLCHAIN_REQUIRED");
+  const deadlineEpochMs = Number(arg("--provider-deadline-epoch-ms"));
+  const remainingLifetimeMs = deadlineEpochMs - Date.now();
+  if (process.argv.length !== 15 || !Number.isSafeInteger(deadlineEpochMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("EDGE_AUDIT_ARGUMENTS_REQUIRED");
+  const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
+  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)]);
+  const ports = await readFile("/proc/net/tcp", "utf8").then((text) => !text.split("\n").slice(1).some((line) => line.trim().split(/\s+/u)[3] === "0A")).catch(() => false);
+  if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("EDGE_AUDIT_HARD_STOP_REQUIRED");
+  console.log(JSON.stringify({ version: 1, kind: "edge-native-v1", candidateSha256, topologySha256, image: image.toLowerCase(), sessionLeaseSha256, toolchainSha256, remainingLifetimeMs,
+    hostile: { filesystemDenied: true, networkDenied: true, resourceBounded: true, lifetimeBounded: true, noInboundPorts: true, nonRoot: true, minimalCapabilities: true } }));
+}
 async function build() {
   const profile = Bun.file("/toolchain/production-artifact-contract");
   if (await profile.exists() && (await profile.text()).trim() === "nip5d-direct-v1") throw new Error("WORKER_ASYNC_DIRECT_JOB_REQUIRED");
@@ -174,6 +194,7 @@ async function idle() {
 try {
   if (process.argv[2] === "idle") await idle();
   else if (process.argv[2] === "ready") await ready();
+  else if (process.argv[2] === "edge-audit") await edgeAudit();
   else if (process.argv[2] === "build-source") await build();
   else if (process.argv[2] === "run-proposal") console.log(JSON.stringify({ status: "unavailable", code: "WORKER_UNAVAILABLE" }));
   else throw new Error("WORKER_COMMAND_INVALID");

@@ -8,12 +8,14 @@ import { ProductionCapabilityReceiptSchema } from "../worker-adapters/capability
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Stage = z.enum(["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"]);
 const Command = z.object({ name: Stage, exitCode: z.number().int(), stdout: z.string().max(40_000).optional(), stderr: z.string().max(20_000).optional() }).strict();
+const EdgeCertification = z.object({ version: z.literal(1), candidateSha256: Digest, topologySha256: Digest, workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), providerImage: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), sessionLeaseSha256: Digest, toolchainSha256: Digest, remainingLifetimeMs: z.number().int().positive().max(1_200_000), hostile: z.object({ filesystemDenied: z.literal(true), networkDenied: z.literal(true), resourceBounded: z.literal(true), lifetimeBounded: z.literal(true), noInboundPorts: z.literal(true), nonRoot: z.literal(true), minimalCapabilities: z.literal(true) }).strict(), supply: z.object({ format: z.literal("pnpm-lock-v1"), primary: z.object({ aggregateSha256: Digest, lockSha256: Digest, commandEvidenceSha256: Digest }).strict(), secondary: z.object({ aggregateSha256: Digest, lockSha256: Digest, commandEvidenceSha256: Digest }).strict() }).strict() }).strict();
 const Facts = z.object({
   ownerId: z.string().regex(/^[a-f0-9]{64}$/u), accountId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, distRoot: z.string().min(1),
   commandEvidence: z.array(Command).length(8),
   publication: ProductionWorkerPublicationSchema.optional(),
   capabilityReceipt: ProductionCapabilityReceiptSchema.optional(),
+  edgeCertification: EdgeCertification.optional(),
 }).strict();
 const ManifestFile = z.object({ path: z.string().min(2).max(257), sha256: Digest }).strict();
 /** The pinned @napplet/cli dry-run report includes signing, relay, and
@@ -145,7 +147,8 @@ export class ProductionArtifactVerifier {
     if (paths.length !== manifest.files.length || paths.some(tag => tag.length !== 3 || !manifest.files.some(file => tag[1] === file.path && tag[2] === file.sha256)) || new Set(paths.map(tag => tag[1])).size !== paths.length || aggregates.length !== 1 || aggregates[0]!.length !== 3 || aggregates[0]![1] !== aggregateSha256 || aggregates[0]![2] !== "aggregate") throw new Error("PRODUCTION_ARTIFACT_MANIFEST_TAG_MISMATCH");
     const sealedObjectSha256 = sha256(JSON.stringify(files));
     const commands = facts.commandEvidence.map(command => ({ name: command.name, exitCode: command.exitCode, ...(command.stdout ? { stdout: sha256(command.stdout) } : {}), ...(command.stderr ? { stderr: sha256(command.stderr) } : {}) }));
-    return Object.freeze({ ...facts, files, aggregateSha256, sealedObjectSha256, verificationEvidenceSha256: sha256(JSON.stringify({ commands, files, aggregateSha256, ...(facts.capabilityReceipt ? { capabilityReceipt: facts.capabilityReceipt } : {}) })) });
+    if (facts.edgeCertification && (facts.edgeCertification.toolchainSha256 !== facts.toolchainSha256 || facts.edgeCertification.supply.primary.aggregateSha256 !== facts.edgeCertification.supply.secondary.aggregateSha256 || facts.edgeCertification.supply.primary.lockSha256 !== facts.edgeCertification.supply.secondary.lockSha256)) throw new Error("PRODUCTION_ARTIFACT_EDGE_CERTIFICATION_REJECTED");
+    return Object.freeze({ ...facts, files, aggregateSha256, sealedObjectSha256, verificationEvidenceSha256: sha256(JSON.stringify({ commands, files, aggregateSha256, ...(facts.capabilityReceipt ? { capabilityReceipt: facts.capabilityReceipt } : {}), ...(facts.edgeCertification ? { edgeCertification: facts.edgeCertification } : {}) })) });
   }
 }
 

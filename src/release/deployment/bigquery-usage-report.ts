@@ -30,7 +30,7 @@ function queryText(grant: BillingObservationGrant): string {
 function queryPayload(grant: BillingObservationGrant, id: string, dryRun: boolean): unknown {
   return { jobReference: { projectId: grant.projectId, location: grant.location, jobId: id }, configuration: { query: { query: queryText(grant), useLegacySql: false, parameterMode: "NAMED", dryRun, maximumBytesBilled: grant.maximumBytesBilled, queryParameters: [
     { name: "project_id", parameterType: { type: "STRING" }, parameterValue: { value: grant.projectId } },
-    { name: "resource_name", parameterType: { type: "STRING" }, parameterValue: { value: grant.originalScope.resourceIdentitySha256 } },
+    { name: "resource_name", parameterType: { type: "STRING" }, parameterValue: { value: grant.originalScope.resourceName } },
     { name: "operation_id", parameterType: { type: "STRING" }, parameterValue: { value: grant.originalScope.operationId } },
     { name: "interval_start_ms", parameterType: { type: "INT64" }, parameterValue: { value: String(grant.originalScope.intervalStartMs) } },
     { name: "interval_end_ms", parameterType: { type: "INT64" }, parameterValue: { value: String(grant.originalScope.intervalEndMs) } },

@@ -14,6 +14,10 @@ export const OriginalUsageScopeSchema = z.object({
   authorizationRequestSha256: DigestSchema,
   authorizationReceiptSha256: DigestSchema,
   candidateSha256: DigestSchema,
+  /** Raw provider selector is derived only by the mounted authenticated
+   * collector from its durable original-operation journal; it is never a CLI
+   * or provider-port billing input. */
+  resourceName: z.string().regex(/^[A-Za-z0-9_./:-]{1,1024}$/u),
   resourceIdentitySha256: DigestSchema,
   accountScopeSha256: DigestSchema,
   projectScopeSha256: DigestSchema,

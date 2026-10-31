@@ -31,6 +31,25 @@ continuity-grace minutes): Modal must be quoted at its hard 2 CPU / 2 GiB
 ceiling, while Fly is 1 CPU / 1 GiB. Project-owned certification ceilings are
 maximum-spend policy only and must never appear as a vendor source or price line.
 
+## Certification authority workspace boundary
+
+Release-certification authority records live on a coordinator-private volume.
+The coordinator runs under its own UID; the workspace and authority directories
+are owned by that UID and are not group/world writable (new directories use
+`0700`, new authority files `0600`). The worker Sandbox/Fly runtime never
+mounts that volume and runs under a separate UID with no coordinator filesystem
+write path. This OS boundary is what makes the controller's checked pathname
+operations safe from untrusted generated code: code sharing the coordinator UID
+is part of the coordinator TCB and already has equivalent authority over its
+credentials and deployment inputs.
+
+Startup rejects an existing workspace, ancestor, or authority child that does
+not satisfy that ownership/permission boundary; it never repairs a pre-existing
+unsafe path. Root-owned non-writable ancestors are accepted, and only the
+platform's root-owned sticky `/tmp` forms are recognized as a constrained
+ancestor exception. Historical authority records remain immutable and are not
+rewritten merely to normalize their read permissions.
+
 ### Modal Sandbox source selection
 
 The Modal reader binds a quote only to the uniquely rendered **Modal Sandbox

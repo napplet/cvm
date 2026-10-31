@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,6 +113,36 @@ test("all protected-suite records are retained and block finalization when real 
     expect(await Bun.file(join(root, materializedProfile!)).text()).toContain('"provider":"modal"');
     expect((await controller.status())?.state.status).toBe("blocked");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a protected-record cache symlink is rejected before protected-suite dispatch", async () => {
+  const root = await createWorkspace("napplet-cvm-live-controller-");
+  const outside = await mkdtemp("/tmp/napplet-cvm-protected-record-escape-");
+  try {
+    const collectorImage = await observedCollector();
+    const dry = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+    const registry = createReleaseProviderRegistry({ now: () => 1_000, ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 0 }), apply: async () => ({ status: "applied" as const, resourceIdentity: provider }),
+      observe: async () => ({ status: "completed" as const, resourceIdentity: provider }), cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never });
+    const receipt = await createAuthorizationReceipt(dry.authorizationRequest);
+    const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage });
+    const provisioned = await controller.provision({ receipt, registry });
+    const candidate = { id: provisioned.state.candidate.candidateSha256, provider: "modal" as const, image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
+    const real = { evidenceClass: "real" as const } as never;
+    await symlink(outside, join(root, "protected-records"));
+    await expect(controller.executeAuthorized({
+      receipt, registry,
+      materialization: { topology: provisioned.topology, workspace: root, repositoryRoot, candidateId: candidate.id, releaseManifest: manifest(), source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") }, secretReferences: {} },
+      workerSelection: { provider: "modal", status: "selected", candidateSha256: candidate.id, topologySha256: provisioned.topology.topologySha256, selectionEvidenceSha256: digest("selection"), observedAtMs: 1, expiresAtMs: 2_000 },
+      protected: { candidate, input: { datasetSha256: digest("dataset"), profileSha256: digest("profile"), topologySha256: provisioned.topology.topologySha256, command: ["bun", "test"] }, topology: provisioned.topology, collector: { collectorDigest: `sha256:${digest("collector")}`, configSha256: digest("config") }, ports: { admission: real, telemetry: real, chaos: real, durability: real, "security-host": real, "supply-chain": real, "ContextVM-payment-model": real, publication: real } },
+    })).rejects.toThrow("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+    expect(await readdir(outside)).toEqual([]);
+  } finally {
+    await rm(outside, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
   }
 });

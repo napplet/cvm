@@ -311,7 +311,7 @@ async function stateFor(input: Omit<ReleaseControllerState, "stateSha256">): Pro
 async function createOrVerify(path: string, content: string, collision: string, synchronizer: (path: string) => Promise<void> = syncDirectory): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+  await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
     const temporary = await open(temporaryPath, "r");
     try { await temporary.sync(); } finally { await temporary.close(); }
@@ -328,7 +328,7 @@ async function createOrVerify(path: string, content: string, collision: string, 
 
 async function replaceSynced(path: string, content: string, synchronizer: (path: string) => Promise<void> = syncDirectory): Promise<void> {
   const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+  await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
     const temporary = await open(temporaryPath, "r");
     try { await temporary.sync(); } finally { await temporary.close(); }
@@ -350,6 +350,62 @@ function containedBy(root: string, candidate: string): boolean {
   return value === "" || (!value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value));
 }
 
+function coordinatorUid(): number {
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
+  return uid;
+}
+
+function modeBits(metadata: Awaited<ReturnType<typeof lstat>>): number {
+  return typeof metadata.mode === "bigint" ? Number(metadata.mode) : metadata.mode;
+}
+
+function groupOrWorldWritable(metadata: Awaited<ReturnType<typeof lstat>>): boolean {
+  return (modeBits(metadata) & 0o022) !== 0;
+}
+
+function trustedRootStickyDirectory(path: string, metadata: Awaited<ReturnType<typeof lstat>>): boolean {
+  return (path === "/tmp" || path === "/private/tmp")
+    && metadata.uid === 0
+    && metadata.isDirectory()
+    && (modeBits(metadata) & 0o1000) !== 0
+    && (modeBits(metadata) & 0o002) !== 0;
+}
+
+function assertTrustedAncestor(path: string, metadata: Awaited<ReturnType<typeof lstat>>, uid: number): void {
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  if (metadata.uid === uid) {
+    if (groupOrWorldWritable(metadata)) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    return;
+  }
+  if (metadata.uid === 0 && (!groupOrWorldWritable(metadata) || trustedRootStickyDirectory(path, metadata))) return;
+  throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+}
+
+function assertCoordinatorDirectory(metadata: Awaited<ReturnType<typeof lstat>>, uid: number): void {
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== uid || groupOrWorldWritable(metadata)) {
+    throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  }
+}
+
+function assertCoordinatorFile(metadata: Awaited<ReturnType<typeof lstat>>, uid: number): void {
+  if (metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== uid || groupOrWorldWritable(metadata)) {
+    throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  }
+}
+
+async function validateTrustedProjectAncestors(projectRoot: string, uid: number): Promise<void> {
+  const root = await realpath(DURABLE_WORKSPACE_FILESYSTEM_ROOT);
+  let current = root;
+  try { assertTrustedAncestor(current, await lstat(current), uid); }
+  catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  for (const segment of relative(root, projectRoot).split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    try { assertTrustedAncestor(current, await lstat(current), uid); }
+    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  }
+}
+
 async function validateDurableWorkspacePath(workspace: string, synchronizer: (path: string) => Promise<void>): Promise<string> {
   if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
   const requested = resolve(workspace);
@@ -359,6 +415,8 @@ async function validateDurableWorkspacePath(workspace: string, synchronizer: (pa
   try {
     canonicalProjectRoot = await realpath(projectRoot);
   } catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  const uid = coordinatorUid();
+  await validateTrustedProjectAncestors(canonicalProjectRoot, uid);
   let current = canonicalProjectRoot;
   for (const segment of relative(projectRoot, requested).split(sep).filter(Boolean)) {
     current = join(current, segment);
@@ -373,7 +431,8 @@ async function validateDurableWorkspacePath(workspace: string, synchronizer: (pa
       try { metadata = await lstat(current); }
       catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
     }
-    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    try { assertCoordinatorDirectory(metadata, uid); }
+    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
   }
   await syncDirectoryChain(current, DURABLE_WORKSPACE_FILESYSTEM_ROOT, synchronizer);
   return current;
@@ -407,7 +466,7 @@ async function createSynced(path: string, content: string, anchor: string, synch
   await mkdir(dirname(path), { recursive: true });
   let handle;
   try {
-    handle = await open(path, "wx");
+    handle = await open(path, "wx", 0o600);
     await handle.writeFile(content, "utf8");
     await handle.sync();
     await handle.close();
@@ -425,36 +484,6 @@ async function createSynced(path: string, content: string, anchor: string, synch
     throw error;
   } finally {
     await handle?.close();
-  }
-}
-
-async function readProtectedRecord(input: Readonly<{
-  workspace: string;
-  suite: string;
-  candidateId: string;
-  topologySha256: string;
-  authorizationReceiptSha256: string;
-  nowMs: number;
-}>): Promise<CertificationObservation | undefined> {
-  const path = join(input.workspace, "protected-records", `${input.suite}.json`);
-  let value: unknown;
-  try { value = JSON.parse(await readFile(path, "utf8")); }
-  catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-    throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
-  const stored = value as Readonly<{ version?: unknown; candidateSha256?: unknown; topologySha256?: unknown; authorizationReceiptSha256?: unknown; record?: unknown }>;
-  if (stored.version !== 1 || stored.candidateSha256 !== input.candidateId || stored.topologySha256 !== input.topologySha256 || stored.authorizationReceiptSha256 !== input.authorizationReceiptSha256) {
-    throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
-  }
-  try {
-    const record = await validateCertificationObservation(stored.record, { nowMs: input.nowMs, candidateId: input.candidateId });
-    if (record.input.command[1] !== `suite:${input.suite}` || record.input.topologySha256 !== input.topologySha256) throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
-    return record;
-  } catch (error) {
-    if (error instanceof Error && error.message === "RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID") throw error;
-    throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
   }
 }
 
@@ -505,6 +534,7 @@ export class ReleaseCertificationController {
     await this.#ensureDurableWorkspace();
     const segments = child.split(sep).filter(Boolean);
     let current = this.#workspace;
+    const uid = coordinatorUid();
     for (const [index, segment] of segments.entries()) {
       current = join(current, segment);
       let metadata;
@@ -519,21 +549,62 @@ export class ReleaseCertificationController {
         try { metadata = await lstat(current); }
         catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
       }
-      if (metadata.isSymbolicLink() || (index < segments.length - 1 && !metadata.isDirectory())) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+      try {
+        if (metadata.isDirectory()) assertCoordinatorDirectory(metadata, uid);
+        else if (index === segments.length - 1) assertCoordinatorFile(metadata, uid);
+        else throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+      } catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
     }
     return current;
   }
 
+  async #assertAuthorityFile(path: string): Promise<void> {
+    try { assertCoordinatorFile(await lstat(path), coordinatorUid()); }
+    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  }
+
   async #createOrVerify(path: string, content: string, collision: string): Promise<void> {
-    await createOrVerify(await this.#authorityPath(path, true), content, collision, this.#syncDirectory);
+    const authorityPath = await this.#authorityPath(path, true);
+    await createOrVerify(authorityPath, content, collision, this.#syncDirectory);
+    await this.#assertAuthorityFile(authorityPath);
   }
 
   async #replaceSynced(path: string, content: string): Promise<void> {
-    await replaceSynced(await this.#authorityPath(path, true), content, this.#syncDirectory);
+    const authorityPath = await this.#authorityPath(path, true);
+    await replaceSynced(authorityPath, content, this.#syncDirectory);
+    await this.#assertAuthorityFile(authorityPath);
   }
 
   async #readAuthorityFile(path: string): Promise<string> {
     return readFile(await this.#authorityPath(path), "utf8");
+  }
+
+  async #readProtectedRecord(input: Readonly<{
+    suite: string;
+    candidateId: string;
+    topologySha256: string;
+    authorizationReceiptSha256: string;
+    nowMs: number;
+  }>): Promise<CertificationObservation | undefined> {
+    let value: unknown;
+    try { value = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "protected-records", `${input.suite}.json`))); }
+    catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+      throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+    const stored = value as Readonly<{ version?: unknown; candidateSha256?: unknown; topologySha256?: unknown; authorizationReceiptSha256?: unknown; record?: unknown }>;
+    if (stored.version !== 1 || stored.candidateSha256 !== input.candidateId || stored.topologySha256 !== input.topologySha256 || stored.authorizationReceiptSha256 !== input.authorizationReceiptSha256) {
+      throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+    }
+    try {
+      const record = await validateCertificationObservation(stored.record, { nowMs: input.nowMs, candidateId: input.candidateId });
+      if (record.input.command[1] !== `suite:${input.suite}` || record.input.topologySha256 !== input.topologySha256) throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+      return record;
+    } catch (error) {
+      if (error instanceof Error && error.message === "RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID") throw error;
+      throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+    }
   }
 
   async #hasEffectLineage(): Promise<boolean> {
@@ -908,8 +979,8 @@ export class ReleaseCertificationController {
     } as const;
     const records: CertificationObservation[] = [];
     for (const suite of PROTECTED_SUITES) {
-      let record = await readProtectedRecord({
-        workspace: this.#workspace, suite, candidateId: state.candidate.candidateSha256,
+      let record = await this.#readProtectedRecord({
+        suite, candidateId: state.candidate.candidateSha256,
         topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, nowMs: this.#now(),
       });
       if (!record) {
@@ -1009,7 +1080,10 @@ export class ReleaseCertificationController {
     const transition: StateTransition = { ...base, transitionSha256: await digest(base) };
     const path = await this.#authorityPath(join(this.#workspace, "state-transitions", `${priorStateSha256}.json`), true);
     const outcome = await createSynced(path, `${canonicalJson(transition)}\n`, DURABLE_WORKSPACE_FILESYSTEM_ROOT, this.#syncDirectory);
-    if (outcome === "created") return next;
+    if (outcome === "created") {
+      await this.#assertAuthorityFile(path);
+      return next;
+    }
     const existing = await this.#readStateTransition(priorStateSha256);
     if (!existing || existing.nextStateSha256 !== next.stateSha256) throw new Error("RELEASE_CONTROLLER_STATE_RACE");
     return this.#readState(existing.nextStateSha256);
@@ -1037,7 +1111,10 @@ export class ReleaseCertificationController {
     const claim: DispatchClaim = { ...base, dispatchClaimSha256: await digest(base) };
     const path = await this.#authorityPath(join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`), true);
     const outcome = await createSynced(path, `${canonicalJson(claim)}\n`, DURABLE_WORKSPACE_FILESYSTEM_ROOT, this.#syncDirectory);
-    if (outcome === "created") return true;
+    if (outcome === "created") {
+      await this.#assertAuthorityFile(path);
+      return true;
+    }
     let raw: unknown;
     try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_DISPATCH_CLAIM_INVALID"); }

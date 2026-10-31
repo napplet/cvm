@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { prepareReleaseWorkspace, ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
 import { createAuthorizationReceipt, createAuthorizationRequest, validateAuthorizationReceipt } from "../../src/release/authorization";
@@ -553,6 +553,38 @@ test("project-owned workspace preparation creates an absent authority root", asy
   await rm(root, { recursive: true, force: true });
   const result = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
   expect(result.state.status).toBe("authorization_required");
+  expect((await stat(root)).mode & 0o777).toBe(0o700);
+  expect((await stat(join(root, "states"))).mode & 0o777).toBe(0o700);
+  expect((await stat(join(root, "current.json"))).mode & 0o777).toBe(0o600);
+  expect((await stat(root)).uid).toBe(process.getuid!());
+  expect((await stat(join(root, "current.json"))).uid).toBe(process.getuid!());
+});
+
+test("a pre-existing group-writable workspace is rejected before provider discovery", async () => {
+  const root = await workspace();
+  let discoveries = 0;
+  try {
+    await chmod(root, 0o770);
+    await expect(runReleaseCertification({
+      candidatePath,
+      workspace: root,
+      dryRun: true,
+      providers: { cloud_run: { discover: async () => { discoveries += 1; return { capability: "available", authentication: "authorized", accountScopeSha256: "a".repeat(64), costEstimateSha256: "b".repeat(64), secretReferenceNames: [], reasonCode: "AVAILABLE" }; } } },
+      now: () => 1_000,
+    })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(discoveries).toBe(0);
+  } finally { await chmod(root, 0o700); }
+});
+
+test("a pre-existing group-writable authority child is rejected before authority publication", async () => {
+  const root = await workspace();
+  try {
+    await prepareReleaseWorkspace(root);
+    await mkdir(join(root, "states"), { mode: 0o700 });
+    await chmod(join(root, "states"), 0o770);
+    await expect(runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(await readdir(join(root, "states"))).toEqual([]);
+  } finally { await chmod(join(root, "states"), 0o700); }
 });
 
 test("a bare existing workspace still syncs every ancestor through the filesystem root", async () => {

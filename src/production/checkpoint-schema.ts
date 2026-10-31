@@ -9,6 +9,7 @@ const checkpointTables = [
  ] as const;
 const retainedSubjectTables = [
   { name: "durability_subjects", trigger: "durability_subject_immutable", triggerType: 31, guard: "guard_durability_subject", columns: "checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until,deletion_state,created_at,updated_at", updates: ["deletion_state", "updated_at"] },
+  { name: "publication_signed_events", trigger: "publication_signed_event_immutable", triggerType: 27, guard: "guard_publication_signed_event", columns: "intent_id,event_id,event_json,created_at", updates: [] },
 ] as const;
 
 /** Read-only startup prerequisite. Schema installation belongs to the bounded

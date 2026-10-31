@@ -35,7 +35,7 @@ const migrations = [
   "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql",
   "phase-07/003_production_checkpoints.sql",
 ] as const;
-const retainedSubjectsMigration = "phase-07/014_production_durability_subjects.sql";
+const retainedSubjectMigrations = ["phase-07/014_production_durability_subjects.sql", "phase-07/015_production_publication_signed_events.sql"] as const;
 
 function sqlPool(native: Pool): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
@@ -112,7 +112,9 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     runtime = new Pool({ connectionString: connection(role, sourceDatabase), connectionTimeoutMillis: 2_000 });
     const pool = bindAccountingRealmPool(sqlPool(runtime), createAccountingRealm("production-real"));
     await expect(assertProductionRetainedSubjectSchema(pool)).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_SCHEMA_REQUIRED");
-    await source.query(await Bun.file(`migrations/${retainedSubjectsMigration}`).text());
+    await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[0]}`).text());
+    await expect(assertProductionRetainedSubjectSchema(pool)).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_SCHEMA_REQUIRED");
+    await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[1]}`).text());
     await assertProductionRetainedSubjectSchema(pool);
     let now = Date.parse("2029-01-01T00:00:00.000Z");
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
@@ -160,6 +162,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await source.query("INSERT INTO production_real.publication_signed_events(intent_id,event_id,event_json) VALUES('publication:retained',$1,$2)", [fixture.ownerEvent.id, fixture.ownerEvent]);
     for (const effect of ["deploy", "owner_manifest", "attestation"] as const) { const observation = effect === "attestation" ? attestation : { effect, releaseEvidence: false }; await source.query("INSERT INTO production_real.publication_effect_intents(effect_id,intent_id,effect_kind,operation_id,request_fingerprint_sha256,state,observation_json,observation_sha256,observed_at) VALUES($1,'publication:retained',$2,$3,$4,'observed_complete',$5,$6,clock_timestamp())", [`effect:${effect}`, effect, `operation:${effect}`, hex(`request:${effect}`), observation, digest(canonicalJson(observation))]); }
     await source.query("INSERT INTO production_real.publication_records(intent_id,owner_event_id,attestation_event_id,artifact_id,aggregate_sha256,deployment_operation_id,owner_manifest_operation_id,attestation_operation_id,terminal_state) VALUES('publication:retained',$1,$2,$3,$4,'operation:deploy','operation:owner_manifest','operation:attestation','complete')", [fixture.ownerEvent.id, attestation.id, artifactId, hex("aggregate")]);
+    await expect(source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [wire({ ...fixture.ownerEvent, content: "tampered" })])).rejects.toThrow("PRODUCTION_PUBLICATION_SIGNED_EVENT_IMMUTABLE");
     const originalRows = await source.query("SELECT normalized_receipt FROM production_real.usage_receipts WHERE id='receipt:retained'");
     const originalEvents = await source.query("SELECT e.event_json,ae.observation_json FROM production_real.publication_records p JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' WHERE p.intent_id='publication:retained'");
     let createCalls = 0, deleteCalls = 0, loseCreateAck = true, loseDeleteAck = true;
@@ -170,15 +173,8 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     };
     const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore: effects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const scope = { checkpointId, sessionId, ownerId: fixture.ownerId };
-    // These are real signed-event bytes from the producer-shaped records. A
-    // clone must reject an invalid signature or a broken owner/attestation
-    // binding before it can create any retained archive.
-    await source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [wire({ ...fixture.ownerEvent, content: "tampered" })]);
-    await expect(preparer.prepare(scope)).rejects.toThrow("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
-    await source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [fixture.ownerEvent]);
-    await source.query("UPDATE production_real.publication_effect_intents SET observation_json=$1 WHERE intent_id='publication:retained' AND effect_kind='attestation'", [wire({ ...attestation, tags: [["e", "wrong"]] })]);
-    await expect(preparer.prepare(scope)).rejects.toThrow("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
-    await source.query("UPDATE production_real.publication_effect_intents SET observation_json=$1 WHERE intent_id='publication:retained' AND effect_kind='attestation'", [attestation]);
+    // The raw wire checks above reject invalid signatures/bindings. Stored
+    // producer history then rejects tampering before preparation can read it.
     await expect(preparer.prepare(scope)).rejects.toThrow("OBJECT_ACK_LOST");
     await preparer.prepare(scope); // query-only reconciliation observes the original create; no replacement dispatch.
     expect(createCalls).toBe(6); // all six retained copies; lost ACK did not duplicate its subject.

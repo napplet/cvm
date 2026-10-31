@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { verifyEvent } from "nostr-tools/pure";
 import { z } from "zod";
 import type { ObjectStorePort } from "../continuity/object-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
@@ -11,6 +12,7 @@ import { retainedSubjectCustodyId, sealRetainedSubject, type RetainedSubjectJour
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
+const SignedNostrEvent = z.object({ id: Digest, pubkey: Digest, created_at: z.number().int().nonnegative(), kind: z.number().int().nonnegative(), tags: z.array(z.array(z.string())), content: z.string(), sig: z.string().regex(/^[a-f0-9]{128}$/u) }).strict();
 const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const jsonBytes = (value: unknown) => new TextEncoder().encode(canonicalJson(value));
 
@@ -172,18 +174,19 @@ export class ProductionRetainedSubjectPreparer {
       const identity = (kind: string, value: unknown) => `${kind}:${sha(canonicalJson(value))}`;
       const promotion = promotionRows.rows[0]!;
       const receipt = receiptRows.rows[0]!;
-      const ownerEvent = z.object({ id: Digest }).passthrough().parse(typeof publication.owner_event === "string" ? JSON.parse(publication.owner_event) : publication.owner_event);
+      const ownerEvent = SignedNostrEvent.parse(typeof publication.owner_event === "string" ? JSON.parse(publication.owner_event) : publication.owner_event);
       const ownerEventId = Digest.parse(publication.owner_event_id);
       const attestationEventId = z.string().min(1).max(256).parse(publication.attestation_event_id);
-      if (ownerEvent.id !== ownerEventId || attestationEventId === ownerEventId) throw new Error("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
+      if (ownerEvent.id !== ownerEventId || ownerEvent.pubkey !== scope.ownerId || !verifyEvent(ownerEvent) || attestationEventId === ownerEventId) throw new Error("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
       /* These are original, immutable record bytes, not convenient digest
        * projections.  The source identities bind the exact original rows to
        * owner/session/action/artifact/version fences already selected above. */
       const validation = Object.freeze({ artifact, promotion });
-      const attestationEvent = z.object({ id: z.string().min(1).max(256) }).passthrough().parse(
+      const attestationEvent = SignedNostrEvent.parse(
         typeof publication.attestation_observation === "string" ? JSON.parse(publication.attestation_observation) : publication.attestation_observation,
       );
-      if (attestationEvent.id !== attestationEventId) throw new Error("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
+      const hasTag = (name: string, value: string) => attestationEvent.tags.some(tag => tag[0] === name && tag[1] === value);
+      if (attestationEvent.id !== attestationEventId || attestationEvent.pubkey === ownerEvent.pubkey || !verifyEvent(attestationEvent) || !hasTag("e", ownerEventId) || !hasTag("p", scope.ownerId)) throw new Error("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
       const attestation = Object.freeze({ intentId: publication.intent_id, ownerEventId, attestationEventId, event: attestationEvent });
       return Object.freeze([
         { kind: "sealed_artifact", sourceIdentity: identity("artifact", artifact.reference), bytes: new Uint8Array(artifactBytes) },

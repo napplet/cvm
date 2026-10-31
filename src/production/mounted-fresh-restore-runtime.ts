@@ -29,6 +29,19 @@ const sha = (value: Uint8Array | string) => createHash("sha256").update(value).d
 
 type OpenedPool = Awaited<ReturnType<typeof openFreshRestorePostgresPool>>;
 type RuntimeBinding = Readonly<{ freshInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string }>;
+type MountedWorkerClients = Awaited<ReturnType<typeof createMountedProductionWorkerClients>>;
+type MountedWorkerRouter = Awaited<ReturnType<typeof createMountedProductionWorkerJobRouter>>;
+/**
+ * Outer transport mounts are deliberately narrow: production uses the real
+ * mounted implementations, while isolated integration tests can provide
+ * strict provider ports without replacing the recovered runtime or bridge.
+ */
+type FreshRuntimeMounts = Readonly<{
+  openPool?: (input: Readonly<{ config: ProductionConfig; secrets: MountedProductionSecretMaterial; binding: "cloudSql.restoreRecoveredRoleCredentialReference" | "cloudSql.restoreMigrationRoleCredentialReference"; privateAddress: string }>) => Promise<OpenedPool>;
+  readKekFile?: (path: string) => Promise<Uint8Array | string>;
+  createWorkerClients?: (input: Readonly<{ config: ProductionConfig; secrets: MountedProductionSecretMaterial; journal: ReturnType<typeof createPostgresWorkerOperationJournal> }>) => Promise<MountedWorkerClients>;
+  createWorkerRouter?: (input: Readonly<{ config: ProductionConfig; secrets: MountedProductionSecretMaterial; workerJournal: Awaited<ReturnType<typeof openProductionServiceJournals>>["worker"]; jobJournal: Awaited<ReturnType<typeof openProductionServiceJournals>>["job"]; current: MountedWorkerClients }>) => Promise<MountedWorkerRouter>;
+}>;
 
 /** Only a checkpoint carries a recoverable worker workspace. Other retained
  * kinds require their own recovered authority and archive reader. */
@@ -49,13 +62,15 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
   artifactStore: GcsObjectStoreAdapter;
   observeTopology(): Promise<unknown>;
   now?: () => number;
+  mounts?: FreshRuntimeMounts;
 }>): MountedFreshRestoreRuntime {
   if (!input.google || !input.artifactStore || typeof input.observeTopology !== "function") throw new Error("MOUNTED_FRESH_RESTORE_RUNTIME_REQUIRED");
   const now = input.now ?? Date.now;
   const poolFor = async (instanceId: string, binding: "cloudSql.restoreRecoveredRoleCredentialReference" | "cloudSql.restoreMigrationRoleCredentialReference") => {
     const observed = await input.google.cloudSqlPostgres.observePrivateAddress({ instanceId });
     if (observed.status !== "completed" || !("privateAddress" in observed)) throw new Error("MOUNTED_FRESH_RESTORE_PRIVATE_ADDRESS_UNAVAILABLE");
-    return openFreshRestorePostgresPool({ config: input.config, secrets: input.secrets, binding, privateAddress: observed.privateAddress });
+    const open = input.mounts?.openPool ?? openFreshRestorePostgresPool;
+    return open({ config: input.config, secrets: input.secrets, binding, privateAddress: observed.privateAddress });
   };
   return Object.freeze({
     async open(raw): Promise<Readonly<{
@@ -81,19 +96,21 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
        * source-pool coordinator/bridge here would let a supposedly fresh drill
        * read or mutate the source authority after the clone completed. */
       const serviceJournals = await openProductionServiceJournals({ pool: recovered.pool, servicePubkey: input.config.certification.serverPubkey, initialTopologySha256: input.config.topologySha256, requireExisting: true }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
-      const workerClients = await createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(serviceJournals.worker) }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
-      const jobRouter = await createMountedProductionWorkerJobRouter({ config: input.config, secrets: input.secrets, workerJournal: serviceJournals.worker, jobJournal: serviceJournals.job, current: workerClients }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
+      const mountWorkers = input.mounts?.createWorkerClients ?? createMountedProductionWorkerClients;
+      const workerClients = await mountWorkers({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(serviceJournals.worker) }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
+      const mountRouter = input.mounts?.createWorkerRouter ?? createMountedProductionWorkerJobRouter;
+      const jobRouter = await mountRouter({ config: input.config, secrets: input.secrets, workerJournal: serviceJournals.worker, jobJournal: serviceJournals.job, current: workerClients }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
       const checkpoint = new ProductionCheckpointCoordinator({
         pool: recovered.pool,
         objectStore: input.artifactStore,
         journal: serviceJournals.checkpoint,
-        kekPath: input.secrets.path("checkpoint.kekReference"),
+        kekPath: input.secrets.path("checkpoint.kekReference"), readKekFile: input.mounts?.readKekFile,
         now,
       });
-      const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), now });
+      const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), readFile: input.mounts?.readKekFile, now });
       const retainedSubjects = new ProductionRetainedSubjectPreparer({
         pool: recovered.pool, objectStore: input.artifactStore, journal: serviceJournals.checkpoint,
-        kekPath: input.secrets.path("checkpoint.kekReference"), now,
+        kekPath: input.secrets.path("checkpoint.kekReference"), readKekFile: input.mounts?.readKekFile, now,
       });
       const capacityJournal = serviceJournals.capacity;
       const worker = new ProductionWorkerBridge({

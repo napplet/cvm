@@ -6,7 +6,10 @@ import { createFundedCore } from "../../src/phase-03/funded-core";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 import { FundingService } from "../../src/funding/funding-service";
-import type { CashuTopUpRecord } from "../../src/funding/cashu-top-up";
+import { CashuMintPolicyRegistry, CashuMintPolicySchema } from "../../src/funding/cashu-mint-policy";
+import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
+import { CashuTopUpCoordinator, type CashuTopUpRecord } from "../../src/funding/cashu-top-up";
+import fixture from "../fixtures/cashu-phase-03.json";
 
 const deferred = <T = void>() => {
   let resolve!: (value: T) => void;
@@ -179,9 +182,11 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
       await pool.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [developmentRealmLock, "20261031"]);
     }
 
-    // An unlock acknowledgement failure must evict the checked-out session.
-    // The committed claim remains queryable, while its former advisory lock is
-    // released with the discarded connection rather than leaking into the pool.
+    // An unlock acknowledgement failure after COMMIT must evict the checked-out
+    // session without converting the acknowledged claim into a failed submit.
+    // The provider observes the durable claim before settlement and proves the
+    // bearer was not prematurely expired; exact replay must not settle or
+    // credit again.
     let injectedUnlockFailure = true;
     let poisonedReleaseError: Error | undefined;
     const poisonedPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
@@ -191,13 +196,41 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
           throw new Error("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
         }
         return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows };
-      }, release(error?: Error) { poisonedReleaseError = error; client.release(error); },
+      }, release(error?: Error) { if (error) poisonedReleaseError = error; client.release(error); },
     }; } };
     const poisonedDatabase = new PostgresFundingDatabase(poisonedPool, { realm: "production-real", deadlineMs: 1_000 });
-    const poisonedRecord = cashuRecord("cashu:poisoned-release", "b".repeat(64), "6".repeat(64));
-    await expect(poisonedDatabase.cashu.claim(poisonedRecord)).rejects.toThrow("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
+    const poisonedPrincipal = { pubkey: "b".repeat(64) };
+    const poisonedAccountId = await accountIdForPrincipal(poisonedPrincipal);
+    await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [poisonedAccountId]);
+    const protectedMaterial: {
+      sealed: string[]; expired: string[];
+      seal(metadata: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array): Promise<{ id: string; payloadDigest: string }>;
+      expire(id: string): Promise<void>;
+    } = {
+      sealed: [], expired: [],
+      async seal(_: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array) {
+        const id = `protected:poisoned:${this.sealed.length + 1}`;
+        this.sealed.push(id);
+        return { id, payloadDigest: `${plaintext.byteLength}` };
+      },
+      async expire(id: string) { this.expired.push(id); },
+    };
+    const poisonedProvider = new FakeCashuSettlementPort();
+    poisonedProvider.nextSettlement({ status: "verified", externalReference: "mint-poisoned", settlementReference: "cashu-poisoned", verifiedAt: "2026-10-31T07:00:00.000Z" });
+    const originalSettle = poisonedProvider.settle.bind(poisonedProvider);
+    poisonedProvider.settle = async (request) => {
+      expect(protectedMaterial.expired).toEqual([]);
+      expect(await poisonedDatabase.cashu.find(request.topUpId)).toMatchObject({ protectedId: "protected:poisoned:1", result: { state: "verifying" } });
+      return originalSettle(request);
+    };
+    const poisonedCoordinator = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(CashuMintPolicySchema.parse(fixture.policies[0])), provider: poisonedProvider, vault: protectedMaterial, funding: new FundingService(poisonedDatabase.funding), repository: poisonedDatabase.cashu });
+    const poisonedSubmit = { principal: poisonedPrincipal, idempotencyKey: "cashu:poisoned-release", topUpId: "cashu:poisoned-release", amount: "21", maxFee: "0", unit: "sat", pmi: "bitcoin-cashu-v4-direct", token: new TextEncoder().encode("cashu-poisoned-release-token") };
+    expect(await poisonedCoordinator.submit(poisonedSubmit)).toMatchObject({ state: "credited", topUpId: poisonedSubmit.topUpId });
     expect(poisonedReleaseError?.message).toBe("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
-    expect(await database.cashu.claim(poisonedRecord)).toMatchObject({ claimed: false, record: { result: { topUpId: "cashu:poisoned-release" } } });
+    expect(await poisonedCoordinator.submit(poisonedSubmit)).toMatchObject({ state: "credited", topUpId: poisonedSubmit.topUpId });
+    expect(poisonedProvider.settleCalls).toBe(1);
+    expect(protectedMaterial.expired).toEqual(["protected:poisoned:1"]);
+    expect((await new FundingService(database.funding).status(poisonedPrincipal)).available).toBe("21");
 
     await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data", outputDataDigest: "4".repeat(64) });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);

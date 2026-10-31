@@ -14,6 +14,7 @@ type LightningJson = Readonly<{
 
 const frozen = <T>(value: T): T => Object.freeze(structuredClone(value));
 const bytes = (value: unknown): Uint8Array => value instanceof Uint8Array ? new Uint8Array(value) : new Uint8Array(value as ArrayBuffer);
+const sqlState = (error: unknown): string => error && typeof error === "object" && "code" in error ? String(error.code ?? "") : "";
 
 export type ProductionCustodyMaterial = Readonly<{
   custodyId: string; operationId: string; accountId: string; rail: "cashu" | "lightning";
@@ -76,6 +77,9 @@ async function serializableProductionTransaction<T>(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const client = await pool.connect();
     const heldLocks: string[] = [];
+    let committed: Readonly<{ result: T }> | undefined;
+    let transactionError: unknown;
+    let cleanupError: Error | undefined;
     try {
       // Cashu claims use the semantic proof identity as their durable
       // contention key. Acquire it before BEGIN so a waiter starts its
@@ -87,27 +91,37 @@ async function serializableProductionTransaction<T>(
       await client.query("SET LOCAL statement_timeout = '5000ms'");
       const result = await operation(client);
       await client.query("COMMIT");
-      return frozen(result);
+      // Acknowledged COMMIT is the durable boundary. Subsequent session-lock
+      // cleanup can require eviction, but cannot turn this result into a
+      // pre-commit failure that would discard protected Cashu material.
+      committed = { result: frozen(result) };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
-      lastError = error;
-      const code = String((error as { code?: unknown }).code ?? "");
-      const retryable = RETRYABLE_SERIALIZATION_CODES.has(code);
-      if (!retryable || attempt + 1 === attempts) throw error;
+      transactionError = error;
     } finally {
-      let releaseError: Error | undefined;
       for (const key of heldLocks.reverse()) {
         try {
           await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]);
         } catch (error) {
-          releaseError ??= error instanceof Error ? error : new Error("PRODUCTION_ADVISORY_LOCK_RELEASE_FAILED");
+          cleanupError ??= error instanceof Error ? error : new Error("PRODUCTION_ADVISORY_LOCK_RELEASE_FAILED");
         }
       }
-      if (releaseError) {
-        client.release(releaseError);
-        throw releaseError;
+      if (cleanupError) {
+        client.release(cleanupError);
+      } else {
+        client.release();
       }
-      client.release();
+    }
+    // The release error was passed to the pool so it cannot return a possibly
+    // lock-holding session. An acknowledged commit remains authoritative even
+    // when the unlock acknowledgement was lost.
+    if (committed) return committed.result;
+    if (cleanupError) throw cleanupError;
+    if (transactionError) {
+      lastError = transactionError;
+      const code = sqlState(transactionError);
+      const retryable = RETRYABLE_SERIALIZATION_CODES.has(code);
+      if (!retryable || attempt + 1 === attempts) throw transactionError;
     }
   }
   throw lastError ?? new Error("PRODUCTION_SERIALIZATION_RETRY_EXHAUSTED");
@@ -224,7 +238,7 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
         return frozen({ claimed: true, record: input });
       }, { advisoryLockKeys: input.semanticProofIdentities.map((identity) => `cashu-proof:${this.realm.name}:${identity}`), advisoryLockTimeoutMs: CASHU_PROOF_LOCK_TIMEOUT_MS, attempts: CASHU_PROOF_CLAIM_ATTEMPTS });
     } catch (error) {
-      if (String((error as { code?: unknown }).code ?? "") !== ADVISORY_LOCK_TIMEOUT) throw error;
+      if (sqlState(error) !== ADVISORY_LOCK_TIMEOUT) throw error;
       const winner = await this.findWinner(input.semanticProofIdentities);
       if (winner) return frozen({ claimed: false, record: winner });
       throw new Error("CASHU_PROOF_CLAIM_RETRYABLE");

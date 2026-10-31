@@ -41,6 +41,7 @@ test("the v2 inventory names every non-Google accounting role and never uses his
     "unknown_held",
   ]);
   const candidateSha256 = hex("a");
+  const topologySha256 = hex("d");
   const nativeRate = await rate();
   const artifacts = new Map<string, Readonly<{ sourceUrl: string; bytes: Uint8Array }>>();
   const evidence = async (scope: string, sourceKind: "official_openai_model" | "contextvm_transport_policy" | "operator_homelab_policy" | "operator_approval_policy" | "unknown", sourceUrl: string) => {
@@ -62,26 +63,31 @@ test("the v2 inventory names every non-Google accounting role and never uses his
     precision: 6,
     scope,
     candidateSha256,
+    topologySha256,
   }; };
   const bound = createNonGoogleCostBound({
     maximumChargeMicros: 10_000,
     candidateSha256,
+    topologySha256,
     facts: [
       { role: "authoritative_native_usage", costType: "model_api_usage", provider: "openai_responses", status: "available", rate: nativeRate, evidence: await evidence("OpenAI Responses model generation for this candidate", "official_openai_model", OPENAI_RESPONSES_PRICING_URL) },
       { role: "documented_scoped_zero", costType: "contextvm_protocol", provider: "contextvm", status: "available", documentedScope: "public signed ContextVM event transport only", evidence: await evidence("ContextVM signed event transport for this candidate", "contextvm_transport_policy", "https://docs.contextvm.org/") },
       { role: "included_parent", costType: "database_authority", provider: "homelab_postgres", status: "available", parentCostType: "approved_homelab_service", evidence: await evidence("PostgreSQL authority used for this candidate", "operator_homelab_policy", "https://napplet-cvm.invalid/policy/homelab") },
       { role: "explicit_approved_shared_standing", costType: "homelab_host", provider: "operator_homelab", status: "available", approvalReference: "D-141", evidence: await evidence("Approved homelab standing for this candidate", "operator_approval_policy", "https://napplet-cvm.invalid/policy/approval") },
       { role: "unknown_held", costType: "funding_rail_fee", provider: "cashu", status: "held", holdReason: "account arrangement not verified", evidence: await evidence("Funding fee evidence remains unavailable for this candidate", "unknown", "https://napplet-cvm.invalid/policy/unknown") },
+      { role: "unknown_held", costType: "worker_sandbox_usage", provider: "modal", status: "held", holdReason: "worker contract availability not verified", evidence: await evidence("Worker evidence remains unavailable for this candidate", "unknown", "https://napplet-cvm.invalid/policy/worker") },
+      { role: "unknown_held", costType: "object_authority", provider: "homelab_object", status: "held", holdReason: "object authority availability not verified", evidence: await evidence("Object evidence remains unavailable for this candidate", "unknown", "https://napplet-cvm.invalid/policy/object") },
+      { role: "unknown_held", costType: "publication_transport", provider: "napplet", status: "held", holdReason: "publication transport availability not verified", evidence: await evidence("Publication evidence remains unavailable", "unknown", "https://napplet-cvm.invalid/policy/publication") },
     ],
   });
   expect(bound.maximumChargeMicros).toBe(10_000);
-  expect(bound.heldCostTypes).toEqual(["funding_rail_fee"]);
+  expect(bound.heldCostTypes).toEqual(["funding_rail_fee", "worker_sandbox_usage", "object_authority", "publication_transport"]);
   const resolver = { async read(reference: string) { const artifact = artifacts.get(reference); if (!artifact) throw new Error("MISSING_FIXTURE"); return artifact; } };
-  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, nowMs: now, evidence: resolver })).rejects.toThrow("NON_GOOGLE_COST_BOUND_HELD");
-  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, nowMs: now, evidence: { async read(reference) { const artifact = await resolver.read(reference); return reference === "evidence:operator_homelab_policy" ? { ...artifact, bytes: new TextEncoder().encode("tampered") } : artifact; } } })).rejects.toThrow("NON_GOOGLE_COST_EVIDENCE_ARTIFACT_INVALID");
-  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256: hex("b"), nowMs: now, evidence: resolver })).rejects.toThrow("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
-  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 10_000, candidateSha256, facts: bound.facts.map((fact) => fact.role === "documented_scoped_zero" ? { ...fact, evidence: { ...fact.evidence, sourceKind: "official_openai_model" as const, sourceUrl: OPENAI_RESPONSES_PRICING_URL } } : fact) })).toThrow("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
-  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 1, candidateSha256, facts: [] })).toThrow("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
+  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, topologySha256, nowMs: now, evidence: resolver })).rejects.toThrow("NON_GOOGLE_COST_BOUND_HELD");
+  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, topologySha256, nowMs: now, evidence: { async read(reference) { const artifact = await resolver.read(reference); return reference === "evidence:operator_homelab_policy" ? { ...artifact, bytes: new TextEncoder().encode("tampered") } : artifact; } } })).rejects.toThrow("NON_GOOGLE_COST_EVIDENCE_ARTIFACT_INVALID");
+  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256: hex("b"), topologySha256, nowMs: now, evidence: resolver })).rejects.toThrow("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 10_000, candidateSha256, topologySha256, facts: bound.facts.map((fact) => fact.role === "documented_scoped_zero" ? { ...fact, evidence: { ...fact.evidence, sourceKind: "official_openai_model" as const, sourceUrl: OPENAI_RESPONSES_PRICING_URL } } : fact) })).toThrow("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
+  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 1, candidateSha256, topologySha256, facts: [] })).toThrow("NON_GOOGLE_COST_COMPONENT_COVERAGE_REQUIRED");
 });
 
 test("native token pricing charges input/cache/output once and holds unsupported cache writes", async () => {
@@ -108,6 +114,9 @@ test("non-Google catalog accepts only a fresh parsed source-bound model rate and
   await expect(captureOpenAiResponsesPricingDocument({ now: () => now, fetch: async () => Response.redirect("https://example.test/", 302) })).rejects.toThrow("OPENAI_PRICE_SOURCE_RESPONSE_REJECTED");
   await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body>changed document</body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
   await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body><code>gpt-4.1-2025-04-14</code></body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const otherCards = '<code>other-2025-04-14</code><div>Input</div><div>$1.00</div></div><div><div>Cached input</div><div>$0.10</div></div><div><div>Output</div><div>$2.00</div></div>';
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body><code>gpt-4.1-2025-04-14</code>${otherCards}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body>${new TextDecoder().decode(source)}${otherCards}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
 });
 
 publicSourceIntegration("the retained fixed OpenAI HTML source reaches source-bound native receipt math", async () => {
@@ -198,6 +207,16 @@ test("missing response identity remains held and is never resent", async () => {
   expect(await client.dispatch({ operationId: "operation:openai-2", idea: "One focused counter", systemInstruction: "Return JSON only", maximumInputTokens: 1_000, maximumOutputTokens: 200 })).toMatchObject({ status: "unknown", reason: "response_id_unknown", originalOperationOnly: true });
   expect(await client.reconcileOriginal({ operationId: "operation:openai-2" })).toMatchObject({ status: "unknown", reason: "response_id_unknown" });
   expect(posts).toBe(1);
+});
+
+test("a non-claiming journal collision cannot observe another immutable original", async () => {
+  let calls = 0;
+  const baseline = await rate();
+  const client = createOpenAiResponsesClient({ candidateSha256: hex("a"), credentialReference: "openai:api-key:production-reference", model: baseline.model, rate: baseline, maximumChargeMicros: 10_000_000,
+    journal: { async claim(entry) { return { claimed: false, entry: { ...entry, candidateSha256: hex("e") } }; }, async read() { calls++; throw new Error("GET_JOURNAL_MUST_NOT_RUN"); }, async write() { calls++; throw new Error("WRITE_JOURNAL_MUST_NOT_RUN"); } },
+    port: { async create() { calls++; throw new Error("POST_MUST_NOT_RUN"); }, async get() { calls++; throw new Error("GET_MUST_NOT_RUN"); } }, now: () => now });
+  expect(await client.dispatch({ operationId: "operation:collision", idea: "One focused counter", systemInstruction: "Return JSON only", maximumInputTokens: 1_000, maximumOutputTokens: 200 })).toMatchObject({ status: "unknown", reason: "receipt_invalid", originalOperationOnly: true });
+  expect(calls).toBe(0);
 });
 
 test("stale and cap refusal never claims an operation or reports paid ambiguity", async () => {

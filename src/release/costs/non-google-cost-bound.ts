@@ -77,6 +77,7 @@ const CostEvidenceSchema = z.object({
   precision: z.number().int().min(0).max(6),
   scope: z.string().min(16).max(1024),
   candidateSha256: DigestSchema,
+  topologySha256: DigestSchema,
 }).strict().superRefine((value, context) => {
   if (value.freshUntilMs <= value.observedAtMs) context.addIssue({ code: "custom", message: "NON_GOOGLE_COST_EVIDENCE_STALE" });
   if (value.fx.sourceDocumentSha256 !== value.sourceDocumentSha256) context.addIssue({ code: "custom", message: "NON_GOOGLE_COST_FX_UNBOUND" });
@@ -119,12 +120,17 @@ function decodeHtml(value: string): string { return value.replace(/&(amp|lt|gt|q
 function parseOfficialHtml(bytes: Uint8Array, model: string) {
   const html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   if (!/^\s*<!doctype html|^\s*<html\b/iu.test(html) || /\u0000/u.test(html)) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const modelCode = new RegExp(`<code[^>]*>\\s*${model.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*<\\/code>`, "u");
-  if (!modelCode.test(html)) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  const code = /<code[^>]*>\s*([^<]+?)\s*<\/code>/gu;
+  const headings = [...html.matchAll(code)].map(match => ({ value: decodeHtml(match[1]!), index: match.index! }));
+  if (!headings.some(heading => heading.value === model)) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
   const card = /<div>Input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Cached input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Output<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>/gu;
   const matches = [...html.matchAll(card)];
-  if (matches.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const [input, cached, output] = matches[0]!.slice(1).map((value) => decodeHtml(value));
+  const bound = matches.filter(match => {
+    const preceding = headings.filter(heading => heading.index < match.index!).at(-1);
+    return preceding?.value === model;
+  });
+  if (matches.length !== 1 || bound.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const [input, cached, output] = bound[0]!.slice(1).map((value) => decodeHtml(value));
   return { currency: "USD" as const, inputMicrosPerMillion: micros(input!), cachedInputMicrosPerMillion: micros(cached!), outputMicrosPerMillion: micros(output!) };
 }
 function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: string) {
@@ -157,13 +163,14 @@ export function priceOpenAiResponsesUsage(input: Readonly<{ rate: OpenAiResponse
   return freeze({ status: "priced" as const, costMicros: safeMicros(BigInt(inputChargeMicros) + BigInt(cachedInputChargeMicros) + BigInt(cacheWriteChargeMicros) + BigInt(outputChargeMicros)), inputChargeMicros, cachedInputChargeMicros, cacheWriteChargeMicros, outputChargeMicros });
 }
 
-export function createNonGoogleCostBound(input: Readonly<{ maximumChargeMicros: number; candidateSha256: string; facts: readonly NonGoogleCostFact[] }>) {
+export function createNonGoogleCostBound(input: Readonly<{ maximumChargeMicros: number; candidateSha256: string; topologySha256: string; facts: readonly NonGoogleCostFact[] }>) {
   const maximumChargeMicros = NonnegativeMicrosSchema.parse(input.maximumChargeMicros);
   const candidateSha256 = DigestSchema.parse(input.candidateSha256);
+  const topologySha256 = DigestSchema.parse(input.topologySha256);
   const facts = input.facts.map((fact) => NonGoogleCostFactSchema.parse(fact));
-  if (facts.length !== NON_GOOGLE_COST_ROLES.length || facts.some((fact, index) => fact.role !== NON_GOOGLE_COST_ROLES[index])) throw new Error("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
-  if (new Set(facts.map((fact) => fact.costType)).size !== facts.length) throw new Error("NON_GOOGLE_COST_TYPE_DUPLICATE");
+  if (facts.length !== CostTypeSchema.options.length || new Set(facts.map((fact) => fact.costType)).size !== CostTypeSchema.options.length || !CostTypeSchema.options.every(type => facts.some(fact => fact.costType === type))) throw new Error("NON_GOOGLE_COST_COMPONENT_COVERAGE_REQUIRED");
   if (facts.some((fact) => fact.evidence.candidateSha256 !== candidateSha256)) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  if (facts.some((fact) => fact.evidence.topologySha256 !== topologySha256)) throw new Error("NON_GOOGLE_COST_TOPOLOGY_MISMATCH");
   for (const fact of facts) {
     const kind = fact.evidence.sourceKind;
     const expected = fact.role === "authoritative_native_usage" ? "official_openai_model"
@@ -174,19 +181,21 @@ export function createNonGoogleCostBound(input: Readonly<{ maximumChargeMicros: 
     if (kind === "official_openai_model" && fact.evidence.sourceUrl !== OPENAI_RESPONSES_PRICING_URL) throw new Error("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
     if (kind !== "official_openai_model" && fact.evidence.sourceUrl === OPENAI_RESPONSES_PRICING_URL) throw new Error("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
   }
-  const heldCostTypes = facts.filter((fact): fact is z.infer<typeof HeldFactSchema> => fact.role === "unknown_held").map((fact) => fact.costType);
-  return freeze({ schemaVersion: "non-google-cost-bound-v2" as const, maximumChargeMicros, candidateSha256, facts: freeze(facts), heldCostTypes: freeze(heldCostTypes) });
+  const heldCostTypes = facts.filter((fact): fact is z.infer<typeof HeldFactSchema> => fact.status === "held").map((fact) => fact.costType);
+  return freeze({ schemaVersion: "non-google-cost-bound-v2" as const, maximumChargeMicros, candidateSha256, topologySha256, facts: freeze(facts), heldCostTypes: freeze(heldCostTypes) });
 }
 
 /** The admission path must call this immediately before asserting a bound. */
-export async function assertNonGoogleCostBoundAuthorizable(input: Readonly<{ bound: ReturnType<typeof createNonGoogleCostBound>; candidateSha256: string; nowMs: number; evidence: CostEvidenceArtifactResolver }>): Promise<void> {
+export async function assertNonGoogleCostBoundAuthorizable(input: Readonly<{ bound: ReturnType<typeof createNonGoogleCostBound>; candidateSha256: string; topologySha256: string; nowMs: number; evidence: CostEvidenceArtifactResolver }>): Promise<void> {
   const candidateSha256 = DigestSchema.parse(input.candidateSha256);
   if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("NON_GOOGLE_COST_CLOCK_INVALID");
   if (input.bound.candidateSha256 !== candidateSha256) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  if (input.bound.topologySha256 !== DigestSchema.parse(input.topologySha256)) throw new Error("NON_GOOGLE_COST_TOPOLOGY_MISMATCH");
   for (const fact of input.bound.facts) {
     if (fact.status !== "available") throw new Error("NON_GOOGLE_COST_BOUND_HELD");
     if (fact.evidence.freshUntilMs <= input.nowMs) throw new Error("NON_GOOGLE_COST_EVIDENCE_STALE");
     if (fact.evidence.candidateSha256 !== candidateSha256) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+    if (fact.evidence.topologySha256 !== input.bound.topologySha256) throw new Error("NON_GOOGLE_COST_TOPOLOGY_MISMATCH");
     const artifact = await input.evidence.read(fact.evidence.artifactReference);
     if (!(artifact.bytes instanceof Uint8Array) || artifact.sourceUrl !== fact.evidence.sourceUrl || await sha256(artifact.bytes) !== fact.evidence.sourceArtifactSha256 || fact.evidence.sourceArtifactSha256 !== fact.evidence.sourceDocumentSha256) throw new Error("NON_GOOGLE_COST_EVIDENCE_ARTIFACT_INVALID");
   }

@@ -79,6 +79,13 @@ function receiptMatchesEntry(entry: JournalEntry, receipt: OpenAiResponsesProvid
     && receipt.rateQuoteSha256 === entry.rate.quoteSha256
     && (entry.responseId === undefined || receipt.responseId === entry.responseId);
 }
+function sameOriginal(left: JournalEntry, right: JournalEntry): boolean {
+  return left.operationId === right.operationId && left.requestSha256 === right.requestSha256 && left.nonce === right.nonce
+    && left.clientRequestId === right.clientRequestId && left.candidateSha256 === right.candidateSha256
+    && left.credentialReference === right.credentialReference && left.model === right.model
+    && canonicalJson(left.rate) === canonicalJson(right.rate) && left.maximumChargeMicros === right.maximumChargeMicros
+    && canonicalJson(left.request) === canonicalJson(right.request);
+}
 function stored(entry: JournalEntry): OpenAiResponsesProviderReceipt | undefined {
   if (entry.completedReceipt === undefined) return undefined;
   const receipt = parseOpenAiResponsesProviderReceipt(entry.completedReceipt);
@@ -116,7 +123,7 @@ export function createOpenAiResponsesClient(input: Readonly<{ candidateSha256: s
       const claimed = await input.journal.claim(entry);
       const original = OpenAiResponsesJournalEntrySchema.safeParse(claimed.entry);
       if (!original.success) throw new Error("OPENAI_RESPONSES_JOURNAL_INVALID");
-      if (!claimed.claimed) return observe(original.data);
+      if (!claimed.claimed) return sameOriginal(entry, original.data) ? observe(original.data) : unknown(operationId, "receipt_invalid");
       let raw: Uint8Array;
       try { raw = (await input.port.create({ clientRequestId: entry.clientRequestId, body: requestBody(entry) })).bytes; } catch { return unknown(operationId, "response_id_unknown"); }
       let responseId: string | undefined;

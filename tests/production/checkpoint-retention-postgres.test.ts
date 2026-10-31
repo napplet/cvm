@@ -96,6 +96,7 @@ integration("expired checkpoint deletion remains discoverable across a lost ACK 
     const objects = new GcsObjectStoreAdapter({ config: { bucket: "retention-test-bucket", projectId: "retention-test-project" }, client: objectClient });
     let deletes = 0;
     const objectPort: ObjectStorePort = {
+      reconciliationMode: objects.reconciliationMode,
       createImmutable: value => objects.createImmutable(value),
       readExact: value => objects.readExact(value),
       observeExactByKey: value => objects.observeExactByKey(value),

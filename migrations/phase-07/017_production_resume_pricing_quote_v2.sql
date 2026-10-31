@@ -14,6 +14,7 @@ BEGIN
     EXECUTE pg_catalog.format('ALTER TABLE production_real.resume_pricing_quotes DROP CONSTRAINT %I', prior_constraint);
   END IF;
 END $$;
+ALTER TABLE production_real.resume_pricing_quotes DROP CONSTRAINT IF EXISTS resume_pricing_quote_document_version;
 ALTER TABLE production_real.resume_pricing_quotes ADD CONSTRAINT resume_pricing_quote_document_version CHECK (
   quote_json ?& ARRAY['schemaVersion','quoteReference','quoteSha256','preparationKey','preparedAtMs','expiresAtMs','context','pricing','maximumUsdMicros','maximumSat','priceSourcesSha256']
   AND quote_json->'context' ?& ARRAY['realm','accountId','sessionId','checkpointId','checkpointSha256','checkpointVersion','expectedSessionVersion','expectedArtifactVersion','pendingAction','commandSha256','originalOperationId','originalSettlementSha256','originalCommandMaximum','policyVersion','toolchainId','retentionUntilMs']

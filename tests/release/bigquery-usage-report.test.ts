@@ -23,7 +23,9 @@ test("BigQuery reporting uses deterministic jobs.insert ids and only recovers th
     journal: createMemoryBigQueryUsageReportJournal(), artifacts: artifacts(),
     fetch: async (url, init) => {
       calls.push({ url, body: typeof init.body === "string" ? init.body : undefined });
-      const payload = url.includes("/queries/") ? { jobComplete: true, jobReference: { jobId: "usage_555555555555555555555555555555555555555555555555", location: "US" }, rows: [{ f: [{ v: "1.000000" }, { v: "-0.100000" }] }] } : { jobComplete: true, jobReference: { jobId: "job", location: "US" }, totalBytesProcessed: "10" };
+      const submitted = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+      const queryJobId = /\/queries\/([^?]+)/u.exec(url)?.[1];
+      const payload = url.includes("/queries/") ? { jobComplete: true, jobReference: { jobId: queryJobId, location: "US" }, totalBytesProcessed: "10", rows: [{ f: [{ v: "1.000000" }, { v: "-0.100000" }] }] } : { jobReference: { jobId: submitted?.jobReference?.jobId, location: submitted?.jobReference?.location }, statistics: { totalBytesProcessed: "10" } };
       return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
     },
   });

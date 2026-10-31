@@ -8,6 +8,12 @@ type BigQueryJsonResponse = Readonly<{ payload: unknown; raw: Uint8Array }>;
 const JobIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,1024}$/u);
 const BytesSchema = z.string().regex(/^[0-9]{1,18}$/u);
 const QueryResultSchema = z.object({ jobComplete: z.boolean().optional(), jobReference: z.object({ jobId: JobIdSchema, location: z.string().min(1).max(32) }).strict(), totalBytesProcessed: BytesSchema.optional(), rows: z.array(z.object({ f: z.array(z.object({ v: z.string() }).strict()) }).strict()).optional(), pageToken: z.string().min(1).max(1_024).optional() }).strict();
+/** jobs.insert returns a Job resource rather than a getQueryResults response.
+ * Keep only the identity and dry-run byte fact we can independently bind. */
+const JobInsertSchema = z.object({
+  jobReference: z.object({ jobId: JobIdSchema, location: z.string().min(1).max(32) }).strict(),
+  statistics: z.object({ totalBytesProcessed: BytesSchema.optional() }).passthrough().optional(),
+}).passthrough();
 
 export type BigQueryUsageReportJournalRecord = Readonly<{
   reportRequestSha256: string;
@@ -107,8 +113,10 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
         await input.journal.mark({ reportRequestSha256: grant.reportRequestSha256, expected: "claimed", state: "dry_run_dispatch_intent" });
         const response = await request(`/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, dryRunJobId, true));
         if (!response) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
-        const dry = QueryResultSchema.parse(response.payload);
-        const bytes = dry.totalBytesProcessed ?? "0";
+        const dry = JobInsertSchema.parse(response.payload);
+        if (dry.jobReference.jobId !== dryRunJobId || dry.jobReference.location !== grant.location) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
+        const bytes = dry.statistics?.totalBytesProcessed;
+        if (!bytes) return Object.freeze({ status: "unknown" as const, providerJobId: dryRunJobId, reportRequestSha256: grant.reportRequestSha256 });
         if (BigInt(bytes) > BigInt(grant.maximumBytesBilled)) throw new Error("BIGQUERY_USAGE_REPORT_BYTE_CAP_EXCEEDED");
         queryCostMicros(bytes, grant);
         await input.journal.mark({ reportRequestSha256: grant.reportRequestSha256, expected: "dry_run_dispatch_intent", state: "dry_run_complete", dryRunBytes: bytes });
@@ -124,7 +132,10 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
         if (!bytes || BigInt(bytes) > BigInt(grant.maximumBytesBilled)) throw new Error("BIGQUERY_USAGE_REPORT_BYTE_CAP_EXCEEDED");
         queryCostMicros(bytes, grant);
         await input.journal.mark({ reportRequestSha256: grant.reportRequestSha256, expected: "dry_run_complete", state: "query_dispatch_intent" });
-        await request(`/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, queryJobId, false));
+        const submitted = await request(`/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, queryJobId, false));
+        if (!submitted) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
+        const submittedJob = JobInsertSchema.parse(submitted.payload);
+        if (submittedJob.jobReference.jobId !== queryJobId || submittedJob.jobReference.location !== grant.location) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
         await input.journal.mark({ reportRequestSha256: grant.reportRequestSha256, expected: "query_dispatch_intent", state: "query_submitted" });
       }
       const afterDispatch = await input.journal.claim({ reportRequestSha256: grant.reportRequestSha256, dryRunJobId, queryJobId, state: "claimed" });
@@ -133,7 +144,10 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
       if (!observed) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
       if (recovered) await input.journal.mark({ reportRequestSha256: grant.reportRequestSha256, expected: "query_dispatch_intent", state: "query_submitted" });
       const results = QueryResultSchema.parse(observed.payload);
+      if (results.jobReference.jobId !== queryJobId || results.jobReference.location !== grant.location) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
       if (!results.jobComplete) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
+      if (!results.totalBytesProcessed || BigInt(results.totalBytesProcessed) > BigInt(grant.maximumBytesBilled)) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
+      queryCostMicros(results.totalBytesProcessed, grant);
       const row = results.rows?.[0]?.f;
       if (!row || results.pageToken) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
       const grossMeteredMicros = decimalUsdToMicros(row[0]!.v);

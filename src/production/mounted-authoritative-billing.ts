@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { createBillingObservationGrant } from "../release/authoritative-usage-report";
-import { createBigQueryUsageReportCollector, type BigQueryUsageReportArtifactStore } from "../release/deployment/bigquery-usage-report";
+import { createBigQueryUsageReportCollector, type BigQueryFetch, type BigQueryUsageReportArtifactStore } from "../release/deployment/bigquery-usage-report";
 import type { GoogleOperationJournal } from "../release/deployment/google-clients";
 import { createPostgresBigQueryUsageReportJournal } from "../release/deployment/postgres-provider-journals";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
@@ -105,6 +105,10 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
   pool: PostgresSqlPool;
   objects: ObjectStorePort;
   bucket: string;
+  /** Internal deterministic-transport seam for SQL integration tests. The
+   * mounted factory never supplies this; production uses the fixed HTTPS
+   * origin in the collector. */
+  fetch?: BigQueryFetch;
   now?: () => number;
 }>) {
   const configuration = MountedBigQueryUsageReportConfigurationSchema.parse(input.configuration);
@@ -118,7 +122,7 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
   const collector = createBigQueryUsageReportCollector({
     projectId, quotaProjectId, principal, tokenSource: input.tokenSource,
     journal: createPostgresBigQueryUsageReportJournal(input.billingJournal),
-    artifacts: artifacts({ bucket: input.bucket, objects: input.objects }), now,
+    artifacts: artifacts({ bucket: input.bucket, objects: input.objects }), ...(input.fetch ? { fetch: input.fetch } : {}), now,
   });
   return Object.freeze({
     async capture(value: CaptureInput) {

@@ -169,13 +169,34 @@ function matchesSelector(sku: Record<string, unknown>, selector: GoogleCatalogSe
   if (selector.resourceGroup !== undefined && text((category as Record<string, unknown>).resourceGroup) !== selector.resourceGroup) return false;
   return true;
 }
-function priceAfter(textSource: string, matcher: RegExp): bigint { const match = matcher.exec(textSource); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); return decimalToNanos(match[1]); }
 function officialText(document: string): string {
   /* Modal's animated price digits carry one authoritative screen-reader value.
    * Preserve that value before stripping markup; otherwise the visual animation
    * turns $0.00003942 into a sequence of unrelated digits. */
   const srOnly = [...document.matchAll(/<span[^>]*class=["'][^"']*\bsr-only\b[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>/giu)].map((match) => match[1]);
   return `${srOnly.join(" ")} ${document.replace(/<[^>]*>/gu, " ")}`.replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ");
+}
+function renderedText(document: string): string { return document.replace(/<[^>]*>/gu, " ").replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ").trim(); }
+function modalSandboxSection(document: string): string {
+  const starts = [...document.matchAll(/<section\b(?=[^>]*\bid=["']sandboxes["'])[^>]*>/giu)];
+  const headings = [...document.matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2\s*>/giu)].filter((heading) => renderedText(heading[1] ?? "") === "Modal Sandbox pricing");
+  if (starts.length !== 1 || headings.length !== 1 || starts[0]?.index === undefined || headings[0]?.index === undefined) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  const start = starts[0]; const sectionTags = /<\/?section\b[^>]*>/giu; sectionTags.lastIndex = start.index + start[0].length; let depth = 1;
+  for (;;) {
+    const tag = sectionTags.exec(document);
+    if (!tag || tag.index === undefined) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+    depth += tag[0].startsWith("</") ? -1 : 1;
+    if (depth === 0) {
+      const end = tag.index + tag[0].length;
+      if (headings[0].index < start.index || headings[0].index >= end) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+      return document.slice(start.index, end);
+    }
+  }
+}
+function uniquePriceAfter(textSource: string, matcher: RegExp): bigint {
+  const matches = [...textSource.matchAll(new RegExp(matcher.source, `${matcher.flags.replace(/g/gu, "")}g`))];
+  if (matches.length !== 1 || !matches[0]?.[1]) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+  return decimalToNanos(matches[0][1]);
 }
 function flyMonthlyMachinePrice(document: string, preset: string, memory: string): bigint {
   const escapedPreset = preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const escapedMemory = memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -259,7 +280,7 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
       },
       async readOfficialPricing(input: Parameters<OfficialPricingSourcePort["readOfficialPricing"]>[0]) {
         const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);
-        const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n))();
+        const priceNanos = provider === "modal" ? (() => { const sandbox = officialText(modalSandboxSection(document)); const cpu = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu); const memory = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n))();
         const unit = provider === "modal" ? options.workers.modal.unit : options.workers.fly.unit;
         return snapshot(`${provider}-official-pricing`, bytes, [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }]);
       },

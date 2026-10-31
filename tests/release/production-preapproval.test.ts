@@ -47,7 +47,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
           { skuId: "RUN-US", serviceRegions: ["us-central1"], pricingInfo: [{ currencyConversionRate: 1, pricingExpression: { usageUnit: "seconds", tieredRates: [{ unitPrice: { currencyCode: "USD", units: "0", nanos: 2000 } }] } }] },
         ] }));
       }
-      if (url === "https://modal.com/pricing") return new Response("Modal Sandbox $0.00003942 / core / sec $0.00000667 / GiB / sec");
+      if (url === "https://modal.com/pricing") return new Response("<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2><div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>$0.00003942 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>$0.00000667 / GiB / sec</span></div></section>");
       if (url === "https://docs.fly.io/about/pricing") return new Response("shared-cpu-1x 256MB $0.00000078 / second");
       return new Response("not found", { status: 404 });
     },
@@ -71,7 +71,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
     { componentId: "cloud_run.europe-west1.cpu", region: "europe-west1", provider: "cloud_run", skuId: "RUN-EU", unit: "worker-second", priceMicros: 1 },
     { componentId: "cloud_run.us-central1.cpu", region: "us-central1", provider: "cloud_run", skuId: "RUN-US", unit: "worker-second", priceMicros: 2 },
   ] });
-  expect(modal).toMatchObject({ quotes: [{ provider: "modal", unit: "worker-100-seconds" }] });
+  expect(modal).toMatchObject({ quotes: [{ provider: "modal", unit: "worker-100-seconds", priceNanos: "4609000", priceMicros: 4609 }] });
   expect(fly).toMatchObject({ quotes: [{ provider: "fly", unit: "worker-100-seconds" }] });
   expect(calls).toEqual([
     "https://cloudbilling.googleapis.com/v1/services?pageSize=5000",

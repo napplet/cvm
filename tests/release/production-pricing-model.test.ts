@@ -114,6 +114,45 @@ test.each([301, 302, 307, 308])("official Gemini price capture rejects HTTP %s r
   expect(calls).toBe(1);
 });
 
+function modalPricingReader(document: string, unit: "worker-second" | "worker-100-seconds") {
+  return createOfficialPricingSources({
+    now: () => 1_000,
+    fetch: async (url) => String(url) === "https://modal.com/pricing" ? new Response(document) : new Response("not found", { status: 404 }),
+    google: { selectors: [{ componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" }] },
+    workers: { modal: { cpuCores: 1, memoryGiB: 1, unit }, fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" } },
+  });
+}
+
+test("Modal worker pricing reads only one rendered Sandbox section and preserves exact pricing units", async () => {
+  const generalCompute = "<section id=\"general\"><h2>General compute pricing</h2>CPU $0.00001310 / core / sec Memory $0.00000222 / GiB / sec</section>";
+  const sandbox = "<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2><div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>$0.00003942 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>$0.00000667 / GiB / sec</span></div></section>";
+  await expect(modalPricingReader(`${generalCompute}${sandbox}`, "worker-second").sources.readOfficialPricing({ provider: "modal" })).resolves.toMatchObject({
+    quotes: [{ unit: "worker-second", priceNanos: "46090", priceMicros: 47 }],
+  });
+  await expect(modalPricingReader(`${generalCompute}${sandbox}`, "worker-100-seconds").sources.readOfficialPricing({ provider: "modal" })).resolves.toMatchObject({
+    quotes: [{ unit: "worker-100-seconds", priceNanos: "4609000", priceMicros: 4609 }],
+  });
+
+  await expect(modalPricingReader(generalCompute, "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  await expect(modalPricingReader("<section data-id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU (non-preemptible) $0.00000001 / core / sec Memory (non-preemptible) $0.00000667 / GiB / sec</section>", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  await expect(modalPricingReader("<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU $0.00003942 / core / sec</section>", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+  await expect(modalPricingReader(`${sandbox}${sandbox}`, "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  await expect(modalPricingReader("<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU $0.00003942 / core / sec", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+});
+
+test("Modal worker pricing rejects preemptible, unlabelled, unrelated, duplicate, and cross-element rate rows", async () => {
+  const pricing = (rows: string) => `<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>${rows}</section>`;
+  const expected = "MODAL_SANDBOX_PRICING_RATE_REJECTED";
+  await expect(modalPricingReader(pricing("Preemptible CPU $0.00000001 / core / sec Preemptible Memory $0.00000001 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("$0.00003942 / core / sec $0.00000667 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("Storage (non-preemptible) $0.00000001 / core / sec Network (non-preemptible) $0.00000001 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div>CPU (non-preemptible) $0.00003942 / core / sec</div><div>Memory (non-preemptible) $0.00000667 / GiB / sec</div><div>CPU (non-preemptible) $0.00000001 / core / sec</div><div>Memory (non-preemptible) $0.00000001 / GiB / sec</div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div><span>CPU (non-preemptible)</span><span>Storage (non-preemptible) $0.00000001 / core / sec</span></div><div>Memory (non-preemptible) $0.00000667 / GiB / sec</div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div>CPU (non-preemptible) $0.00003942 / core / sec</div><div><span>Memory (non-preemptible)</span><span>Storage (non-preemptible) $0.00000001 / GiB / sec</span></div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>Storage $0.00000001 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>$0.00000667 / GiB / sec</span></div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>$0.00003942 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>Storage $0.00000001 / GiB / sec</span></div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+});
+
 test("USD receipt settlement captures a fresh executable USD/SAT source quote and always rounds against the service", async () => {
   const sources = createOfficialPricingSources({ now: () => Date.parse("2026-10-27T00:00:00.000Z"), fetch: async (url) => {
     if (String(url) !== BTC_USD_TICKER_URL) return new Response("no", { status: 404 });

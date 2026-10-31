@@ -121,6 +121,10 @@ export const ReleaseControllerStateSchema = z.object({
   authorizationRequestSha256: DigestSchema.nullable(),
   authorizationReceiptSha256: DigestSchema.nullable(),
   providerOperationIds: z.array(z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u)).max(16),
+  /** New live states bind their operation snapshots by content digest. The
+   * field stays optional so historical v1/v2 controller states remain
+   * readable, but they cannot become new billing evidence. */
+  providerOperationRecordSha256s: z.array(DigestSchema).max(16).optional(),
   deployedTopologySha256: DigestSchema.nullable(),
   blockReasonCode: z.enum([
     "AUTHORIZATION_REQUIRED", "PROVIDER_UNAVAILABLE", "PROVIDER_AMBIGUOUS", "TOPOLOGY_DRIFT", "COST_EXCEEDED",

@@ -1,4 +1,4 @@
-import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
+import { prepareReleaseWorkspace, ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
 import { loadFinalizedReleaseVerificationAuthority } from "../src/release/production-execution";
@@ -278,17 +278,18 @@ async function main(): Promise<number> {
     return 1;
   }
   try {
-    const workspace = controllerWorkspace();
-    /* Resolve an opaque receipt reference before any candidate discovery. A
-     * nonexistent ID is not allowed to trigger pricing/provider reads just to
-     * learn that it cannot authorize anything. Structural validation remains
-     * below, against the freshly reconstructed controller request. */
-    const controllerReceipt = receipt ? await readControllerReceipt(workspace, receipt) : undefined;
     if (verifyBundle) {
       const decision = await verifyImmutableBundle(verifyBundle);
       console.log(JSON.stringify({ progress: decision.status === "promoted" ? "bundle_verified" : "bundle_blocked", status: decision.status, bundleSha256: decision.bundleSha256, evidenceSha256: decision.evidenceSha256, cleanup: decision.cleanup }));
       return decision.status === "promoted" ? 0 : 1;
     }
+    const workspace = controllerWorkspace();
+    const workspaceCapability = await prepareReleaseWorkspace(workspace);
+    /* Resolve an opaque receipt reference before any candidate discovery. A
+     * nonexistent ID is not allowed to trigger pricing/provider reads just to
+     * learn that it cannot authorize anything. Structural validation remains
+     * below, against the freshly reconstructed controller request. */
+    const controllerReceipt = receipt ? await readControllerReceipt(workspace, receipt) : undefined;
     if (setupRequested) {
       const candidateSha256 = await releaseCandidateSha256(candidatePath!);
       const execution = await executionReadinessProjection({ candidateSha256, workspace });
@@ -330,7 +331,7 @@ async function main(): Promise<number> {
     if (!status && !dryRun) {
       const config = await loadCertifierConfig();
       const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
-      const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session });
+      const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session });
       console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
       return result.state.status === "completed" ? 0 : 1;
     }
@@ -372,10 +373,11 @@ async function main(): Promise<number> {
     let result: ReleaseCertificationResult | undefined;
     try {
       result = status
-        ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()
+        ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace, workspaceCapability }).status()
         : await runReleaseCertification({
           candidatePath: candidatePath!,
           workspace,
+          workspaceCapability,
           dryRun: true,
           providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
           // A project maximum-spend policy is useful only for local dry-run
@@ -440,7 +442,7 @@ async function main(): Promise<number> {
         workspace,
         authorization: { request: result.authorizationRequest, receipt: resolvedReceipt },
       });
-      const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session, collectorImage: preparedCollector! });
+      const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session, collectorImage: preparedCollector! });
       console.log(JSON.stringify({
         progress: live.state.status,
         candidateSha256: live.state.candidate.candidateSha256,

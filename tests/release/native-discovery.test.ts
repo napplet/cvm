@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { createNativeReleaseDiscoveryRegistry, nativeDiscoveryLocatorEnvironment } from "../../src/release/native-discovery";
@@ -8,6 +7,12 @@ import { ReleaseCertificationController } from "../../src/release/controller";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
 
 const digest = (letter: string) => letter.repeat(64);
+
+async function createWorkspace(prefix: string): Promise<string> {
+  const root = join(import.meta.dir, "..", "..", ".runtime", "release-certification", "native-discovery-v1", "native-discovery-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+}
 
 test("controller-owned native discovery retains finite auth hashes and references without native output", async () => {
   const commands: string[] = [];
@@ -158,7 +163,7 @@ test("every implemented family has candidate-bound finite discovery metadata wit
 });
 
 test("candidate-bound discovery changes regenerate the authorization request", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-native-discovery-"));
+  const workspace = await createWorkspace("napplet-cvm-native-discovery-");
   const candidatePath = join(workspace, "candidate.json");
   try {
     await writeFile(candidatePath, JSON.stringify({ schemaVersion: 1, status: "review_ready", sourceRevision: "a".repeat(40) }));

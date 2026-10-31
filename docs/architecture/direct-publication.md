@@ -229,11 +229,21 @@ files, links, changed bytes and malformed archives. Package code is never run.
 
 The immutable report records source URLs, metadata/archive/installed-tree hashes,
 the audit script and root input hashes, and status `measured_not_approved`.
-Registry signatures and source provenance remain unverified. This report and
-the separately generated OTel renewal-review artifact are inputs to the pending
-dependency decision; they grant no approval and leave the historical exact-root
-guards intact. A valid decision and matching pin checks remain required before
-the affected CI checks and merge can pass.
+Registry signatures and source provenance remain unverified. The report and
+separate OTel renewal-review artifact remain review inputs with no authority.
+
+The [2026-10-31 delegated operator decision](https://github.com/napplet/cvm/issues/94#issuecomment-6536301388)
+renews the unchanged six-package OTel subject against those exact current root
+inputs. Immutable decision `52dc056fc3e98a81edc7f4642c3829fccba3ae81c54a711cdfc0ea9d0febb3f4`
+retains the original scope and expiry: disposable local Bun/Collector smoke and
+exact root pins after successful smoke. Actual fresh smoke
+`18b42a8a4f06ce3feeab2996e2aad36784a360612c153b1a182a4d9062bed6ca`
+binds that decision, current root inputs, measured Collector image and output.
+Historical records and the pending-human audit remain unchanged. The decision
+records agent delegation, grants no direct-human/signer provenance, and provides
+no release, promotion, provider, telemetry-data or protected-effect authority.
+Every future root/subject drift still requires review; the exact guard remains
+in force. Independent PR review and all required CI remain merge prerequisites.
 
 ### Direct owner relay and service attestation
 

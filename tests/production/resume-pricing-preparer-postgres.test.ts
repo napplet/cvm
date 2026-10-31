@@ -1068,7 +1068,13 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     let mountedTerminalResult: unknown;
     try { mountedTerminalResult = await mountedService.resume(workspaceResume); }
     catch (error) { mountedTerminalError = error; }
-    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)};SETTLEMENT:${mountedSettlementError instanceof Error ? mountedSettlementError.message : "none"};POSTS:${modelPosts};SQL:${mountedSql.slice(-12).map(sql => sql.replaceAll(/\s+/gu, " ").slice(0, 160)).join("|")}`);
+    if (failFirstMountedTerminalWrite) {
+      const action = await metered.findMeteredAction(accountId, workspaceClaim.actionKey);
+      const claim = await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey);
+      const provider = (await admin.query("SELECT state FROM production_real.provider_operations WHERE id=$1", [workspaceClaim.operationId])).rows[0];
+      const journal = await vertexJournal.read(workspaceClaim.operationId);
+      throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)};SETTLEMENT:${mountedSettlementError instanceof Error ? mountedSettlementError.message : "none"};POSTS:${modelPosts};ACTION:${action?.status ?? "missing"};CLAIM:${claim?.state ?? "missing"};PROVIDER:${provider?.state ?? "missing"};JOURNAL:${journal ? "present" : "missing"};SQL:${mountedSql.slice(-12).map(sql => sql.replaceAll(/\s+/gu, " ").slice(0, 160)).join("|")}`);
+    }
     if (!(mountedTerminalError instanceof Error) || mountedTerminalError.message !== "TERMINAL_PAUSE_WRITE_FAILED")
       throw new Error(`MOUNTED_TERMINAL_WRITE_OUTCOME_INVALID:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
     expect(modelPosts).toBe(3);

@@ -68,6 +68,57 @@ restore, physical erasure from old backups/WAL, KEK lifecycle, the complete
 post-grace resumed action, or any protected release suite. Backup/WAL expiry and
 restored-service deadline enforcement remain required live retention evidence.
 
+## Unselected PostgreSQL bytea object candidate (D-141)
+
+`postgres-bytea-object-v1` is a no-effect candidate, not a selected authority.
+Migration `019_postgres_bytea_objects.sql` is additive and leaves migrations
+007/008/009 and all historic readers byte-for-byte intact. It provides a
+security-definer-only object surface to a separate `napplet_production_object`
+role/pool; that role has no grant on money, secret or raw object tables. It is
+not the accounting role and its bounded chunk transactions never include money
+rows.
+
+The unchanged `ObjectStorePort` remains the compatibility boundary. A header is
+permanent at `(logical key, generation)` and its per-key serializable head
+allocates a positive JavaScript-safe generation. A tombstone never reuses an old
+physical generation, while a legitimate logical-key recreation receives a new
+higher generation. Reads/deletes require exactly key, generation and checksum;
+they cannot see or remove a replacement generation. `writing`, `sealed`,
+`deleting` and `tombstoned` headers plus bounded ordinal chunks make partial
+writes invisible. The adapter copies caller bytes before hashing/awaiting,
+seals only after count, length and streamed SHA-256 verification, and retries
+only serializable SQL work. A lost commit acknowledgement is held until the
+same original identity is observed; it never dispatches an external effect.
+
+There is intentionally no global 16 MiB cap. New writes have versioned producer
+budgets: ordinary checkpoints preserve their existing uncapped archive contract;
+retained subjects and workspace/artifact paths retain their 16 MiB caller
+bound; migration archives retain 384 KiB × 512 before AES-GCM/tag/base64
+overhead. Historical references retain their exact read contract and bypass new
+write budgets. Admission p95 under bytea/WAL/backup load, capacity, HA fencing
+and one-host recovery remain later selection gates.
+
+### Backup-aware cryptographic expiry
+
+The legacy common mounted KEK remains readable for historical data, but cannot
+prove expiry: a day-29 database snapshot with a wrapped DEK can remain readable
+at day 59. The candidate `PerObjectFileCheckpointCrypto` preserves the existing
+AES-GCM ciphertext, AAD and SQL record format while wrapping each data DEK with
+a distinct per-object KEK kept outside PostgreSQL at every declared custody
+root. Its declared-copy inventory has stable root/file identifiers and checksums.
+The fresh PostgreSQL dump/restore test proves restoration before expiry and then
+denial when every declared key file is erased, even if the old ciphertext and
+wrapped DEK remain in the restored database.
+
+This is a concrete testable lifecycle mechanism, not a claim of HSM or forensic
+erasure: filesystem unlink does not erase Borg-packed archives, WAL, replicas,
+external key brokers or unlisted copies. A real production candidate is held
+until its trusted producer inventories all DB/base-backup/WAL/replica/restore/
+broker key copies and either makes every per-object copy independently erasable
+or proves an exact backup-exclusion/deadline policy. No configuration boolean
+or simulated clock is acceptance evidence. B2 native `fileId` is only the
+measured fallback if this candidate fails those gates; no account is created.
+
 ## Retained-subject recovery boundary
 
 The restore inventory is a read-only view. Before it can be read, the mounted

@@ -7,7 +7,7 @@ import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store"
 import { canonicalJson } from "../promotion/schema";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { ProtectedContinuationCommands } from "../continuity/protected-command";
-import { MountedKekCheckpointCrypto, loadMountedCheckpointKek } from "./checkpoint-crypto";
+import { MountedKekCheckpointCrypto, loadMountedCheckpointKek, type ProductionCheckpointCrypto } from "./checkpoint-crypto";
 import { PendingActionIntentSchema, type PendingActionIntent } from "../continuity/contracts";
 import type { GenerationCommand } from "../phase-04/metered-generation-service";
 
@@ -45,7 +45,7 @@ function rowToStored(row: Record<string, unknown>): StoredEnvelope {
  */
 export class ProductionCheckpointCoordinator {
   readonly #pool: PostgresSqlPool;
-  readonly #crypto: MountedKekCheckpointCrypto;
+  readonly #crypto: ProductionCheckpointCrypto;
   readonly pendingCommands: ProtectedContinuationCommands;
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
@@ -53,12 +53,14 @@ export class ProductionCheckpointCoordinator {
     journal: PostgresOperationJournal;
     kekPath: string;
     readKekFile?: (path: string) => Promise<Uint8Array | string>;
+    /** Candidate-only server crypto dependency; normal composition keeps the mounted KEK default. */
+    crypto?: ProductionCheckpointCrypto;
     now?: () => number;
   }>) {
     assertPostgresOperationJournal(input.journal);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     if (!input.objectStore || typeof input.objectStore.createImmutable !== "function") throw new Error("PRODUCTION_CHECKPOINT_OBJECT_STORE_REQUIRED");
-    this.#crypto = new MountedKekCheckpointCrypto({ pool: input.pool, kekPath: input.kekPath, readFile: input.readKekFile, now: input.now });
+    this.#crypto = input.crypto ?? new MountedKekCheckpointCrypto({ pool: input.pool, kekPath: input.kekPath, readFile: input.readKekFile, now: input.now });
     this.pendingCommands = new ProtectedContinuationCommands({ reference: "mounted-checkpoint-command-kek-v1", load: () => loadMountedCheckpointKek({ kekPath: input.kekPath, readFile: input.readKekFile }) }, input.now ?? Date.now);
     coordinators.add(this);
   }

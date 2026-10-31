@@ -220,7 +220,10 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: hex("retained-idea"), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "3", admissionReference: "fixture:admission" };
-    const pause = await new ContinuationService({ store: fundingDatabase.continuationFunding, includeAdmissionHold: true, clock: { nowMs: () => now } }).pauseForFunding({ intent: pauseIntent });
+    // The source worker is paused because its immediately spendable balance
+    // is exhausted. The later V2 acceptance still revalidates the original
+    // held cap and quote inside its own serializable transaction.
+    const pause = await new ContinuationService({ store: fundingDatabase.continuationFunding, includeAdmissionHold: false, clock: { nowMs: () => now } }).pauseForFunding({ intent: pauseIntent });
     if (!pause) throw new Error("RETAINED_SUBJECT_PAUSE_REQUIRED");
     const paused = await fundingDatabase.continuationFunding.findContinuationPause(accountId, sessionId, 1);
     if (!paused?.liveLeaseToken) throw new Error("RETAINED_SUBJECT_LIVE_LEASE_REQUIRED");

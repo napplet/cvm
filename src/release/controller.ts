@@ -1,4 +1,4 @@
-import { link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
@@ -302,13 +302,27 @@ async function createOrVerify(path: string, content: string, collision: string):
   const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
   try {
+    const temporary = await open(temporaryPath, "r");
+    try { await temporary.sync(); } finally { await temporary.close(); }
     await link(temporaryPath, path);
+    await syncDirectory(dirname(path));
   } catch (error) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
     if (await readFile(path, "utf8") !== content) throw new Error(collision);
   } finally {
     await rm(temporaryPath, { force: true });
   }
+}
+
+async function replaceSynced(path: string, content: string): Promise<void> {
+  const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+  await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+  try {
+    const temporary = await open(temporaryPath, "r");
+    try { await temporary.sync(); } finally { await temporary.close(); }
+    await rename(temporaryPath, path);
+    await syncDirectory(dirname(path));
+  } finally { await rm(temporaryPath, { force: true }); }
 }
 
 /** A durable create-only record is the CAS primitive for an effect claim or
@@ -408,6 +422,25 @@ export class ReleaseCertificationController {
     this.#now = options.now ?? Date.now;
   }
 
+  async #ensureDurableWorkspace(): Promise<void> {
+    let metadata;
+    try { metadata = await lstat(this.#workspace); }
+    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+    if (!metadata.isDirectory()) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    /* The caller provisions this durable anchor. Commit both its directory
+     * metadata and the parent entry before publishing any authority below it. */
+    await this.#syncDirectory(this.#workspace);
+    await this.#syncDirectory(dirname(this.#workspace));
+  }
+
+  async #hasEffectLineage(): Promise<boolean> {
+    for (const directory of ["provider-dispatch-claims", "state-transitions", "provider-operations", "provider-operation-records"]) {
+      try { if ((await readdir(join(this.#workspace, directory)).catch(() => [])).length > 0) return true; }
+      catch { throw new Error("RELEASE_CONTROLLER_RECOVERY_REQUIRED"); }
+    }
+    return false;
+  }
+
   async status(): Promise<ReleaseCertificationResult | undefined> {
     const pointerPath = join(this.#workspace, "current.json");
     let pointerRaw: unknown;
@@ -436,6 +469,7 @@ export class ReleaseCertificationController {
   }
 
   async dryRun(): Promise<ReleaseCertificationResult> {
+    await this.#ensureDurableWorkspace();
     const candidate = await candidateIdentity(this.#candidatePath);
     const topology = await deriveReleaseTopology(candidate.candidateSha256, this.#collectorImage);
     const capabilities = await discoverProviders(this.#providers);
@@ -457,11 +491,10 @@ export class ReleaseCertificationController {
     });
     const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256, estimate);
     let existing: ReleaseCertificationResult | undefined;
-    let replaceInvalidPointer = false;
     try { existing = await this.status(); }
     catch (error) {
       if (error instanceof Error && error.message === "RELEASE_CONTROLLER_CANDIDATE_MISMATCH") throw error;
-      replaceInvalidPointer = true;
+      if (await this.#hasEffectLineage()) throw new Error("RELEASE_CONTROLLER_RECOVERY_REQUIRED");
       existing = undefined;
     }
     if (existing) {
@@ -510,7 +543,7 @@ export class ReleaseCertificationController {
     await createOrVerify(join(this.#workspace, "states", `${final.stateSha256}.json`), `${canonicalJson(final)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     const pointerBase = { version: 1 as const, stateSha256: final.stateSha256, candidateSha256: candidate.candidateSha256 };
     const pointer = { ...pointerBase, pointerSha256: await digest(pointerBase) };
-    if (existing || replaceInvalidPointer) await this.#writeCurrent(final);
+    if (existing) await this.#writeCurrent(final);
     else await createOrVerify(join(this.#workspace, "current.json"), `${canonicalJson(pointer)}\n`, "RELEASE_CONTROLLER_CONCURRENT_WRITE");
     return (await this.status())!;
   }
@@ -570,6 +603,7 @@ export class ReleaseCertificationController {
   /** Local-only composition path. The protected runner injects authenticated ports later;
    * this controller neither constructs them nor writes certification evidence. */
   async provision(input: Readonly<{ receipt: unknown; registry: AuthorizedProviderRegistry }>): Promise<ReleaseProvisioningResult> {
+    await this.#ensureDurableWorkspace();
     if (!isObservedCollectorRegistryImage(this.#collectorImage)) throw new Error("COLLECTOR_REGISTRY_OBSERVATION_REQUIRED");
     const current = await this.#loadCurrent();
     if (!current.state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
@@ -843,7 +877,7 @@ export class ReleaseCertificationController {
 
   async #writeCurrent(state: ReleaseControllerState): Promise<void> {
     const pointerBase = { version: 1 as const, stateSha256: state.stateSha256, candidateSha256: state.candidate.candidateSha256 };
-    await writeFile(join(this.#workspace, "current.json"), `${canonicalJson({ ...pointerBase, pointerSha256: await digest(pointerBase) })}\n`, "utf8");
+    await replaceSynced(join(this.#workspace, "current.json"), `${canonicalJson({ ...pointerBase, pointerSha256: await digest(pointerBase) })}\n`);
   }
 
   async #loadCurrent(): Promise<Readonly<{ state: ReleaseControllerState; pointer: z.infer<typeof ReleaseControllerCurrentPointerSchema> }>> {

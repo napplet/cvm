@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
@@ -545,4 +545,18 @@ test("metadata-sync failure prevents a durable dispatch claim from reaching appl
     },
   }).provision({ receipt, registry })).rejects.toThrow("METADATA_SYNC_FAILED");
   expect(applies).toBe(0);
+});
+
+test("an absent caller-provisioned workspace anchor cannot create an authority root", async () => {
+  const root = await workspace();
+  await rm(root, { recursive: true, force: true });
+  await expect(runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+});
+
+test("a damaged root with prior dispatch lineage fails closed instead of issuing a fresh request", async () => {
+  const root = await workspace();
+  await mkdir(join(root, "provider-dispatch-claims"));
+  await writeFile(join(root, "provider-dispatch-claims", "original.json"), "{}\n");
+  await writeFile(join(root, "current.json"), "{\n");
+  await expect(runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 })).rejects.toThrow("RELEASE_CONTROLLER_RECOVERY_REQUIRED");
 });

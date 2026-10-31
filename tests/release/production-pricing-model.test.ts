@@ -134,6 +134,7 @@ test("Modal worker pricing reads only one rendered Sandbox section and preserves
   });
 
   await expect(modalPricingReader(generalCompute, "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  await expect(modalPricingReader("<section data-id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU (non-preemptible) $0.00000001 / core / sec Memory (non-preemptible) $0.00000667 / GiB / sec</section>", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
   await expect(modalPricingReader("<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU $0.00003942 / core / sec</section>", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_RATE_REJECTED");
   await expect(modalPricingReader(`${sandbox}${sandbox}`, "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
   await expect(modalPricingReader("<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU $0.00003942 / core / sec", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");

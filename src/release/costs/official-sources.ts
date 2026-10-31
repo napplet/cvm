@@ -177,10 +177,17 @@ function officialText(document: string): string {
   return `${srOnly.join(" ")} ${document.replace(/<[^>]*>/gu, " ")}`.replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ");
 }
 function renderedText(document: string): string { return document.replace(/<[^>]*>/gu, " ").replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ").trim(); }
-function modalSandboxSection(document: string): string {
-  const starts = [...document.matchAll(/<section\b(?=[^>]*\bid=["']sandboxes["'])[^>]*>/giu)];
+async function modalSandboxSection(document: string): Promise<string> {
+  let parsedSections = 0;
+  try {
+    /* HTMLRewriter is Bun's available HTML parser. CSS ID selection checks the
+     * actual id attribute, unlike a textual \bid matcher that also sees data-id. */
+    const parsed = new HTMLRewriter().on("section#sandboxes", { element() { parsedSections += 1; } }).transform(new Response(document));
+    await parsed.text();
+  } catch { throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED"); }
+  const starts = [...document.matchAll(/<section\b(?=[^>]*\sid\s*=\s*(?:["']sandboxes["']|sandboxes(?=[\s>])))[^>]*>/giu)];
   const headings = [...document.matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2\s*>/giu)].filter((heading) => renderedText(heading[1] ?? "") === "Modal Sandbox pricing");
-  if (starts.length !== 1 || headings.length !== 1 || starts[0]?.index === undefined || headings[0]?.index === undefined) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  if (parsedSections !== 1 || starts.length !== 1 || headings.length !== 1 || starts[0]?.index === undefined || headings[0]?.index === undefined) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
   const start = starts[0]; const sectionTags = /<\/?section\b[^>]*>/giu; sectionTags.lastIndex = start.index + start[0].length; let depth = 1;
   for (;;) {
     const tag = sectionTags.exec(document);
@@ -280,7 +287,15 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
       },
       async readOfficialPricing(input: Parameters<OfficialPricingSourcePort["readOfficialPricing"]>[0]) {
         const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);
-        const priceNanos = provider === "modal" ? (() => { const sandbox = officialText(modalSandboxSection(document)); const cpu = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu); const memory = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n))();
+        let priceNanos: bigint;
+        if (provider === "modal") {
+          const sandbox = officialText(await modalSandboxSection(document));
+          const cpu = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu);
+          const memory = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu);
+          priceNanos = (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n);
+        } else {
+          priceNanos = flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n);
+        }
         const unit = provider === "modal" ? options.workers.modal.unit : options.workers.fly.unit;
         return snapshot(`${provider}-official-pricing`, bytes, [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }]);
       },

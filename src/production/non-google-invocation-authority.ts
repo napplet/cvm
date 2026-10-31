@@ -68,7 +68,7 @@ class VerifiedAuthority implements NonGoogleInvocationAuthority {
   assertOriginalObservation(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; originalRecorded: boolean; operationId?: string; operationSha256?: string; nowMs?: number }>): void {
     if (!input.originalRecorded) throw new Error("NON_GOOGLE_INVOCATION_ORIGINAL_REQUIRED");
     const now = input.nowMs ?? this.input.now();
-    if (now > this.input.expiresAtMs) {
+    if (now >= this.input.expiresAtMs) {
       if (!this.input.expiredObservationScopes.includes(Scope.parse(input.scope)) || !input.operationId || !input.operationSha256 || !this.input.originalOperations.some(operation => operation.operationId === input.operationId && operation.operationSha256 === input.operationSha256 && operation.candidateSha256 === this.input.candidateSha256 && operation.topologySha256 === this.input.topologySha256 && operation.roleCostBoundSha256 === this.input.roleCostBoundSha256)) throw new Error("NON_GOOGLE_INVOCATION_ORIGINAL_DENIED");
     }
     this.#assert(input, true);
@@ -76,7 +76,7 @@ class VerifiedAuthority implements NonGoogleInvocationAuthority {
   #assert(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; nowMs?: number }>, observation: boolean): void {
     const now = input.nowMs ?? this.input.now();
     if (!Number.isSafeInteger(now) || now < this.input.issuedAtMs) throw new Error("NON_GOOGLE_INVOCATION_CLOCK_INVALID");
-    if ((!observation && now >= this.input.expiresAtMs) || (observation && now > this.input.expiresAtMs && this.input.expiredObservationScopes.length === 0)) throw new Error("NON_GOOGLE_INVOCATION_EXPIRED");
+    if ((!observation && now >= this.input.expiresAtMs) || (observation && now >= this.input.expiresAtMs && this.input.expiredObservationScopes.length === 0)) throw new Error("NON_GOOGLE_INVOCATION_EXPIRED");
     if (!this.input.scopes.includes(Scope.parse(input.scope)) || !this.input.effects.includes(Effect.parse(input.effect))) throw new Error("NON_GOOGLE_INVOCATION_SCOPE_DENIED");
     if (Digest.parse(input.candidateSha256) !== this.input.candidateSha256 || Digest.parse(input.topologySha256) !== this.input.topologySha256 || Digest.parse(input.requestSha256) !== this.input.requestSha256 || Digest.parse(input.roleCostBoundSha256) !== this.input.roleCostBoundSha256) throw new Error("NON_GOOGLE_INVOCATION_BINDING_DENIED");
   }

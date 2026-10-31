@@ -1,5 +1,6 @@
 import { canonicalJson } from "../../promotion/schema";
 import { z } from "zod";
+import { OPENAI_RESPONSES_PRICING_URL, type OpenAiResponsesPricingDocument } from "./official-sources";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PositiveMicrosSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -29,8 +30,9 @@ const CostTypeSchema = z.enum([
 
 export const OpenAiResponsesRateSnapshotSchema = z.object({
   version: z.literal(2),
-  sourceUrl: z.string().url().refine((value) => new URL(value).hostname === "developers.openai.com", "OPENAI_PRICE_SOURCE_ORIGIN_REJECTED"),
+  sourceUrl: z.literal(OPENAI_RESPONSES_PRICING_URL),
   sourceDocumentSha256: DigestSchema,
+  sourceArtifactSha256: DigestSchema,
   quoteSha256: DigestSchema,
   observedAtMs: z.number().int().positive(),
   freshUntilMs: z.number().int().positive(),
@@ -41,7 +43,7 @@ export const OpenAiResponsesRateSnapshotSchema = z.object({
   outputMicrosPerMillion: PositiveMicrosSchema,
   cacheWriteMicrosPerMillion: PositiveMicrosSchema.optional(),
 }).strict().superRefine((value, context) => {
-  if (value.freshUntilMs <= value.observedAtMs) context.addIssue({ code: "custom", message: "OPENAI_PRICE_SOURCE_STALE" });
+  if (value.freshUntilMs <= value.observedAtMs || value.sourceArtifactSha256 !== value.sourceDocumentSha256) context.addIssue({ code: "custom", message: "OPENAI_PRICE_SOURCE_STALE" });
 });
 export type OpenAiResponsesRateSnapshot = z.infer<typeof OpenAiResponsesRateSnapshotSchema>;
 
@@ -73,25 +75,52 @@ function ceilDiv(numerator: bigint, denominator: bigint): bigint { return (numer
 function safeMicros(value: bigint): number { if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OPENAI_USAGE_COST_OVERFLOW"); return Number(value); }
 function charge(tokens: number, microsPerMillion: number): number { return safeMicros(ceilDiv(BigInt(tokens) * BigInt(microsPerMillion), 1_000_000n)); }
 
-/** Captures a parsed, source-bound rate snapshot. This helper deliberately does
- * not fetch, discover accounts, or accept a ceiling as a vendor rate. */
-export async function createOpenAiResponsesRateSnapshot(input: Readonly<{
-  sourceUrl: string;
-  capturedBytes: Uint8Array;
-  observedAtMs: number;
-  freshUntilMs: number;
-  model: string;
-  currency: "USD";
-  inputMicrosPerMillion: number;
-  cachedInputMicrosPerMillion: number;
-  outputMicrosPerMillion: number;
-  cacheWriteMicrosPerMillion?: number;
-}>): Promise<OpenAiResponsesRateSnapshot> {
-  if (!(input.capturedBytes instanceof Uint8Array) || input.capturedBytes.byteLength === 0 || input.capturedBytes.byteLength > 8 * 1024 * 1024) throw new Error("OPENAI_PRICE_SOURCE_BYTES_REJECTED");
-  const sourceDocumentSha256 = await sha256(input.capturedBytes);
-  const quoteSha256 = await hashCanonical({ version: 2, sourceUrl: input.sourceUrl, sourceDocumentSha256, observedAtMs: input.observedAtMs, freshUntilMs: input.freshUntilMs, model: input.model, currency: input.currency, inputMicrosPerMillion: input.inputMicrosPerMillion, cachedInputMicrosPerMillion: input.cachedInputMicrosPerMillion, outputMicrosPerMillion: input.outputMicrosPerMillion, cacheWriteMicrosPerMillion: input.cacheWriteMicrosPerMillion });
-  const { capturedBytes: _capturedBytes, ...observation } = input;
-  return freeze(OpenAiResponsesRateSnapshotSchema.parse({ version: 2, ...observation, sourceDocumentSha256, quoteSha256 }));
+const CapturedPricingDocumentSchema = z.object({
+  sourceUrl: z.literal(OPENAI_RESPONSES_PRICING_URL),
+  bytes: z.instanceof(Uint8Array).refine((value) => value.byteLength > 0 && value.byteLength <= 8 * 1024 * 1024, "OPENAI_PRICE_SOURCE_BYTES_REJECTED"),
+  observedAtMs: z.number().int().positive(),
+  freshUntilMs: z.number().int().positive(),
+}).strict();
+const MoneyPerMillionSchema = z.string().regex(/^\d+(?:\.\d{1,6})?$/u);
+const CapturedPriceRowSchema = z.object({
+  input_usd_per_million: MoneyPerMillionSchema,
+  cached_input_usd_per_million: MoneyPerMillionSchema,
+  output_usd_per_million: MoneyPerMillionSchema,
+  cache_write_usd_per_million: MoneyPerMillionSchema.optional(),
+}).strict();
+const CapturedPriceDocumentSchema = z.object({
+  schema: z.literal("openai-responses-pricing-capture-v1"),
+  currency: z.literal("USD"),
+  models: z.record(ModelSchema, CapturedPriceRowSchema),
+}).strict();
+
+function micros(value: string): number {
+  const [whole, fraction = ""] = MoneyPerMillionSchema.parse(value).split(".");
+  const parsed = BigInt(whole) * 1_000_000n + BigInt((fraction + "000000").slice(0, 6));
+  if (parsed < 1n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OPENAI_PRICE_SOURCE_PRECISION_REJECTED");
+  return Number(parsed);
+}
+function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: string) {
+  const parsed = CapturedPricingDocumentSchema.parse(document);
+  let payload: unknown;
+  try { payload = JSON.parse(new TextDecoder().decode(parsed.bytes)); }
+  catch { throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); }
+  const prices = CapturedPriceDocumentSchema.safeParse(payload);
+  if (!prices.success) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const row = prices.data.models[ModelSchema.parse(model)];
+  if (!row) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  return { document: parsed, currency: prices.data.currency, inputMicrosPerMillion: micros(row.input_usd_per_million), cachedInputMicrosPerMillion: micros(row.cached_input_usd_per_million), outputMicrosPerMillion: micros(row.output_usd_per_million), ...(row.cache_write_usd_per_million === undefined ? {} : { cacheWriteMicrosPerMillion: micros(row.cache_write_usd_per_million) }) };
+}
+
+/** A quote is derived only from a bounded fixed-origin capture. The parser is
+ * deliberately closed: an OpenAI document shape change holds the candidate
+ * instead of accepting caller-selected rates. */
+export async function createOpenAiResponsesRateSnapshot(input: Readonly<{ document: OpenAiResponsesPricingDocument; model: string }>): Promise<OpenAiResponsesRateSnapshot> {
+  const parsed = parseCapturedPrices(input.document, input.model);
+  if (parsed.document.freshUntilMs <= parsed.document.observedAtMs) throw new Error("OPENAI_PRICE_SOURCE_STALE");
+  const sourceDocumentSha256 = await sha256(parsed.document.bytes);
+  const quoteSha256 = await hashCanonical({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion, cacheWriteMicrosPerMillion: parsed.cacheWriteMicrosPerMillion });
+  return freeze(OpenAiResponsesRateSnapshotSchema.parse({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, sourceArtifactSha256: sourceDocumentSha256, quoteSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion, ...(parsed.cacheWriteMicrosPerMillion === undefined ? {} : { cacheWriteMicrosPerMillion: parsed.cacheWriteMicrosPerMillion }) }));
 }
 
 export function priceOpenAiResponsesUsage(input: Readonly<{ rate: OpenAiResponsesRateSnapshot; usage: OpenAiResponsesUsage }>): Readonly<{ status: "priced"; costMicros: number; inputChargeMicros: number; cachedInputChargeMicros: number; cacheWriteChargeMicros: number; outputChargeMicros: number }> | Readonly<{ status: "held"; reason: "cache_write_rate_unknown" }> {

@@ -17,19 +17,20 @@ import { OpenAiResponsesCandidateModelGateway } from "../../src/production/opena
 
 const hex = (character: string) => character.repeat(64);
 const now = 1_000_000;
-const source = new TextEncoder().encode("official-openai-pricing-capture-v1");
-
-const rate = async () => createOpenAiResponsesRateSnapshot({
-  sourceUrl: "https://developers.openai.com/api/docs/pricing",
-  capturedBytes: source,
-  observedAtMs: now - 1,
-  freshUntilMs: now + 60_000,
-  model: "gpt-4.1-2025-04-14",
+const source = new TextEncoder().encode(JSON.stringify({
+  schema: "openai-responses-pricing-capture-v1",
   currency: "USD",
-  inputMicrosPerMillion: 2_000_000,
-  cachedInputMicrosPerMillion: 200_000,
-  outputMicrosPerMillion: 8_000_000,
-});
+  models: {
+    "gpt-4.1-2025-04-14": {
+      input_usd_per_million: "2.000000",
+      cached_input_usd_per_million: "0.200000",
+      output_usd_per_million: "8.000000",
+    },
+  },
+}));
+const document = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: source, observedAtMs: now - 1, freshUntilMs: now + 60_000 });
+
+const rate = async () => createOpenAiResponsesRateSnapshot({ document, model: "gpt-4.1-2025-04-14" });
 
 test("the v2 inventory names every non-Google accounting role and never uses historic fixed sixteen-family facts", async () => {
   expect(NON_GOOGLE_COST_ROLES).toEqual([
@@ -67,15 +68,16 @@ test("native token pricing charges input/cache/output once and holds unsupported
   })).toMatchObject({ status: "held", reason: "cache_write_rate_unknown" });
 });
 
-test("non-Google catalog accepts only a fresh source-bound model rate and pricing capture rejects redirects", async () => {
+test("non-Google catalog accepts only a fresh parsed source-bound model rate and pricing capture rejects redirects", async () => {
   const catalog = createNonGoogleModelCostCatalog({ rates: { readOpenAiResponsesRate: rate }, now: () => now });
   expect(await catalog.readModelRate()).toMatchObject({ model: "gpt-4.1-2025-04-14", currency: "USD" });
   const document = await captureOpenAiResponsesPricingDocument({ now: () => now, freshnessMs: 60_000, fetch: async (url) => {
     expect(url).toBe(OPENAI_RESPONSES_PRICING_URL);
-    return new Response("<html>official pricing</html>", { status: 200 });
+    return new Response(source, { status: 200 });
   } });
   expect(document).toMatchObject({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, observedAtMs: now });
   await expect(captureOpenAiResponsesPricingDocument({ now: () => now, fetch: async () => Response.redirect("https://example.test/", 302) })).rejects.toThrow("OPENAI_PRICE_SOURCE_RESPONSE_REJECTED");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(JSON.stringify({ schema: "openai-responses-pricing-capture-v1", currency: "USD", models: {} })) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
 });
 
 test("versioned report v2 uses an opaque store identity rather than a forged gs URI", async () => {

@@ -100,7 +100,11 @@ function generationAwareObjects(now: () => number, loseDeletionAck: () => boolea
   const entries = new Map<string, Stored>();
   const client: VersionedObjectClientPort = {
     async createIfAbsent(value) {
-      if (entries.has(value.key)) throw new Error("FIXTURE_OBJECT_ALREADY_EXISTS");
+      const existing = entries.get(value.key);
+      if (existing) {
+        if (existing.checksum !== value.checksum || !Buffer.from(existing.bytes).equals(Buffer.from(value.bytes))) throw new Error("GCS_OBJECT_IMMUTABLE_CONFLICT");
+        return { generation: existing.generation, checksum: existing.checksum };
+      }
       entries.set(value.key, Object.freeze({ generation: 1, checksum: value.checksum, bytes: new Uint8Array(value.bytes) }));
       return { generation: 1, checksum: value.checksum };
     },
@@ -124,6 +128,15 @@ function generationAwareObjects(now: () => number, loseDeletionAck: () => boolea
   };
   return new GcsObjectStoreAdapter({ config: { bucket: "retained-subject-fixture", projectId: "retained-subject-fixture" }, client });
 }
+
+test("generation-aware storage preserves an identical immutable create and rejects different bytes", async () => {
+  const objects = generationAwareObjects(Date.now);
+  const input = { key: "authoritative-usage/original/report.json", bytes: new TextEncoder().encode("original provider report") };
+  const first = await objects.createImmutable(input);
+  expect(await objects.createImmutable(input)).toEqual(first);
+  await expect(objects.createImmutable({ ...input, bytes: new TextEncoder().encode("different provider report") })).rejects.toThrow("GCS_OBJECT_IMMUTABLE_CONFLICT");
+  expect(await objects.readExact(first)).toEqual(input.bytes);
+});
 
 function mountedConfig(topologySha256: string) {
   const digest = "a".repeat(64), image = `registry.example/retained@sha256:${digest}`;

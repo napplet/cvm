@@ -796,11 +796,15 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(modelPosts).toBe(2);
     // Full encrypted workspace -> real bridge -> native restore claim and
     // evidence -> durable SQL proof. Only the external provider RPC is local.
-    const workspacePricing = await resumePricingMaterial(now, "profile:workspace-mounted", "100");
+    // The checkpoint timeline intentionally advances beyond the live grace
+    // window, but the V2 price/claim guard is authoritative on PostgreSQL's
+    // wall clock. Keep those identities separate so the mounted facade can
+    // exercise the real API and terminal transaction.
+    const workspacePricing = await resumePricingMaterial(Date.now(), "profile:workspace-mounted", "100");
     await registerProductionPricing({ pool, ...workspacePricing });
     const workspacePreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: workspacePricing,
-      compatibility: { policyVersion: workspaceIntent.policyVersion, acceptedToolchains: [workspaceToolchain] }, now: () => now });
-    const workspaceAcceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: workspacePreparer, now: () => now });
+      compatibility: { policyVersion: workspaceIntent.policyVersion, acceptedToolchains: [workspaceToolchain] }, now: Date.now });
+    const workspaceAcceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: workspacePreparer, now: Date.now });
     const workspaceWorkers = new ProductionPricedContinuationWorkers({ pool, acceptance: workspaceAcceptance, capacity });
     await workspaceWorkers.assertReady();
     let workspaceAuthority: Awaited<ReturnType<typeof workspacePreparer.loadAuthority>>;

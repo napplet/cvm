@@ -55,9 +55,9 @@ test("authorized tracer rejects absent or mismatched receipt before a native eff
         discoverCapabilities: async () => ({ capability: "available" as const }),
         discoverAuthentication: async () => ({ authentication: "authorized" as const }),
         plan: async () => { effects += 1; return { status: "planned" as const, estimatedCostMicros: 0 }; },
-        apply: async () => { effects += 1; return { status: "applied" as const, actualCostMicros: 0, resourceIdentity: provider }; },
-        observe: async () => ({ status: "missing" as const, actualCostMicros: 0 }),
-        cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
+        apply: async () => { effects += 1; return { status: "applied" as const, resourceIdentity: provider }; },
+        observe: async () => ({ status: "missing" as const }),
+        cleanup: async () => ({ status: "cleaned" as const }),
       }])) as never,
     });
 
@@ -81,8 +81,8 @@ test("all protected-suite records are retained and block finalization when real 
     const dry = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
     const registry = createReleaseProviderRegistry({ now: () => 1_000, ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
       discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
-      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 0 }), apply: async () => ({ status: "applied" as const, actualCostMicros: 0, resourceIdentity: provider }),
-      observe: async () => ({ status: "completed" as const, actualCostMicros: 0, resourceIdentity: provider }), cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 0 }), apply: async () => ({ status: "applied" as const, resourceIdentity: provider }),
+      observe: async () => ({ status: "completed" as const, resourceIdentity: provider }), cleanup: async () => ({ status: "cleaned" as const }),
     }])) as never });
     const receipt = await createAuthorizationReceipt(dry.authorizationRequest);
     const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage });

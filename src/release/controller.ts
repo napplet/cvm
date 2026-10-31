@@ -19,7 +19,7 @@ import { deriveReleaseTopology, RELEASE_PROVIDER_IDS, RELEASE_TOPOLOGY_QUANTITY_
 import { isObservedCollectorRegistryImage, type ObservedCollectorRegistryImage, type PreparedCollectorImage } from "./collector-image";
 import { createAuthorizationRequest, createOfficialConsentReceipt, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
 import type { OfficialConsentPort } from "./deployment/consent";
-import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
+import { ReleaseProviderCostObservationSchema, ReleaseProviderOperationSchema, type ReleaseProviderCostObservation, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
 import { createReleaseControllerProviderRegistry } from "./native-registry";
 import { materializeProtectedCertifier, type MaterializeProtectedCertifierInput, type MaterializedCertifier } from "./materialize-certifier";
 import { finalizeReleaseCertification, type ReleaseFinalizationInput, type ReleaseFinalizationResult } from "./finalize";
@@ -100,13 +100,30 @@ export type ReleaseExecutionSession = Readonly<{
   prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
 }>;
 
-type ProviderOperationRecord = Readonly<{
+type LegacyProviderOperationRecord = Readonly<{
   version: 1;
   operation: ReleaseProviderOperation;
   status: "pending" | "unknown" | "completed";
   actualCostMicros: number;
   resourceIdentitySha256: string | null;
 }>;
+/** Version two deliberately keeps resource completion distinct from provider
+ * billing.  The reservation is bound to the original authorization effect and
+ * is held until a future report adapter records receipt-bound actual usage. */
+type CurrentProviderOperationRecord = Readonly<{
+  version: 2;
+  operation: ReleaseProviderOperation;
+  status: "pending" | "unknown" | "completed";
+  billingStatus: "unknown" | "observed";
+  reservedCostMicros: number;
+  actualCostMicros: number | null;
+  costObservation: ReleaseProviderCostObservation | null;
+  costObservationSha256: string | null;
+  accountScopeSha256: string;
+  projectScopeSha256: string;
+  resourceIdentitySha256: string | null;
+}>;
+type ProviderOperationRecord = LegacyProviderOperationRecord | CurrentProviderOperationRecord;
 
 async function digest(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
@@ -504,16 +521,23 @@ export class ReleaseCertificationController {
         if (canonicalJson(existing.operation) !== canonicalJson(operation)) throw new Error("RELEASE_CONTROLLER_OPERATION_COLLISION");
       } catch (error) {
         if (error instanceof Error && error.message === "RELEASE_CONTROLLER_OPERATION_COLLISION") throw error;
-        await createOrVerify(join(this.#workspace, "provider-operations", `${operation.operationId}.json`), `${canonicalJson({ version: 1, operation, status: "pending", actualCostMicros: 0, resourceIdentitySha256: null } satisfies ProviderOperationRecord)}\n`, "RELEASE_CONTROLLER_OPERATION_COLLISION");
+        const effect = request.orderedEffects.find((item) => item.id === operation.effectId && item.provider === operation.provider);
+        const scope = request.providerScopes.find((item) => item.provider === operation.provider);
+        if (!effect || !scope || !Number.isSafeInteger(effect.estimatedCostMicros) || effect.estimatedCostMicros < 0) throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_INVALID");
+        await createOrVerify(join(this.#workspace, "provider-operations", `${operation.operationId}.json`), `${canonicalJson({ version: 2, operation, status: "pending", billingStatus: "unknown", reservedCostMicros: effect.estimatedCostMicros, actualCostMicros: null, costObservation: null, costObservationSha256: null, accountScopeSha256: scope.accountScopeSha256, projectScopeSha256: scope.projectScopeSha256, resourceIdentitySha256: null } satisfies ProviderOperationRecord)}\n`, "RELEASE_CONTROLLER_OPERATION_COLLISION");
       }
     }
     let state = current.state;
     if (["authorization_required", "receipt_valid", "bootstrap"].includes(state.status)) state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
 
     let totalCost = 0;
+    let reservedCost = 0;
     for (const operation of operations) {
       const record = await this.#readOperation(operation.operationId);
-      if (record.status === "completed") { totalCost += record.actualCostMicros; continue; }
+      const reservation = record.version === 2 ? record.reservedCostMicros : record.actualCostMicros;
+      reservedCost += reservation;
+      if (reservedCost > receipt.maximumAuthorizedCostMicros) throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_EXCEEDED");
+      if (record.status === "completed") { totalCost += record.actualCostMicros ?? 0; continue; }
       // The immutable operation record is written above before even the
       // planning call.  After a process loss, the same operation ID is
       // observed instead of creating a replacement provider action.
@@ -527,20 +551,34 @@ export class ReleaseCertificationController {
       const result = record.status === "unknown"
         ? await input.registry.observe({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros })
         : await input.registry.apply({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
+      if (record.status === "unknown" && record.resourceIdentitySha256 && result.resourceIdentitySha256
+        && record.resourceIdentitySha256 !== result.resourceIdentitySha256) {
+        throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
+      }
+      const billingPatch = record.version === 2 ? await this.#billingPatch(record, result) : undefined;
       if (result.status === "unknown" || result.status === "pending") {
-        await this.#writeOperation({ ...record, status: "unknown", actualCostMicros: result.actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 ?? null });
+        const next: ProviderOperationRecord = record.version === 2
+          ? { ...record, status: "unknown", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 ?? null }
+          : { ...record, status: "unknown", resourceIdentitySha256: result.resourceIdentitySha256 ?? null };
+        await this.#writeOperation(next);
         throw new Error("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
       }
       if (result.status !== "applied" && result.status !== "completed") throw new Error("RELEASE_CONTROLLER_PROVIDER_BLOCKED");
-      const actualCostMicros = result.actualCostMicros;
+      const actualCostMicros = result.actualCostMicros ?? 0;
       totalCost += actualCostMicros;
       if (totalCost > receipt.maximumAuthorizedCostMicros) {
-        await this.#writeOperation({ ...record, status: "completed", actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 ?? null });
+        const next: ProviderOperationRecord = record.version === 2
+          ? { ...record, status: "completed", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 ?? null }
+          : { ...record, status: "completed", resourceIdentitySha256: result.resourceIdentitySha256 ?? null };
+        await this.#writeOperation(next);
         await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "COST_EXCEEDED");
         throw new Error("RELEASE_CONTROLLER_COST_EXCEEDED");
       }
       if (!result.resourceIdentitySha256) throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
-      await this.#writeOperation({ ...record, status: "completed", actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 });
+      const next: ProviderOperationRecord = record.version === 2
+        ? { ...record, status: "completed", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 }
+        : { ...record, status: "completed", resourceIdentitySha256: result.resourceIdentitySha256 };
+      await this.#writeOperation(next);
     }
 
     state = await this.#advance(state, state.version === 2 ? "observing" : "discovering_deployed", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
@@ -663,6 +701,7 @@ export class ReleaseCertificationController {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
       throw new Error("RELEASE_CONTROLLER_FINALIZATION_INPUT_REQUIRED");
     }
+    await this.#assertCostsObserved(state.providerOperationIds, receipt.maximumAuthorizedCostMicros);
     state = await this.#advanceLive(state, "finalizing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
     const finalization = await finalizeReleaseCertification({
       ...input.finalization,
@@ -723,7 +762,10 @@ export class ReleaseCertificationController {
     let raw: unknown;
     try { raw = JSON.parse(await readFile(join(this.#workspace, "provider-operations", `${operationId}.json`), "utf8")); }
     catch { throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID"); }
-    const schema = z.object({ version: z.literal(1), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), actualCostMicros: z.number().int().nonnegative(), resourceIdentitySha256: DigestSchema.nullable() }).strict();
+    const schema = z.union([
+      z.object({ version: z.literal(1), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), actualCostMicros: z.number().int().nonnegative(), resourceIdentitySha256: DigestSchema.nullable() }).strict(),
+      z.object({ version: z.literal(2), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), billingStatus: z.enum(["unknown", "observed"]), reservedCostMicros: z.number().int().nonnegative(), actualCostMicros: z.number().int().nonnegative().nullable(), costObservation: ReleaseProviderCostObservationSchema.nullable(), costObservationSha256: DigestSchema.nullable(), accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema, resourceIdentitySha256: DigestSchema.nullable() }).strict(),
+    ]);
     const parsed = schema.safeParse(raw);
     if (!parsed.success || parsed.data.operation.operationId !== operationId) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
     return parsed.data;
@@ -731,6 +773,71 @@ export class ReleaseCertificationController {
 
   async #writeOperation(record: ProviderOperationRecord): Promise<void> {
     await writeFile(join(this.#workspace, "provider-operations", `${record.operation.operationId}.json`), `${canonicalJson(record)}\n`, "utf8");
+  }
+
+  async #assertCostsObserved(operationIds: readonly string[], maximumAuthorizedCostMicros: number): Promise<void> {
+    let total = 0;
+    for (const operationId of operationIds) {
+      const record = await this.#readOperation(operationId);
+      if (record.version !== 2 || record.billingStatus !== "observed" || record.actualCostMicros === null || record.costObservation === null || record.costObservationSha256 === null) {
+        throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_UNOBSERVED");
+      }
+      if (record.costObservationSha256 !== await digest(record.costObservation)
+        || record.costObservation.provider !== record.operation.provider
+        || record.costObservation.operationId !== record.operation.operationId
+        || record.costObservation.candidateSha256 !== record.operation.candidateSha256
+        || record.costObservation.authorizationRequestSha256 !== record.operation.authorizationRequestSha256
+        || record.costObservation.resourceIdentitySha256 !== record.resourceIdentitySha256
+        || record.costObservation.accountScopeSha256 !== record.accountScopeSha256
+        || record.costObservation.projectScopeSha256 !== record.projectScopeSha256
+        || record.costObservation.actualCostMicros !== record.actualCostMicros) {
+        throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_OBSERVATION_INVALID");
+      }
+      if (record.actualCostMicros > record.reservedCostMicros) throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_EXCEEDED");
+      total += record.actualCostMicros;
+      if (!Number.isSafeInteger(total) || total > maximumAuthorizedCostMicros) throw new Error("RELEASE_CONTROLLER_COST_EXCEEDED");
+    }
+  }
+
+  async #billingPatch(record: CurrentProviderOperationRecord, result: Readonly<{
+    actualCostMicros?: number;
+    resourceIdentitySha256?: string;
+    costObservation?: Readonly<{
+      version: 1;
+      provider: ReleaseProviderId;
+      operationId: string;
+      candidateSha256: string;
+      authorizationRequestSha256: string;
+      resourceIdentitySha256: string;
+      accountScopeSha256: string;
+      projectScopeSha256: string;
+      rawReportSha256: string;
+      intervalStartMs: number;
+      intervalEndMs: number;
+      observedAtMs: number;
+      actualCostMicros: number;
+    }>;
+  }>): Promise<Pick<CurrentProviderOperationRecord, "billingStatus" | "actualCostMicros" | "costObservation" | "costObservationSha256">> {
+    if (result.actualCostMicros === undefined && result.costObservation === undefined) {
+      return { billingStatus: record.billingStatus, actualCostMicros: record.actualCostMicros, costObservation: record.costObservation, costObservationSha256: record.costObservationSha256 };
+    }
+    const observation = result.costObservation;
+    if (result.actualCostMicros === undefined || !observation || !result.resourceIdentitySha256
+      || result.actualCostMicros !== observation.actualCostMicros
+      || observation.provider !== record.operation.provider
+      || observation.operationId !== record.operation.operationId
+      || observation.candidateSha256 !== record.operation.candidateSha256
+      || observation.authorizationRequestSha256 !== record.operation.authorizationRequestSha256
+      || observation.resourceIdentitySha256 !== result.resourceIdentitySha256
+      || observation.accountScopeSha256 !== record.accountScopeSha256
+      || observation.projectScopeSha256 !== record.projectScopeSha256
+      || observation.intervalEndMs <= observation.intervalStartMs
+      || observation.observedAtMs < observation.intervalEndMs
+      || observation.actualCostMicros > record.reservedCostMicros
+    ) {
+      throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_OBSERVATION_INVALID");
+    }
+    return { billingStatus: "observed", actualCostMicros: result.actualCostMicros, costObservation: observation, costObservationSha256: await digest(observation) };
   }
 
   async #readTopology(topologySha256: string): Promise<ReleaseProvisioningResult["topology"]> {

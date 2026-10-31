@@ -208,9 +208,9 @@ test("authorized provider execution records one exact deployed topology and resu
       discoverCapabilities: async () => ({ capability: "available" as const }),
       discoverAuthentication: async () => ({ authentication: "authorized" as const }),
       plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
-      apply: async (input: { operationId: string }) => { effects.push(input.operationId); return { status: "applied" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` }; },
-      observe: async (input: { operationId: string }) => ({ status: "completed" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` }),
-      cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
+      apply: async (input: { operationId: string }) => { effects.push(input.operationId); return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` }; },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }),
+      cleanup: async () => ({ status: "cleaned" as const }),
     }])) as never,
   });
   const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
@@ -225,6 +225,95 @@ test("authorized provider execution records one exact deployed topology and resu
   const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
   expect(resumed.topology.topologySha256).toBe(first.topology.topologySha256);
   expect(effects).toHaveLength(16);
+});
+
+test("resource completion holds each original provider reservation until an actual bill is observed", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  const applies: string[] = [];
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }),
+      discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => { applies.push(input.operationId); return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` }; },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }),
+      cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+  const first = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry });
+  expect(first.state.status).toBe("topology_ready");
+  expect(applies).toHaveLength(RELEASE_PROVIDER_IDS.length);
+
+  const records = await Promise.all(first.state.providerOperationIds.map(async (operationId) => JSON.parse(await readFile(join(root, "provider-operations", `${operationId}.json`), "utf8"))));
+  expect(records).toHaveLength(RELEASE_PROVIDER_IDS.length);
+  expect(records.every((record) => record.version === 2 && record.status === "completed" && record.billingStatus === "unknown" && record.actualCostMicros === null)).toBeTrue();
+  expect(records.reduce((total, record) => total + record.reservedCostMicros, 0)).toBe(dryRun.authorizationRequest.maximumAuthorizedCostMicros);
+  for (const record of records) {
+    const effect = dryRun.authorizationRequest.orderedEffects.find((item) => item.id === record.operation.effectId && item.provider === record.operation.provider);
+    expect(record.reservedCostMicros).toBe(effect!.estimatedCostMicros);
+  }
+
+  await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
+  expect(applies).toHaveLength(RELEASE_PROVIDER_IDS.length);
+});
+
+test("raw provider amounts cannot settle a held reservation", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }),
+      discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async () => ({ status: "applied" as const, actualCostMicros: 1, resourceIdentity: provider }),
+      observe: async () => ({ status: "completed" as const, resourceIdentity: provider }),
+      cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_PROVIDER_COST_OBSERVATION_REQUIRED");
+  const records = await readdir(join(root, "provider-operations"));
+  expect(records).toHaveLength(RELEASE_PROVIDER_IDS.length);
+  const first = JSON.parse(await readFile(join(root, "provider-operations", records[0]!), "utf8"));
+  expect(first).toEqual(expect.objectContaining({ version: 2, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null }));
+});
+
+test("mismatched provider report identity cannot settle a held reservation", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }),
+      discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => ({
+        status: "applied" as const, actualCostMicros: 1, resourceIdentitySha256: "a".repeat(64),
+        costObservation: {
+          version: 1 as const, provider, operationId: input.operationId,
+          candidateSha256: "b".repeat(64), authorizationRequestSha256: "c".repeat(64), resourceIdentitySha256: "a".repeat(64),
+          accountScopeSha256: "d".repeat(64), projectScopeSha256: "e".repeat(64), rawReportSha256: "f".repeat(64),
+          intervalStartMs: 1, intervalEndMs: 2, observedAtMs: 2, actualCostMicros: 1,
+        },
+      }),
+      observe: async () => ({ status: "completed" as const, resourceIdentitySha256: "a".repeat(64) }),
+      cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_PROVIDER_COST_OBSERVATION_INVALID");
+  const records = await readdir(join(root, "provider-operations"));
+  const first = JSON.parse(await readFile(join(root, "provider-operations", records[0]!), "utf8"));
+  expect(first).toEqual(expect.objectContaining({ version: 2, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null }));
 });
 
 test("ambiguous provider execution resumes by observing the original operation without protected evidence writes", async () => {
@@ -242,13 +331,13 @@ test("ambiguous provider execution resumes by observing the original operation w
       plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
       apply: async (input: { operationId: string }) => {
         if (provider === "modal") { modalApplies += 1; return { status: "unknown" as const }; }
-        return { status: "applied" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` };
+        return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` };
       },
       observe: async (input: { operationId: string }) => {
         if (provider === "modal") modalObserves += 1;
-        return { status: "completed" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` };
+        return { status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` };
       },
-      cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
+      cleanup: async () => ({ status: "cleaned" as const }),
     }])) as never,
   });
   const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);

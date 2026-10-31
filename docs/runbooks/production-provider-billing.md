@@ -9,7 +9,9 @@ adapter, production price card, or settlement.
 
 The production reader captures bytes, SHA-256, observed time, freshness, model,
 location, currency, unit, and effective period from the current official
-[Gemini Enterprise pricing page](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing).
+[Model Garden pricing page](https://cloud.google.com/model-garden/pricing).
+Historical receipts retain their original source URL and byte digest; a current
+reader source update never rewrites or reclassifies those immutable records.
 Its October 27, 2026 contract accepts only the global Gemini 4 Argon source
 table: gross USD $4 / million input tokens, $0.20 / million cached-input
 tokens, and $20 / million combined output-plus-thought tokens. The advertised

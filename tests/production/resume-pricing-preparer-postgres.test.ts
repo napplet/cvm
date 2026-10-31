@@ -1052,8 +1052,13 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     // bridge, verified artifact path, and finalizer. A deterministic late SQL
     // failure rolls the transaction back and stays a private failure; it must
     // not be relabelled as an unknown provider receipt.
-    await expect(mountedService.resume(workspaceResume)).rejects.toThrow("TERMINAL_PAUSE_WRITE_FAILED");
-    expect(failFirstMountedTerminalWrite).toBeFalse();
+    let mountedTerminalError: unknown;
+    let mountedTerminalResult: unknown;
+    try { mountedTerminalResult = await mountedService.resume(workspaceResume); }
+    catch (error) { mountedTerminalError = error; }
+    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${canonicalJson(mountedTerminalResult)}`);
+    if (!(mountedTerminalError instanceof Error) || mountedTerminalError.message !== "TERMINAL_PAUSE_WRITE_FAILED")
+      throw new Error(`MOUNTED_TERMINAL_WRITE_OUTCOME_INVALID:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
     expect(modelPosts).toBe(3);
     expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("dispatching");
     const workspaceObserved = await gateway.lookup(workspaceApiIntent, new AbortController().signal);

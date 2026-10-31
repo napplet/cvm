@@ -10,6 +10,7 @@ on:
       - "package.json"
       - "bun.lock"
       - "infra/production/Dockerfile"
+      - "infra/production/modal-billing/**"
       - "scripts/production.ts"
       - "scripts/test-production-control-image.ts"
       - "tests/fixtures/legacy-durability-subjects.sql"
@@ -49,3 +50,9 @@ jobs:
         run: |
           image_id="$(docker image inspect --format '{{.Id}}' cvm-control-proof:ci)"
           bun scripts/test-production-control-image.ts "$image_id"
+      - name: Build the unselected LinuxAMD64 Modal report control target
+        run: docker build --platform linux/amd64 --target modal-billing -f infra/production/Dockerfile -t cvm-modal-control-proof:ci .
+      - name: Offline pinned Modal executable, closure and fail-closed control composition
+        run: |
+          image_id="$(docker image inspect --format '{{.Id}}' cvm-modal-control-proof:ci)"
+          bun scripts/test-production-control-image.ts "$image_id" --modal-billing

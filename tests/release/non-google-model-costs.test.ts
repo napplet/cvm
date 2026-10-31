@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   NON_GOOGLE_COST_ROLES,
+  assertNonGoogleCostBoundAuthorizable,
   createNonGoogleCostBound,
   createOpenAiResponsesRateSnapshot,
   priceOpenAiResponsesUsage,
@@ -40,19 +41,37 @@ test("the v2 inventory names every non-Google accounting role and never uses his
     "explicit_approved_shared_standing",
     "unknown_held",
   ]);
+  const candidateSha256 = hex("a");
+  const nativeRate = await rate();
+  const evidence = (scope: string) => ({
+    sourceUrl: OPENAI_RESPONSES_PRICING_URL,
+    sourceArtifactSha256: nativeRate.sourceArtifactSha256,
+    sourceDocumentSha256: nativeRate.sourceDocumentSha256,
+    observedAtMs: nativeRate.observedAtMs,
+    freshUntilMs: nativeRate.freshUntilMs,
+    currency: "USD" as const,
+    fx: { kind: "native_usd" as const, sourceDocumentSha256: nativeRate.sourceDocumentSha256, numerator: 1 as const, denominator: 1 as const },
+    unit: "usd-per-million-tokens",
+    precision: 6,
+    scope,
+    candidateSha256,
+  });
   const bound = createNonGoogleCostBound({
     maximumChargeMicros: 10_000,
+    candidateSha256,
     facts: [
-      { role: "authoritative_native_usage", costType: "model_api_usage", provider: "openai_responses", status: "available", rate: await rate() },
-      { role: "documented_scoped_zero", costType: "contextvm_protocol", provider: "contextvm", status: "available", documentedScope: "public signed ContextVM event transport only" },
-      { role: "included_parent", costType: "database_authority", provider: "homelab_postgres", status: "available", parentCostType: "approved_homelab_service" },
-      { role: "explicit_approved_shared_standing", costType: "homelab_host", provider: "operator_homelab", status: "available", approvalReference: "D-141" },
-      { role: "unknown_held", costType: "funding_rail_fee", provider: "cashu", status: "held", holdReason: "account arrangement not verified" },
+      { role: "authoritative_native_usage", costType: "model_api_usage", provider: "openai_responses", status: "available", rate: nativeRate, evidence: evidence("OpenAI Responses model generation for this candidate") },
+      { role: "documented_scoped_zero", costType: "contextvm_protocol", provider: "contextvm", status: "available", documentedScope: "public signed ContextVM event transport only", evidence: evidence("ContextVM signed event transport for this candidate") },
+      { role: "included_parent", costType: "database_authority", provider: "homelab_postgres", status: "available", parentCostType: "approved_homelab_service", evidence: evidence("PostgreSQL authority used for this candidate") },
+      { role: "explicit_approved_shared_standing", costType: "homelab_host", provider: "operator_homelab", status: "available", approvalReference: "D-141", evidence: evidence("Approved homelab standing for this candidate") },
+      { role: "unknown_held", costType: "funding_rail_fee", provider: "cashu", status: "held", holdReason: "account arrangement not verified", evidence: evidence("Funding fee evidence remains unavailable for this candidate") },
     ],
   });
   expect(bound.maximumChargeMicros).toBe(10_000);
   expect(bound.heldCostTypes).toEqual(["funding_rail_fee"]);
-  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 1, facts: [] })).toThrow("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
+  expect(() => assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, nowMs: now })).toThrow("NON_GOOGLE_COST_BOUND_HELD");
+  expect(() => assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256: hex("b"), nowMs: now })).toThrow("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 1, candidateSha256, facts: [] })).toThrow("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
 });
 
 test("native token pricing charges input/cache/output once and holds unsupported cache writes", async () => {

@@ -60,11 +60,32 @@ const UsageSchema = z.object({
 });
 export type OpenAiResponsesUsage = z.infer<typeof UsageSchema>;
 
-const NativeFactSchema = z.object({ role: z.literal("authoritative_native_usage"), costType: CostTypeSchema, provider: z.literal("openai_responses"), status: z.literal("available"), rate: OpenAiResponsesRateSnapshotSchema }).strict();
-const ScopedZeroFactSchema = z.object({ role: z.literal("documented_scoped_zero"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("available"), documentedScope: z.string().min(16).max(1024) }).strict();
-const IncludedParentFactSchema = z.object({ role: z.literal("included_parent"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("available"), parentCostType: z.string().min(3).max(128) }).strict();
-const SharedStandingFactSchema = z.object({ role: z.literal("explicit_approved_shared_standing"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("available"), approvalReference: z.string().min(3).max(128) }).strict();
-const HeldFactSchema = z.object({ role: z.literal("unknown_held"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("held"), holdReason: z.string().min(8).max(1024) }).strict();
+/** Evidence is mandatory even when a fact is held.  It records precisely what
+ * was (or was not) established; callers cannot turn an unbound quote into an
+ * available accounting fact by choosing a provider label or clock. */
+const CostEvidenceSchema = z.object({
+  sourceUrl: z.string().url().max(2048),
+  sourceArtifactSha256: DigestSchema,
+  sourceDocumentSha256: DigestSchema,
+  observedAtMs: z.number().int().positive(),
+  freshUntilMs: z.number().int().positive(),
+  currency: z.literal("USD"),
+  fx: z.object({ kind: z.literal("native_usd"), sourceDocumentSha256: DigestSchema, numerator: z.literal(1), denominator: z.literal(1) }).strict(),
+  unit: z.string().min(3).max(128),
+  precision: z.number().int().min(0).max(6),
+  scope: z.string().min(16).max(1024),
+  candidateSha256: DigestSchema,
+}).strict().superRefine((value, context) => {
+  if (value.freshUntilMs <= value.observedAtMs) context.addIssue({ code: "custom", message: "NON_GOOGLE_COST_EVIDENCE_STALE" });
+  if (value.fx.sourceDocumentSha256 !== value.sourceDocumentSha256) context.addIssue({ code: "custom", message: "NON_GOOGLE_COST_FX_UNBOUND" });
+});
+const NativeFactSchema = z.object({ role: z.literal("authoritative_native_usage"), costType: CostTypeSchema, provider: z.literal("openai_responses"), status: z.literal("available"), rate: OpenAiResponsesRateSnapshotSchema, evidence: CostEvidenceSchema }).strict().superRefine((value, context) => {
+  if (value.evidence.sourceUrl !== value.rate.sourceUrl || value.evidence.sourceArtifactSha256 !== value.rate.sourceArtifactSha256 || value.evidence.sourceDocumentSha256 !== value.rate.sourceDocumentSha256 || value.evidence.observedAtMs !== value.rate.observedAtMs || value.evidence.freshUntilMs !== value.rate.freshUntilMs) context.addIssue({ code: "custom", message: "NON_GOOGLE_COST_NATIVE_EVIDENCE_UNBOUND" });
+});
+const ScopedZeroFactSchema = z.object({ role: z.literal("documented_scoped_zero"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("available"), documentedScope: z.string().min(16).max(1024), evidence: CostEvidenceSchema }).strict();
+const IncludedParentFactSchema = z.object({ role: z.literal("included_parent"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("available"), parentCostType: z.string().min(3).max(128), evidence: CostEvidenceSchema }).strict();
+const SharedStandingFactSchema = z.object({ role: z.literal("explicit_approved_shared_standing"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("available"), approvalReference: z.string().min(3).max(128), evidence: CostEvidenceSchema }).strict();
+const HeldFactSchema = z.object({ role: z.literal("unknown_held"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("held"), holdReason: z.string().min(8).max(1024), evidence: CostEvidenceSchema }).strict();
 export const NonGoogleCostFactSchema = z.discriminatedUnion("role", [NativeFactSchema, ScopedZeroFactSchema, IncludedParentFactSchema, SharedStandingFactSchema, HeldFactSchema]);
 export type NonGoogleCostFact = z.infer<typeof NonGoogleCostFactSchema>;
 
@@ -135,13 +156,28 @@ export function priceOpenAiResponsesUsage(input: Readonly<{ rate: OpenAiResponse
   return freeze({ status: "priced" as const, costMicros: safeMicros(BigInt(inputChargeMicros) + BigInt(cachedInputChargeMicros) + BigInt(cacheWriteChargeMicros) + BigInt(outputChargeMicros)), inputChargeMicros, cachedInputChargeMicros, cacheWriteChargeMicros, outputChargeMicros });
 }
 
-export function createNonGoogleCostBound(input: Readonly<{ maximumChargeMicros: number; facts: readonly NonGoogleCostFact[] }>) {
+export function createNonGoogleCostBound(input: Readonly<{ maximumChargeMicros: number; candidateSha256: string; facts: readonly NonGoogleCostFact[] }>) {
   const maximumChargeMicros = NonnegativeMicrosSchema.parse(input.maximumChargeMicros);
+  const candidateSha256 = DigestSchema.parse(input.candidateSha256);
   const facts = input.facts.map((fact) => NonGoogleCostFactSchema.parse(fact));
   if (facts.length !== NON_GOOGLE_COST_ROLES.length || facts.some((fact, index) => fact.role !== NON_GOOGLE_COST_ROLES[index])) throw new Error("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
   if (new Set(facts.map((fact) => fact.costType)).size !== facts.length) throw new Error("NON_GOOGLE_COST_TYPE_DUPLICATE");
+  if (facts.some((fact) => fact.evidence.candidateSha256 !== candidateSha256)) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
   const heldCostTypes = facts.filter((fact): fact is z.infer<typeof HeldFactSchema> => fact.role === "unknown_held").map((fact) => fact.costType);
-  return freeze({ schemaVersion: "non-google-cost-bound-v2" as const, maximumChargeMicros, facts: freeze(facts), heldCostTypes: freeze(heldCostTypes) });
+  return freeze({ schemaVersion: "non-google-cost-bound-v2" as const, maximumChargeMicros, candidateSha256, facts: freeze(facts), heldCostTypes: freeze(heldCostTypes) });
+}
+
+/** The admission path must call this immediately before asserting a bound. */
+export function assertNonGoogleCostBoundAuthorizable(input: Readonly<{ bound: ReturnType<typeof createNonGoogleCostBound>; candidateSha256: string; nowMs: number }>): void {
+  const candidateSha256 = DigestSchema.parse(input.candidateSha256);
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("NON_GOOGLE_COST_CLOCK_INVALID");
+  if (input.bound.candidateSha256 !== candidateSha256) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  if (input.bound.heldCostTypes.length > 0) throw new Error("NON_GOOGLE_COST_BOUND_HELD");
+  for (const fact of input.bound.facts) {
+    if (fact.status !== "available") throw new Error("NON_GOOGLE_COST_BOUND_HELD");
+    if (fact.evidence.freshUntilMs <= input.nowMs) throw new Error("NON_GOOGLE_COST_EVIDENCE_STALE");
+    if (fact.evidence.candidateSha256 !== candidateSha256) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  }
 }
 
 export function assertOpenAiUsageWithinApprovedMaximum(input: Readonly<{ usage: OpenAiResponsesUsage; maximumInputTokens: number; maximumOutputTokens: number }>): void {

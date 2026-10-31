@@ -85,7 +85,9 @@ ENV HOME=/home/napplet \
     PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright \
     PATH=/toolchain/bin:/toolchain/node_modules/.bin:/root/.bun/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /toolchain
-RUN printf 'nip5d-direct-v1\n' > /toolchain/production-artifact-contract && chmod 0444 /toolchain/production-artifact-contract
+ARG CVM_WORKER_CONTRACT=nip5d-direct-v1
+RUN case "$CVM_WORKER_CONTRACT" in nip5d-direct-v1|edge-native-v3-unpromoted) ;; *) exit 1 ;; esac \
+    && printf '%s\n' "$CVM_WORKER_CONTRACT" > /toolchain/production-artifact-contract && chmod 0444 /toolchain/production-artifact-contract
 COPY --from=intake /root/.bun /root/.bun
 COPY --from=intake /root/.bun/install/global/node_modules/pnpm /toolchain/pnpm
 COPY --from=intake /root/.local/share/pnpm/store /root/.local/share/pnpm/store
@@ -125,6 +127,8 @@ COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
 COPY infra/toolchain/production-job.ts /usr/local/bin/napplet-cvm-job
 COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
 COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap
+COPY toolchains/recipes/capabilities-worker-current.json /toolchain/edge-worker-current.json
+COPY toolchains/recipes/capabilities-worker-profile-v3-unpromoted.json /toolchain/edge-worker-profile-v3.json
 RUN chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap /usr/local/bin/napplet-cvm-job
 USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]
@@ -134,6 +138,13 @@ ENTRYPOINT ["/toolchain/bin/bun"]
 # immediately rejects anything except the provider-provisioned bounded tmpfs
 # and then drops to UID 65532 before any worker command is executed.
 FROM sealed AS production-worker
+USER root
+ENTRYPOINT ["/usr/local/bin/napplet-cvm-bootstrap"]
+
+# The v3 edge ABI is a separate, explicitly unpromoted target. The direct v2
+# target above never accepts a v3 request, even though both retain pinned
+# authoring tooling and source substrate.
+FROM sealed AS edge-production-worker
 USER root
 ENTRYPOINT ["/usr/local/bin/napplet-cvm-bootstrap"]
 

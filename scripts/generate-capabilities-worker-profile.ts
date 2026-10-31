@@ -30,6 +30,8 @@ export async function generateCapabilitiesWorkerProfile() {
     schemaVersion: 1,
     status: "prepared-profile-not-promoted",
     artifactContract: "nip5d-direct-v1",
+    workerContract: "edge-native-v3-unpromoted",
+    workerImageTarget: "edge-production-worker",
     sourceVersion: 3,
     transportBundleVersion: 4,
     sealedArtifactVersion: 3,

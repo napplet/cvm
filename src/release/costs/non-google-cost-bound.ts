@@ -156,6 +156,20 @@ export type SuccessorGraphInventory = Readonly<{
   inventorySha256: string;
 }>;
 
+/** Rebuilds the graph from product code, rather than accepting a caller's
+ * role list as a provenance authority at the controller boundary. */
+export async function createProductSuccessorGraphInventory(input: Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+}>): Promise<SuccessorGraphInventory> {
+  return createSuccessorGraphInventory({
+    graphRevision: "non-google-v1",
+    candidateSha256: input.candidateSha256,
+    topologySha256: input.topologySha256,
+    roles: PRODUCT_SUCCESSOR_ROLE_REGISTRY,
+  });
+}
+
 const SuccessorCostDispositionSchema = z.enum([
   "authoritative_native_usage",
   "documented_scoped_zero",
@@ -185,9 +199,9 @@ const SuccessorRoleCostFactSchema = z.object({
   if (value.status === "held" && value.holdReason === undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_REQUIRED" });
   if (value.status === "available" && value.holdReason !== undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_INVALID" });
   const isModel = value.roleId === "model.openai-responses";
-  if (isModel && (value.rate === undefined || value.usageIntent === undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REQUIRED" });
+  if (isModel && value.status === "available" && (value.rate === undefined || value.usageIntent === undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REQUIRED" });
   if (!isModel && (value.rate !== undefined || value.usageIntent !== undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED" });
-  if (isModel && (value.evidence.sourceKind !== "official_openai_model" || value.evidence.sourceUrl !== OPENAI_RESPONSES_PRICING_URL || value.rate === undefined
+  if (isModel && value.status === "available" && (value.evidence.sourceKind !== "official_openai_model" || value.evidence.sourceUrl !== OPENAI_RESPONSES_PRICING_URL || value.rate === undefined
     || value.rate.sourceUrl !== value.evidence.sourceUrl || value.rate.sourceArtifactSha256 !== value.evidence.sourceArtifactSha256
     || value.rate.sourceDocumentSha256 !== value.evidence.sourceDocumentSha256 || value.rate.observedAtMs !== value.evidence.observedAtMs
     || value.rate.freshUntilMs !== value.evidence.freshUntilMs)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_EVIDENCE_UNBOUND" });
@@ -322,7 +336,7 @@ export async function createHeldSuccessorWorkerCostFact(input: Readonly<{
 export async function createSuccessorRoleCostBound(input: Readonly<{
   graph: SuccessorGraphInventory;
   facts: readonly SuccessorRoleCostFact[];
-  modelCatalog: NonGoogleModelCostCatalogPort;
+  modelCatalog?: NonGoogleModelCostCatalogPort;
 }>): Promise<SuccessorRoleCostBound> {
   const graph = input.graph;
   if (GraphRevisionSchema.parse(graph.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
@@ -334,10 +348,11 @@ export async function createSuccessorRoleCostBound(input: Readonly<{
     if (!role || role.effectId !== fact.effectId || role.costComponentId !== fact.costComponentId || role.constructorSha256 !== fact.constructorSha256) throw new Error("SUCCESSOR_GRAPH_COST_BINDING_INVALID");
     if (fact.evidence.candidateSha256 !== graph.candidateSha256 || fact.evidence.topologySha256 !== graph.topologySha256) throw new Error("SUCCESSOR_GRAPH_COST_SCOPE_INVALID");
     if (fact.provider === "openai_responses" && role.roleId !== "model.openai-responses") throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
-    if (role.roleId === "model.openai-responses" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
-    if (role.roleId === "model.openai-responses") {
+    if (role.roleId === "model.openai-responses" && fact.status === "available" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+    if (role.roleId === "model.openai-responses" && fact.status === "available") {
       const rate = OpenAiResponsesRateSnapshotSchema.parse(fact.rate);
       const usageIntent = SuccessorNativeModelUsageIntentSchema.parse(fact.usageIntent);
+      if (!input.modelCatalog) throw new Error("SUCCESSOR_GRAPH_MODEL_CATALOG_REQUIRED");
       const trustedRate = OpenAiResponsesRateSnapshotSchema.parse(await input.modelCatalog.readModelRate());
       if (canonicalJson(rate) !== canonicalJson(trustedRate)) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_UNBOUND");
       const maximum = priceOpenAiResponsesUsage({ rate, usage: { inputTokens: usageIntent.maximumInputTokens, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: usageIntent.maximumOutputTokens, reasoningTokens: 0 } });

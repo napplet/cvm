@@ -20,7 +20,7 @@ import { createOfficialFundingRailFeePort, type SealedFundingFeePolicyProjection
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "../src/release/costs/live-estimator";
 import { createDeploymentExecutionConfig } from "../src/release/deployment/config";
-import { loadPreparedCollectorPreapproval, materializePreapproval } from "../src/release/preapproval-materializer";
+import { loadPreparedCollectorPreapproval, materializePreapproval, prepareNonGoogleSuccessorPreapprovalHold } from "../src/release/preapproval-materializer";
 import { prepareProductionCollectorImage, type PreparedCollectorImage } from "../src/release/collector-image";
 import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity } from "../src/release/authorization";
 import { verifyFinalizedRelease } from "../src/release/verify-finalization";
@@ -138,6 +138,30 @@ async function sha256Json(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function sha256Bytes(value: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Executes the real successor preparation on the public normal-request path
+ * while the architecture guard is active. All derived values are review-only,
+ * remain in process, and the sole expected result is a typed hold. */
+async function prepareHeldSuccessorFromCandidate(candidatePath: string): Promise<void> {
+  const candidateSha256 = await releaseCandidateSha256(candidatePath);
+  const sourceBytes = new Uint8Array(await readFile(candidatePath));
+  if (await releaseCandidateSha256(candidatePath) !== candidateSha256) throw new Error("SUCCESSOR_GRAPH_CANDIDATE_BYTES_CHANGED");
+  const sourceSha256 = await sha256Bytes(sourceBytes);
+  const topologySha256 = await sha256Json({ graphRevision: "non-google-v1", candidateSha256 });
+  const configSha256 = await sha256Json({ sourceSha256, topologySha256, mode: "held-successor-preparation" });
+  const controllerStateSha256 = await sha256Json({ candidateSha256, topologySha256, state: "architecture-guard-active" });
+  try {
+    await prepareNonGoogleSuccessorPreapprovalHold({ candidateSha256, topologySha256, sourceSha256, configSha256, controllerStateSha256, sourceBytes, nowMs: Date.now() });
+  } catch (error) {
+    if (error instanceof Error && (error.message === "SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED" || error.message === "SUCCESSOR_GRAPH_COST_HELD")) return;
+    throw error;
+  }
+}
+
 /** `--receipt` is an opaque controller receipt ID, never receipt JSON. The
  * canonical structured receipt must already have been written by the sole
  * consent/controller path under the confined workspace. */
@@ -189,12 +213,22 @@ async function materializeRequestPreapproval(input: Readonly<{
     throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
   }
   const execution = certifier.releaseExecution;
-  const deployment = createDeploymentExecutionConfig(JSON.parse(await readFile(execution.configPath, "utf8")));
+  const deploymentBytes = new Uint8Array(await readFile(execution.configPath));
+  const deployment = createDeploymentExecutionConfig(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(deploymentBytes)));
   if (deployment.candidateSha256 !== input.candidateSha256 || deployment.sourceRevision !== certifier.controller.sourceRevision || deployment.factoryModuleSha256 !== execution.sha256 || deployment.publicSettings.regions.length !== 2) {
     throw new Error("PREAPPROVAL_DEPLOYMENT_BINDING_REJECTED");
   }
   const catalogSha256 = await sha256Json(input.facts);
   const providerScopesSha256 = await sha256Json(input.authorization.providerScopes);
+  await prepareNonGoogleSuccessorPreapprovalHold({
+    candidateSha256: input.candidateSha256,
+    topologySha256: input.topologySha256,
+    sourceSha256: certifier.controller.sourceSha256,
+    configSha256: execution.configSha256,
+    controllerStateSha256: input.authorization.controllerStateSha256,
+    sourceBytes: deploymentBytes,
+    nowMs: Date.now(),
+  });
   return materializePreapproval({
     workspace: input.workspace,
     repositoryRoot: execution.root,
@@ -319,6 +353,7 @@ async function main(): Promise<number> {
     }
     const historicalUsageRecovery = historicalRecoveryWorkspace !== undefined;
     if (!status && !historicalUsageRecovery) {
+      if (request) await prepareHeldSuccessorFromCandidate(candidatePath!);
       emitArchitectureRevisionRequired();
       return 1;
     }

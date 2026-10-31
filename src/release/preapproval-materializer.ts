@@ -5,10 +5,14 @@ import { ReleaseAuthorizationRequestSchema } from "./authorization";
 import { NonGoogleAuthorizationRequestV3Schema } from "./contracts";
 import {
   assertSuccessorGraphPreapprovalHeld,
+  createProductSuccessorGraphInventory,
+  createSuccessorRoleCostBound,
   type CostEvidenceArtifactResolver,
   type SuccessorGraphInventory,
+  type SuccessorRoleCostFact,
   type SuccessorRoleCostBound,
 } from "./costs/non-google-cost-bound";
+import type { NonGoogleModelCostCatalogPort } from "./costs/production-catalog";
 import { createNonGoogleDeploymentReviewConfig } from "./deployment/config";
 import type { PreparedCollectorImage } from "./collector-image";
 
@@ -54,6 +58,14 @@ export type MaterializePreapprovalInput = Readonly<{
   factory: Readonly<{ root: string; modulePath: string; moduleSha256: string; configPath: string; configSha256: string }>;
 }>;
 
+/** Controller-owned input ports. The normal successor seam reads its facts
+ * from this closure; callers can only present prior summaries for comparison. */
+export type NonGooglePreapprovalControllerSource = Readonly<{
+  readCostFacts(input: Readonly<{ candidateSha256: string; topologySha256: string }>): Promise<readonly SuccessorRoleCostFact[]>;
+  modelCatalog?: NonGoogleModelCostCatalogPort;
+  evidence: CostEvidenceArtifactResolver;
+}>;
+
 /** The successor graph is consumed here, at the same normal preapproval seam
  * that creates inert candidate bytes. It intentionally cannot materialize an
  * authorization request: it remeasures the supplied source artifacts and
@@ -61,24 +73,33 @@ export type MaterializePreapprovalInput = Readonly<{
  * credential lookup, client construction, or any provider call. */
 export async function assertNonGooglePreapprovalHeld(input: Readonly<{
   request: unknown;
-  deployment: unknown;
-  graph: SuccessorGraphInventory;
-  bound: SuccessorRoleCostBound;
-  nowMs: number;
-  evidence: CostEvidenceArtifactResolver;
+  deployment?: unknown;
+  /** Observations from an earlier controller stage. They are compared with
+   * recomputed values and never become successor authority. */
+  graph?: SuccessorGraphInventory;
+  bound?: SuccessorRoleCostBound;
+  nowMs?: number;
+  source?: NonGooglePreapprovalControllerSource;
 }>): Promise<never> {
   const request = NonGoogleAuthorizationRequestV3Schema.safeParse(input.request);
   if (!request.success) {
     if (ReleaseAuthorizationRequestSchema.safeParse(input.request).success) throw new Error("SUCCESSOR_GRAPH_HISTORICAL_AUTHORITY_QUERY_ONLY");
     throw new Error("SUCCESSOR_GRAPH_REQUEST_INVALID");
   }
+  if (!input.graph || !input.bound || !input.source || input.nowMs === undefined) throw new Error("SUCCESSOR_GRAPH_CONTROLLER_SOURCE_REQUIRED");
   const deployment = createNonGoogleDeploymentReviewConfig(input.deployment);
-  if (request.data.identity.candidateSha256 !== input.graph.candidateSha256
-    || request.data.identity.topologySha256 !== input.graph.topologySha256
-    || request.data.binding.roleInventorySha256 !== input.graph.inventorySha256
-    || request.data.binding.roleCostBoundSha256 !== input.bound.boundSha256
-    || deployment.candidateSha256 !== input.graph.candidateSha256
-    || deployment.topologySha256 !== input.graph.topologySha256
+  const graph = await createProductSuccessorGraphInventory({ candidateSha256: request.data.identity.candidateSha256, topologySha256: request.data.identity.topologySha256 });
+  const facts = await input.source.readCostFacts({ candidateSha256: graph.candidateSha256, topologySha256: graph.topologySha256 });
+  const bound = await createSuccessorRoleCostBound({ graph, facts, modelCatalog: input.source.modelCatalog });
+  if (canonicalJson(input.graph) !== canonicalJson(graph)
+    || canonicalJson(input.bound) !== canonicalJson(bound)
+    || canonicalJson(input.bound.heldRoleIds) !== canonicalJson(bound.heldRoleIds)
+    || request.data.identity.candidateSha256 !== graph.candidateSha256
+    || request.data.identity.topologySha256 !== graph.topologySha256
+    || request.data.binding.roleInventorySha256 !== graph.inventorySha256
+    || request.data.binding.roleCostBoundSha256 !== bound.boundSha256
+    || deployment.candidateSha256 !== graph.candidateSha256
+    || deployment.topologySha256 !== graph.topologySha256
     || deployment.sourceSha256 !== request.data.identity.sourceSha256
     || deployment.configSha256 !== request.data.identity.configSha256
     || deployment.toolchainSha256 !== request.data.identity.toolchainSha256
@@ -89,11 +110,116 @@ export async function assertNonGooglePreapprovalHeld(input: Readonly<{
     throw new Error("SUCCESSOR_GRAPH_PREAPPROVAL_BINDING_INVALID");
   }
   return assertSuccessorGraphPreapprovalHeld({
-    graph: input.graph,
-    bound: input.bound,
+    graph,
+    bound,
     nowMs: input.nowMs,
-    evidence: input.evidence,
+    evidence: input.source.evidence,
   });
+}
+
+/** The normal successor materialization seam. The closure is assembled by
+ * controller composition; it verifies canonical facts before delegating to
+ * the historical byte writer, which remains readable for v2 authorities. */
+export function createNonGooglePreapprovalMaterializer(source: NonGooglePreapprovalControllerSource): Readonly<{
+  assertHeld(input: Readonly<{
+    request: unknown;
+    deployment: unknown;
+    graph: SuccessorGraphInventory;
+    bound: SuccessorRoleCostBound;
+    nowMs: number;
+  }>): Promise<never>;
+  materialize(input: Readonly<{
+    materialization: MaterializePreapprovalInput;
+    request: unknown;
+    deployment: unknown;
+    graph: SuccessorGraphInventory;
+    bound: SuccessorRoleCostBound;
+    nowMs: number;
+  }>): Promise<PreapprovalMaterialization>;
+}> {
+  const assertHeld = async (input: Readonly<{
+    request: unknown;
+    deployment: unknown;
+    graph: SuccessorGraphInventory;
+    bound: SuccessorRoleCostBound;
+    nowMs: number;
+  }>): Promise<never> => assertNonGooglePreapprovalHeld({ ...input, source });
+  return Object.freeze({
+    assertHeld,
+    async materialize(input) {
+      await assertHeld(input);
+      return materializePreapproval(input.materialization);
+    },
+  });
+}
+
+/** Actual Plan-67 CLI composition: derive an honest all-held successor record
+ * from controller-owned bytes, remeasure that local record, and stop before a
+ * historical readiness write. It neither selects a backend nor claims a rate. */
+export async function prepareNonGoogleSuccessorPreapprovalHold(input: Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+  sourceSha256: string;
+  configSha256: string;
+  controllerStateSha256: string;
+  sourceBytes: Uint8Array;
+  nowMs: number;
+}>): Promise<never> {
+  if (!validDigest(input.candidateSha256) || !validDigest(input.topologySha256) || !validDigest(input.sourceSha256)
+    || !validDigest(input.configSha256) || !validDigest(input.controllerStateSha256)
+    || !(input.sourceBytes instanceof Uint8Array) || input.sourceBytes.byteLength < 1 || input.sourceBytes.byteLength > 8 * 1024 * 1024
+    || !Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("SUCCESSOR_GRAPH_CONTROLLER_INPUT_INVALID");
+  const candidateSha256 = input.candidateSha256.toLowerCase();
+  const topologySha256 = input.topologySha256.toLowerCase();
+  const graph = await createProductSuccessorGraphInventory({ candidateSha256, topologySha256 });
+  const sourceDocumentSha256 = await sha256(input.sourceBytes);
+  const artifactReference = `evidence:successor-controller:${sourceDocumentSha256}`;
+  const sourceUrl = "https://napplet-cvm.invalid/held/successor-controller";
+  const evidence = Object.freeze({
+    async read(reference: string) {
+      if (reference !== artifactReference) throw new Error("SUCCESSOR_GRAPH_CONTROLLER_EVIDENCE_REQUIRED");
+      return Object.freeze({ sourceUrl, bytes: new Uint8Array(input.sourceBytes) });
+    },
+  });
+  const facts: readonly SuccessorRoleCostFact[] = graph.roles.map((role) => ({
+    roleId: role.roleId,
+    effectId: role.effectId,
+    costComponentId: role.costComponentId,
+    constructorSha256: role.constructorSha256,
+    disposition: "unknown_held",
+    status: "held",
+    provider: role.roleId === "model.openai-responses" ? "openai_responses" : role.roleId,
+    holdReason: "Plan 67 has no selected native backend or source-bound usage consumer for this role",
+    evidence: {
+      artifactReference,
+      sourceKind: "unknown",
+      sourceUrl,
+      sourceArtifactSha256: sourceDocumentSha256,
+      sourceDocumentSha256,
+      observedAtMs: input.nowMs,
+      freshUntilMs: input.nowMs + 60_000,
+      currency: "USD",
+      fx: { kind: "native_usd", sourceDocumentSha256, numerator: 1, denominator: 1 },
+      unit: "controller-record",
+      precision: 6,
+      scope: "controller-owned successor preparation record; unavailable backend held",
+      candidateSha256,
+      topologySha256,
+    },
+  }));
+  const source = Object.freeze({ async readCostFacts() { return facts; }, evidence });
+  const bound = await createSuccessorRoleCostBound({ graph, facts });
+  const toolchainSha256 = await digestJson({ sourceSha256: input.sourceSha256.toLowerCase(), configSha256: input.configSha256.toLowerCase() });
+  const failureDomainSha256 = await digestJson({ topologySha256 });
+  const retentionSha256 = await digestJson({ retentionDays: 30 });
+  const cleanupSha256 = await digestJson({ cleanup: "held-no-backend" });
+  const scopesSha256 = await digestJson(graph.roles.map((role) => ({ roleId: role.roleId, effectId: role.effectId })));
+  const effectsSha256 = await digestJson({ mode: "held", graphRevision: graph.graphRevision });
+  const identity = Object.freeze({ candidateSha256, sourceSha256: input.sourceSha256.toLowerCase(), configSha256: input.configSha256.toLowerCase(), toolchainSha256, topologySha256, failureDomainSha256, retentionSha256, cleanupSha256, controllerStateSha256: input.controllerStateSha256.toLowerCase() });
+  const binding = Object.freeze({ providerGraphRevision: "non-google-v1" as const, roleInventorySha256: graph.inventorySha256, roleCostBoundSha256: bound.boundSha256, scopesSha256, effectsSha256 });
+  const request = Object.freeze({ kind: "release-authorization-request-v3" as const, version: 3 as const, identity, binding, requestSha256: await digestJson({ identity, binding }) });
+  const deployment = Object.freeze({ version: 1 as const, providerGraphRevision: "non-google-v1" as const, ...identity });
+  return createNonGooglePreapprovalMaterializer(source).assertHeld({ request, deployment, graph, bound, nowMs: input.nowMs });
 }
 
 const validDigest = (value: unknown): value is Digest => typeof value === "string" && DIGEST.test(value);

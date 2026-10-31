@@ -1,7 +1,6 @@
 import { prepareReleaseWorkspace, ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
-import { loadFinalizedReleaseVerificationAuthority } from "../src/release/production-execution";
 import { CERTIFIER_CONFIG_SHA256_ENV, loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseAuthoritativeUsageRecoverySession, loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
@@ -30,6 +29,14 @@ const repositoryRoot = resolve(import.meta.dir, "..");
 const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
 const canonicalCandidatePath = join(repositoryRoot, "toolchains", "candidates", "initial.json");
 const requireStatePrefix = "--require-state=";
+const architectureRevisionRequired = Object.freeze({
+  progress: "architecture_revision_required",
+  reasonCode: "PRODUCTION_ARCHITECTURE_REVISION_REQUIRED",
+});
+
+function emitArchitectureRevisionRequired(): void {
+  console.log(JSON.stringify(architectureRevisionRequired));
+}
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -149,10 +156,9 @@ async function readControllerReceipt(workspace: string, receiptSha256: string): 
 async function verifyImmutableBundle(bundleSha256: string) {
   if (!/^[a-f0-9]{64}$/u.test(bundleSha256)) throw new Error("RELEASE_CERTIFICATION_USAGE");
   const config = await loadCertifierConfig();
-  if (config.mode !== "protected") throw new Error("TRUST_ROOT_CONFIGURATION_INVALID");
+  if (config.mode !== "protected" || !config.trustRoot) return undefined;
   const workspace = controllerWorkspace();
-  const authority = config.trustRoot ? { config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! } : await loadFinalizedReleaseVerificationAuthority({ config, workspace, bundleSha256 });
-  return verifyFinalizedRelease({ workspace, bundleSha256, ...authority });
+  return verifyFinalizedRelease({ workspace, bundleSha256, config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! });
 }
 
 /** Materialization is a bounded local write of measured, redacted readiness
@@ -280,8 +286,16 @@ async function main(): Promise<number> {
   try {
     if (verifyBundle) {
       const decision = await verifyImmutableBundle(verifyBundle);
+      if (!decision) {
+        emitArchitectureRevisionRequired();
+        return 1;
+      }
       console.log(JSON.stringify({ progress: decision.status === "promoted" ? "bundle_verified" : "bundle_blocked", status: decision.status, bundleSha256: decision.bundleSha256, evidenceSha256: decision.evidenceSha256, cleanup: decision.cleanup }));
       return decision.status === "promoted" ? 0 : 1;
+    }
+    if (!status) {
+      emitArchitectureRevisionRequired();
+      return 1;
     }
     const workspace = controllerWorkspace();
     const workspaceCapability = await prepareReleaseWorkspace(workspace);

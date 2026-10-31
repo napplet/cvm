@@ -43,7 +43,7 @@ async function fixtureWorkspace(prefix: string): Promise<string> {
 test("current typed mounted configuration is rejected before bootstrap construction", async () => {
   const workspace = await fixtureWorkspace("bootstrap-");
   try {
-    const fixture = await mountedBillingRecoveryFixture(workspace, 1_000);
+    const fixture = await mountedBillingRecoveryFixture(workspace, Date.now());
     await expect(loadMountedProductionBootstrapConfig(fixture.runtimeConfigPath))
       .rejects.toThrow("PRODUCTION_ARCHITECTURE_REVISION_REQUIRED");
   } finally {
@@ -54,7 +54,7 @@ test("current typed mounted configuration is rejected before bootstrap construct
 test("receipt-bound pinned session rejects the typed current configuration before mounted authority", async () => {
   const workspace = await fixtureWorkspace("session-");
   try {
-    const fixture = await mountedBillingRecoveryFixture(workspace, 1_000);
+    const fixture = await mountedBillingRecoveryFixture(workspace, Date.now());
     const config = JSON.parse(await readFile(fixture.certifierPath, "utf8"));
     await expect(loadReleaseExecutionSession({
       config,
@@ -76,6 +76,7 @@ test("actual certification activation arguments close before workspace or provid
       ["--candidate", "toolchains/candidates/initial.json", "--setup"],
       ["--candidate", "toolchains/candidates/initial.json", "--dry-run"],
       ["--candidate", "toolchains/candidates/initial.json"],
+      ["--verify-bundle", "a".repeat(64)],
     ]) {
       const result = await child(args, home);
       expect(result.code).toBe(1);

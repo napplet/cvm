@@ -10,7 +10,7 @@ import { validateAuthorizationReceipt, validateAuthorizationRequest } from "./au
 import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from "./deployment/config";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "./native-registry";
 import type { SealedFundingFeePolicyProjection } from "./costs/funding-fees";
-import { loadProductionConfig, type ProductionConfig } from "../production/config";
+import { assertProductionArchitectureCurrent, loadProductionConfig, PRODUCTION_ARCHITECTURE_REVISION_REQUIRED, type ProductionConfig } from "../production/config";
 import { openProductionGenerationRuntime } from "../production/generation-runtime";
 import { createMountedProductionAuthorization } from "../production/mounted-authorization";
 import { assembleMountedProductionSession } from "../production/runtime";
@@ -186,6 +186,7 @@ async function loadPinnedProductionRuntimeConfig(module: PinnedDeploymentExecuti
   let config: ProductionConfig;
   try { config = loadProductionConfig(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(file.bytes))); }
   catch { throw new Error("RELEASE_PRODUCTION_RUNTIME_CONFIG_INVALID"); }
+  assertProductionArchitectureCurrent(config);
   if (config.candidateSha256 !== input.candidateSha256.toLowerCase() || config.topologySha256 !== input.topologySha256.toLowerCase()) {
     throw new Error("RELEASE_PRODUCTION_RUNTIME_BINDING_REQUIRED");
   }
@@ -213,10 +214,12 @@ async function openPinnedMountedSession(input: Readonly<{
   candidateSha256: string;
   topologySha256: string;
 }>): Promise<void> {
-  const [config, runtimeFactory] = await Promise.all([
-    loadPinnedProductionRuntimeConfig(input.module, { candidateSha256: input.candidateSha256, topologySha256: input.topologySha256, deploymentConfig: input.deploymentConfig }),
-    importPinnedProductionRuntimeFactory(input.module),
-  ]);
+  const config = await loadPinnedProductionRuntimeConfig(input.module, {
+    candidateSha256: input.candidateSha256,
+    topologySha256: input.topologySha256,
+    deploymentConfig: input.deploymentConfig,
+  });
+  const runtimeFactory = await importPinnedProductionRuntimeFactory(input.module);
   if (typeof runtimeFactory.createProductionCertificationSessionMaterial !== "function") throw new Error("RELEASE_PRODUCTION_RUNTIME_FACTORY_INVALID");
   /* The mounted pair is controller-owned material, but it is still a distinct
    * authority from the receipt record passed to this invocation.  Compare the
@@ -366,8 +369,6 @@ export async function loadReleaseExecutionSession(input: Readonly<{
     workspace: input.workspace,
     sourceRevision: input.config.controller!.sourceRevision,
   });
-  const module = await importPinnedModule(modulePin, deploymentConfig);
-  if (typeof module.createReleaseExecutionSession !== "function") throw new Error("RELEASE_PRODUCTION_EXECUTION_FACTORY_INVALID");
   let authorization: Readonly<{ request: unknown; receipt: unknown }> | undefined;
   if (input.authorization) {
     try {
@@ -394,13 +395,16 @@ export async function loadReleaseExecutionSession(input: Readonly<{
         topologySha256: runtimeRequest.topologySha256,
       });
     }
+    const module = await importPinnedModule(modulePin, deploymentConfig);
+    if (typeof module.createReleaseExecutionSession !== "function") throw new Error("RELEASE_PRODUCTION_EXECUTION_FACTORY_INVALID");
     session = await module.createReleaseExecutionSession({
       candidateSha256: input.candidateSha256,
       workspace: input.workspace,
       deploymentConfig,
       ...(authorization ? { authorization } : {}),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === PRODUCTION_ARCHITECTURE_REVISION_REQUIRED) throw error;
     throw new Error("RELEASE_PRODUCTION_EXECUTION_SESSION_INVALID");
   }
   if (!isReleaseExecutionSession(session)) throw new Error("RELEASE_PRODUCTION_EXECUTION_SESSION_INVALID");

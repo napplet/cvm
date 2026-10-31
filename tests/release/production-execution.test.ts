@@ -1,7 +1,7 @@
 import { observeUploadedCollectorRegistryImage } from "../../src/release/collector-image";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,12 @@ import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const candidatePath = join(import.meta.dir, "..", "..", "toolchains/candidates/initial.json");
+
+async function createWorkspace(prefix: string): Promise<string> {
+  const root = join(import.meta.dir, "..", "..", ".runtime", "release-certification", "native-discovery-v1", "production-execution-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+}
 
 test("pinned release execution session construction makes no provider call", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-release-execution-"));
@@ -113,7 +119,7 @@ test("protected configuration marked credential-unavailable cannot load a produc
 });
 
 test("non-dry execution reaches the same-session approval boundary before any provider plan or mutation", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-release-execution-"));
+  const workspace = await createWorkspace("napplet-cvm-release-execution-");
   let discoveryCalls = 0;
   let planCalls = 0;
   let mutationCalls = 0;

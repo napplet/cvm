@@ -5,6 +5,16 @@ import { ReleaseAuthorizationReceiptSchema as ExactReleaseAuthorizationReceiptSc
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const CostSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const ProviderOperationKindSchema = z.enum(["create_or_update", "benchmark", "configure", "verify_integration"]);
+export const ReleaseProviderCostObservationSchema = z.object({
+  version: z.literal(1), provider: ReleaseProviderIdSchema,
+  operationId: z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u),
+  candidateSha256: DigestSchema, authorizationRequestSha256: DigestSchema,
+  resourceIdentitySha256: DigestSchema, accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema,
+  rawReportSha256: DigestSchema, intervalStartMs: z.number().int().positive(), intervalEndMs: z.number().int().positive(), observedAtMs: z.number().int().positive(),
+  actualCostMicros: CostSchema,
+}).strict().superRefine((value, context) => {
+  if (value.intervalEndMs <= value.intervalStartMs || value.observedAtMs < value.intervalEndMs) context.addIssue({ code: z.ZodIssueCode.custom, message: "COST_OBSERVATION_INTERVAL_INVALID" });
+});
 
 const LegacyReleaseAuthorizationReceiptSchema = z.object({
   version: z.literal(1),
@@ -57,9 +67,9 @@ const NativePlanSchema = z.object({ status: z.literal("planned"), estimatedCostM
 /* A mounted native adapter may already return the canonical identity digest
  * from the provider's observation. Keep that digest intact instead of
  * hashing a hash again while still supporting older opaque identities. */
-const NativeMutationSchema = z.object({ status: z.enum(["applied", "unknown", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional(), resourceIdentitySha256: DigestSchema.optional() }).strict();
-const NativeObservationSchema = z.object({ status: z.enum(["completed", "pending", "unknown", "missing", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional(), resourceIdentitySha256: DigestSchema.optional() }).strict();
-const NativeCleanupSchema = z.object({ status: z.enum(["cleaned", "pending", "blocked"]), actualCostMicros: CostSchema }).strict();
+const NativeMutationSchema = z.object({ status: z.enum(["applied", "unknown", "blocked"]), actualCostMicros: CostSchema.optional(), costObservation: ReleaseProviderCostObservationSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional(), resourceIdentitySha256: DigestSchema.optional() }).strict();
+const NativeObservationSchema = z.object({ status: z.enum(["completed", "pending", "unknown", "missing", "blocked"]), actualCostMicros: CostSchema.optional(), costObservation: ReleaseProviderCostObservationSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional(), resourceIdentitySha256: DigestSchema.optional() }).strict();
+const NativeCleanupSchema = z.object({ status: z.enum(["cleaned", "pending", "blocked"]), actualCostMicros: CostSchema.optional() }).strict();
 
 export type ReleaseProviderPort = Readonly<{
   discoverCapabilities(): Promise<z.input<typeof NativeDiscoverySchema>>;
@@ -73,8 +83,13 @@ export type ReleaseProviderPort = Readonly<{
 }>;
 
 export type ReleaseProviderPlanResult = z.infer<typeof NativePlanSchema>;
-export type ReleaseProviderMutationResult = Readonly<{ status: "applied" | "unknown" | "blocked"; actualCostMicros: number; resourceIdentitySha256?: string }>;
-export type ReleaseProviderObservationResult = Readonly<{ status: "completed" | "pending" | "unknown" | "missing" | "blocked"; actualCostMicros: number; resourceIdentitySha256?: string }>;
+/** A resource observation and a bill are separate facts.  A native adapter may
+ * confirm the original resource while the provider's complete billing interval
+ * is still unavailable; callers must retain the approved reservation until an
+ * independently bound cost observation arrives. */
+export type ReleaseProviderCostObservation = z.infer<typeof ReleaseProviderCostObservationSchema>;
+export type ReleaseProviderMutationResult = Readonly<{ status: "applied" | "unknown" | "blocked"; actualCostMicros?: number; costObservation?: ReleaseProviderCostObservation; resourceIdentitySha256?: string }>;
+export type ReleaseProviderObservationResult = Readonly<{ status: "completed" | "pending" | "unknown" | "missing" | "blocked"; actualCostMicros?: number; costObservation?: ReleaseProviderCostObservation; resourceIdentitySha256?: string }>;
 export type ReleaseProviderCleanupResult = z.infer<typeof NativeCleanupSchema>;
 
 const PROVIDERS = [
@@ -120,14 +135,30 @@ function authorize(input: Readonly<{ receipt: unknown; operation: unknown; appro
   return { receipt: receipt.data, operation: operation.data, approvedMaximumCostMicros: approvedMaximumCostMicros.data };
 }
 
-function checkedCost(cost: number | undefined, maximum: number): number {
-  const actual = cost ?? 0;
-  if (actual > maximum) throw new Error("RELEASE_PROVIDER_COST_EXCEEDED");
-  return actual;
+function checkedCost(cost: number | undefined, maximum: number): number | undefined {
+  if (cost === undefined) return undefined;
+  if (cost > maximum) throw new Error("RELEASE_PROVIDER_COST_EXCEEDED");
+  return cost;
 }
 
 function effectInput(operation: ReleaseProviderOperation): Readonly<{ operationId: string; effectId: string; region: string; desiredDigest: string }> {
   return Object.freeze({ operationId: operation.operationId, effectId: operation.effectId, region: operation.region, desiredDigest: operation.desiredDigest });
+}
+
+function exactResourceIdentity(result: Readonly<{ resourceIdentitySha256?: string; resourceIdentity?: string }>): Promise<string | undefined> | string | undefined {
+  return result.resourceIdentitySha256 ?? (result.resourceIdentity ? sha256(result.resourceIdentity) : undefined);
+}
+
+function observationFor(input: Readonly<{ result: z.infer<typeof NativeMutationSchema> | z.infer<typeof NativeObservationSchema>; operation: ReleaseProviderOperation; resourceIdentitySha256?: string }>): ReleaseProviderCostObservation | undefined {
+  const observation = input.result.costObservation;
+  if (input.result.actualCostMicros !== undefined && !observation) throw new Error("RELEASE_PROVIDER_COST_OBSERVATION_REQUIRED");
+  if (!observation) return undefined;
+  /* Native provider ports can describe resource progress, but they do not yet
+   * have an authenticated billing-report transport. A port-generated object
+   * (including a digest it claims is for raw provider bytes) is not evidence
+   * of provider usage. Keep the reservation held until a future dedicated
+   * adapter persists and verifies provider-returned report material. */
+  throw new Error("RELEASE_PROVIDER_COST_REPORT_TRANSPORT_UNAVAILABLE");
 }
 
 /** Closed, project-owned adapter composition. Native clients are injected by the protected
@@ -176,8 +207,10 @@ export class ReleaseProviderRegistry {
     const port = this.#ports[authorized.operation.provider];
     if (!port) throw new Error("RELEASE_PROVIDER_UNAVAILABLE");
     const result = NativeMutationSchema.parse(await port.apply(effectInput(authorized.operation)));
-    const actualCostMicros = checkedCost(result.actualCostMicros, authorized.approvedMaximumCostMicros);
-    return Object.freeze({ status: result.status, actualCostMicros, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentitySha256: await sha256(result.resourceIdentity) } : {}) });
+    const resourceIdentitySha256 = await exactResourceIdentity(result);
+    const observation = observationFor({ result, operation: authorized.operation, resourceIdentitySha256 });
+    const actualCostMicros = checkedCost(observation?.actualCostMicros, authorized.approvedMaximumCostMicros);
+    return Object.freeze({ status: result.status, ...(actualCostMicros === undefined ? {} : { actualCostMicros, costObservation: observation }), ...(resourceIdentitySha256 ? { resourceIdentitySha256 } : {}) });
   }
 
   async observe(input: Readonly<{ receipt: unknown; operation: unknown; approvedMaximumCostMicros: unknown }>): Promise<ReleaseProviderObservationResult> {
@@ -185,8 +218,10 @@ export class ReleaseProviderRegistry {
     const port = this.#ports[authorized.operation.provider];
     if (!port) throw new Error("RELEASE_PROVIDER_UNAVAILABLE");
     const result = NativeObservationSchema.parse(await port.observe({ operationId: authorized.operation.operationId }));
-    const actualCostMicros = checkedCost(result.actualCostMicros, authorized.approvedMaximumCostMicros);
-    return Object.freeze({ status: result.status, actualCostMicros, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentitySha256: await sha256(result.resourceIdentity) } : {}) });
+    const resourceIdentitySha256 = await exactResourceIdentity(result);
+    const observation = observationFor({ result, operation: authorized.operation, resourceIdentitySha256 });
+    const actualCostMicros = checkedCost(observation?.actualCostMicros, authorized.approvedMaximumCostMicros);
+    return Object.freeze({ status: result.status, ...(actualCostMicros === undefined ? {} : { actualCostMicros, costObservation: observation }), ...(resourceIdentitySha256 ? { resourceIdentitySha256 } : {}) });
   }
 
   async cleanup(input: Readonly<{ receipt: unknown; operation: unknown; approvedMaximumCostMicros: unknown; resourceIdentitySha256?: string }>): Promise<ReleaseProviderCleanupResult> {
@@ -194,8 +229,8 @@ export class ReleaseProviderRegistry {
     const port = this.#ports[authorized.operation.provider];
     if (!port) throw new Error("RELEASE_PROVIDER_UNAVAILABLE");
     const result = NativeCleanupSchema.parse(await port.cleanup({ operationId: authorized.operation.operationId, ...(input.resourceIdentitySha256 ? { resourceIdentitySha256: DigestSchema.parse(input.resourceIdentitySha256) } : {}) }));
-    checkedCost(result.actualCostMicros, authorized.approvedMaximumCostMicros);
-    return Object.freeze(result);
+    const actualCostMicros = checkedCost(result.actualCostMicros, authorized.approvedMaximumCostMicros);
+    return Object.freeze({ status: result.status, ...(actualCostMicros === undefined ? {} : { actualCostMicros }) });
   }
 }
 

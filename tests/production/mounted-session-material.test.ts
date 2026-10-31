@@ -160,7 +160,7 @@ test("receipt-bound provider bridge refuses to mislabel a preapproval quote as i
   });
   await expect(port.plan({ operationId: "operation-1", effectId: "cloud-run-ingress", region: "europe-west1", desiredDigest: "d".repeat(64) })).rejects.toThrow("PRODUCTION_NATIVE_PLAN_INVALID");
   await expect(port.apply({ operationId: "operation-1", effectId: "cloud-run-ingress", region: "europe-west1", desiredDigest: "d".repeat(64) })).resolves.toEqual({ status: "unknown", resourceIdentitySha256: "a".repeat(64) });
-  await expect(port.observe({ operationId: "operation-1" })).resolves.toEqual({ status: "unknown", resourceIdentitySha256: "a".repeat(64) });
+  await expect(port.observe({ operationId: "operation-1" })).resolves.toEqual({ status: "completed", resourceIdentitySha256: "a".repeat(64) });
   expect(observed).toEqual(["plan", "apply", "observe"]);
 });
 

@@ -92,7 +92,10 @@ export function createReceiptBoundReleaseProviderPort(input: Readonly<{
    * this layer, so progression stays explicitly unknown until the controller
    * records one.  Returning a quote as `actualCostMicros` would falsely settle
    * money and permit a later cleanup to erase the evidence gap. */
-  const unobservedCost = () => ({ status: "unknown" as const });
+  /* A mutation/LRO acknowledgement is not service readiness.  The next
+   * controller attempt queries this same original operation and may advance
+   * only from that authoritative completed observation. */
+  const awaitingOriginalObservation = () => ({ status: "unknown" as const });
   const exactDiscovery = () => {
     const value = input.discovery;
     if (!value || !/^[a-f0-9]{64}$/iu.test(value.accountScopeSha256) || !/^[a-f0-9]{64}$/iu.test(value.costEstimateSha256)
@@ -121,14 +124,15 @@ export function createReceiptBoundReleaseProviderPort(input: Readonly<{
       const state = status(result, ["applied", "completed", "unknown", "blocked"], "invalid");
       if (state === "invalid") throw new Error("PRODUCTION_NATIVE_APPLY_INVALID");
       if (state === "blocked") return { status: "blocked" as const };
-      return { ...unobservedCost(), ...(identity(result) ? { resourceIdentitySha256: identity(result) } : {}) };
+      return { ...awaitingOriginalObservation(), ...(identity(result) ? { resourceIdentitySha256: identity(result) } : {}) };
     },
     async observe(value) {
       const result = await call("observe", value.operationId);
       const state = status(result, ["completed", "pending", "unknown", "missing", "blocked"], "invalid");
       if (state === "invalid") throw new Error("PRODUCTION_NATIVE_OBSERVATION_INVALID");
       if (state === "blocked") return { status: "blocked" as const };
-      return { status: "unknown" as const, ...(identity(result) ? { resourceIdentitySha256: identity(result) } : {}) };
+      if (state === "completed") return { status: "completed" as const, ...(identity(result) ? { resourceIdentitySha256: identity(result) } : {}) };
+      return { status: state as "pending" | "unknown" | "missing", ...(identity(result) ? { resourceIdentitySha256: identity(result) } : {}) };
     },
     async observeCleanup(value) {
       if (!input.observeCleanup) return { status: "unknown" as const };
@@ -143,8 +147,7 @@ export function createReceiptBoundReleaseProviderPort(input: Readonly<{
         : await call("cleanup", value.operationId);
       const state = status(result, ["cleaned", "pending", "blocked"], "invalid");
       if (state === "invalid") throw new Error("PRODUCTION_NATIVE_CLEANUP_INVALID");
-      if (state === "blocked") throw new Error("PRODUCTION_PROVIDER_ACTUAL_COST_UNOBSERVED");
-      throw new Error("PRODUCTION_PROVIDER_ACTUAL_COST_UNOBSERVED");
+      return { status: state as "cleaned" | "pending" | "blocked" };
     },
   });
 }
@@ -180,6 +183,8 @@ function bridgeGcs(input: Readonly<{
     },
     async apply(value) {
       const object = await input.native.createObject({ ...original(value.operationId), bytes: new Uint8Array(input.object) });
+      /* An object-create acknowledgement is not the separate exact-object
+       * observation required to advance the release state. */
       return { status: "unknown" as const, resourceIdentitySha256: object.checksum };
     },
     async observe(value) {
@@ -188,15 +193,18 @@ function bridgeGcs(input: Readonly<{
       if (state === "invalid") throw new Error("PRODUCTION_NATIVE_OBSERVATION_INVALID");
       const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", input.object as BufferSource)), byte => byte.toString(16).padStart(2, "0")).join("");
       const object = await input.native.objectStore.observeExactByKey({ key: `${input.runOwnedNamespace}${checksum}`, checksum });
-      return { status: state === "blocked" ? "blocked" as const : "unknown" as const, ...(object ? { resourceIdentitySha256: object.checksum } : {}) };
+      if (state === "blocked") return { status: "blocked" as const, ...(object ? { resourceIdentitySha256: object.checksum } : {}) };
+      if (!object) return { status: "missing" as const };
+      return { status: state as "completed" | "pending" | "unknown" | "missing", resourceIdentitySha256: object.checksum };
     },
     async cleanup(value) {
       const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", input.object as BufferSource)), byte => byte.toString(16).padStart(2, "0")).join("");
       const object = await input.native.objectStore.observeExactByKey({ key: `${input.runOwnedNamespace}${checksum}`, checksum });
       if (!object) throw new Error("PRODUCTION_GCS_ORIGINAL_OBJECT_REQUIRED");
       const result = await input.native.cleanup({ ...original(value.operationId), runOwnedNamespace: input.runOwnedNamespace, objects: [object] });
-      if (status(result, ["cleaned", "pending", "blocked"], "invalid") === "invalid") throw new Error("PRODUCTION_NATIVE_CLEANUP_INVALID");
-      throw new Error("PRODUCTION_PROVIDER_ACTUAL_COST_UNOBSERVED");
+      const state = status(result, ["cleaned", "pending", "blocked"], "invalid");
+      if (state === "invalid") throw new Error("PRODUCTION_NATIVE_CLEANUP_INVALID");
+      return { status: state as "cleaned" | "pending" | "blocked" };
     },
   });
 }
@@ -229,15 +237,17 @@ function createMeasuredWorkerProviderPort(input: Readonly<{
     },
     async apply(value) {
       const result = await input.native.apply(value);
-      return { status: result.status === "blocked" ? "blocked" as const : "unknown" as const, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentity: result.resourceIdentity } : {}) };
+      if (result.status === "blocked") return { status: "blocked" as const };
+      return { status: "unknown" as const, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentity: result.resourceIdentity } : {}) };
     },
     async observe(value) {
       const result = await input.native.observe(value);
-      return { status: result.status === "blocked" ? "blocked" as const : "unknown" as const, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentity: result.resourceIdentity } : {}) };
+      return { status: result.status, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentity: result.resourceIdentity } : {}) };
     },
     async cleanup(value) {
       const result = await input.native.cleanup(value);
-      throw new Error("PRODUCTION_PROVIDER_ACTUAL_COST_UNOBSERVED");
+      if (!(["cleaned", "pending", "blocked"] as const).includes(result.status)) throw new Error("PRODUCTION_NATIVE_CLEANUP_INVALID");
+      return { status: result.status };
     },
   });
 }

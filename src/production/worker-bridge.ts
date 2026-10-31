@@ -76,8 +76,8 @@ export class ProductionWorkerOwnershipResolver {
         FROM production_real.metered_actions a
         JOIN production_real.metered_sessions s ON s.id=a.session_id AND s.account_id=a.account_id
         JOIN production_real.funding_accounts f ON f.account_id=a.account_id
-        JOIN production_real.continuation_resume_commands r ON r.account_id=a.account_id AND r.session_id=a.session_id AND r.action_id=a.id
-        JOIN production_real.continuation_checkpoints cp ON cp.checkpoint_id=r.checkpoint_id AND cp.account_id=r.account_id AND cp.session_id=r.session_id
+        JOIN production_real.continuation_resume_commands r ON r.account_id=a.account_id AND r.action_id=a.id
+        JOIN production_real.continuation_checkpoints cp ON cp.checkpoint_id=r.checkpoint_id AND cp.account_id=r.account_id AND cp.session_id=a.session_id
         JOIN production_real.checkpoint_envelopes e ON e.checkpoint_id=cp.checkpoint_id AND e.account_id=cp.account_id AND e.session_id=cp.session_id
         JOIN production_real.continuation_worker_allocations w ON w.checkpoint_id=cp.checkpoint_id AND w.account_id=cp.account_id AND w.session_id=cp.session_id AND w.action_id=a.id AND w.allocation_intent_reference=r.allocation_intent_reference
         JOIN production_real.capacity_intents c ON c.account_id=a.account_id AND c.intent_reference=w.capacity_intent_reference AND c.capacity_reference=w.capacity_reference

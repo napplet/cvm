@@ -193,9 +193,10 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect(createCalls).toBe(6); // all six retained copies; lost ACK did not duplicate its subject.
     const inventory = await createProductionDurabilitySubjectRegistry(pool).inventory(scope);
     expect(inventory).toHaveLength(7);
-    await runtime.end(); runtime = undefined;
+    await runtime.end(); runtime = undefined; await source.end(); source = undefined;
     await admin.query(`CREATE DATABASE ${cloneDatabase} TEMPLATE ${sourceDatabase}`);
     await admin.query(`CREATE DATABASE ${migrationDatabase}`);
+    source = new Pool({ connectionString: connection("postgres", sourceDatabase), connectionTimeoutMillis: 2_000 });
     recovered = new Pool({ connectionString: connection(role, cloneDatabase), connectionTimeoutMillis: 2_000 });
     migration = new Pool({ connectionString: connection("postgres", migrationDatabase), connectionTimeoutMillis: 2_000 });
     const recoveredPool = bindAccountingRealmPool(sqlPool(recovered), createAccountingRealm("production-real"));

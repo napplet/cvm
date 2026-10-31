@@ -7,6 +7,7 @@ import { canonicalJson } from "../promotion/schema";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import { DurabilitySubjectSchema } from "../resilience/fault-harness";
 import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
+import { assertProductionRetainedSubjectSchema } from "./checkpoint-schema";
 import { createProductionDurabilitySubjectRegistry, type ProductionDurabilitySubject } from "./durability-registry";
 import { retainedSubjectCustodyId, sealRetainedSubject, type RetainedSubjectJournal } from "./retained-subject-archive";
 
@@ -42,6 +43,7 @@ export class ProductionRetainedSubjectPreparer {
   }
 
   async prepare(raw: RetainedSubjectScope): Promise<void> {
+    await assertProductionRetainedSubjectSchema(this.#pool);
     const scope = this.#scope(raw), binding = await this.#binding(scope);
     const registry = createProductionDurabilitySubjectRegistry(this.#pool);
     await registry.register(binding.checkpoint);

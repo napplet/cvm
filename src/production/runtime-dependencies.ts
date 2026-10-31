@@ -22,7 +22,7 @@ import { ProductionVertexModelGateway } from "./vertex-model-gateway";
 import { createProductionReadyCapacity } from "./worker-capacity";
 import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "./worker-bridge";
 import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
-import { assertProductionCheckpointSchema } from "./checkpoint-schema";
+import { assertProductionCheckpointSchema, assertProductionRetainedSubjectSchema } from "./checkpoint-schema";
 import { assertProductionPendingCheckpointSchema } from "./initial-pending-checkpoint";
 import { assertProductionSessionCapSchema } from "./session-cap-schema";
 import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
@@ -32,6 +32,7 @@ import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 export async function materializeProductionRuntimeDependencies(input: Readonly<{ config: ProductionConfig; servicePubkey: string; pool: PostgresSqlPool; secrets: MountedProductionSecretMaterial; now?: () => number }>) {
   if (input.servicePubkey !== input.config.certification.serverPubkey) throw new Error("PRODUCTION_SERVICE_SIGNER_IDENTITY_MISMATCH");
   await assertProductionCheckpointSchema(input.pool);
+  await assertProductionRetainedSubjectSchema(input.pool);
   await assertProductionPendingCheckpointSchema(input.pool);
   await assertProductionSourceProposalSchema(input.pool);
   await assertProductionSessionCapSchema(input.pool);

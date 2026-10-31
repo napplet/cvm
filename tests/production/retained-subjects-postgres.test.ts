@@ -18,6 +18,7 @@ import { buildCvmAttestation } from "../../src/publication/attestation-event";
 import { ProductionBuildAttestationSigner } from "../../src/production/attestation-signer";
 import { ProductionWorkerArtifactStore } from "../../src/production/worker-artifact-store";
 import { canonicalJson } from "../../src/promotion/schema";
+import { assertProductionRetainedSubjectSchema } from "../../src/production/checkpoint-schema";
 
 /* This is deliberately an opt-in local integration test.  The source records,
  * funding account, provider receipt, and signed events below are explicit
@@ -26,13 +27,15 @@ import { canonicalJson } from "../../src/promotion/schema";
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const digest = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const hex = (value: string) => digest(value);
+const wire = <Value>(value: Value): Value => JSON.parse(JSON.stringify(value)) as Value;
 const migrations = [
   "phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql",
   "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql",
   "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql",
   "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql",
-  "phase-07/003_production_checkpoints.sql", "phase-07/014_production_durability_subjects.sql",
+  "phase-07/003_production_checkpoints.sql",
 ] as const;
+const retainedSubjectsMigration = "phase-07/014_production_durability_subjects.sql";
 
 function sqlPool(native: Pool): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
@@ -108,10 +111,13 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await source.query(`CREATE ROLE ${role} LOGIN`); await source.query(`GRANT napplet_production_real TO ${role}`);
     runtime = new Pool({ connectionString: connection(role, sourceDatabase), connectionTimeoutMillis: 2_000 });
     const pool = bindAccountingRealmPool(sqlPool(runtime), createAccountingRealm("production-real"));
+    await expect(assertProductionRetainedSubjectSchema(pool)).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_SCHEMA_REQUIRED");
+    await source.query(await Bun.file(`migrations/${retainedSubjectsMigration}`).text());
+    await assertProductionRetainedSubjectSchema(pool);
     let now = Date.parse("2029-01-01T00:00:00.000Z");
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
-    expect(verifyEvent(fixture.ownerEvent)).toBe(true);
-    expect(verifyEvent({ ...fixture.ownerEvent, content: "tampered" })).toBe(false);
+    expect(verifyEvent(wire(fixture.ownerEvent))).toBe(true);
+    expect(verifyEvent(wire({ ...fixture.ownerEvent, content: "tampered" }))).toBe(false);
     const funding = new FundingService(new PostgresFundingDatabase(pool, { realm: "production-real" }).funding);
     const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: "10", externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
     const accountId = credited.accountId, sessionId = "session:retained", actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
@@ -148,8 +154,8 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     const attestationSigner = new ProductionBuildAttestationSigner(new Uint8Array(32).fill(19));
     const attestation = attestationSigner.signBuild(buildCvmAttestation({ ownerEventId: fixture.ownerEvent.id, ownerPubkey: fixture.ownerId, artifact, sessionVersion: 0, policyVersion: "fixture-policy", toolchainIdentity: "fixture-toolchain", verificationEvidenceReference: "verification:retained", createdAtMs: now }));
     attestationSigner.close();
-    expect(verifyEvent(attestation)).toBe(true);
-    expect(verifyEvent({ ...attestation, tags: [["e", "wrong"]] })).toBe(false);
+    expect(verifyEvent(wire(attestation))).toBe(true);
+    expect(verifyEvent(wire({ ...attestation, tags: [["e", "wrong"]] }))).toBe(false);
     await source.query("INSERT INTO production_real.publication_intents(intent_id,owner_principal_id,session_id,artifact_id,artifact_version,artifact_sha256,manifest_sha256,aggregate_sha256,capability_digest,normalized_d_tag,runtime_variant,policy_identity,toolchain_identity,runtime_compatibility_identity,request_fingerprint_sha256,owner_template_json,owner_template_sha256,state,created_at_ms,expires_at_ms,record_json) VALUES('publication:retained',$1,$2,$3,1,$4,$5,$6,$7,'retained-fixture','fixture-runtime','fixture-policy','fixture-toolchain','fixture-runtime',$8,'{}',$9,'complete',$10,$11,$12)", [fixture.ownerId, sessionId, artifactId, artifactReference.checksum, hex("manifest"), hex("aggregate"), hex("capabilities"), hex("publication-request"), hex("template"), now, now + 60_000, { releaseEvidence: false }]);
     await source.query("INSERT INTO production_real.publication_signed_events(intent_id,event_id,event_json) VALUES('publication:retained',$1,$2)", [fixture.ownerEvent.id, fixture.ownerEvent]);
     for (const effect of ["deploy", "owner_manifest", "attestation"] as const) { const observation = effect === "attestation" ? attestation : { effect, releaseEvidence: false }; await source.query("INSERT INTO production_real.publication_effect_intents(effect_id,intent_id,effect_kind,operation_id,request_fingerprint_sha256,state,observation_json,observation_sha256,observed_at) VALUES($1,'publication:retained',$2,$3,$4,'observed_complete',$5,$6,clock_timestamp())", [`effect:${effect}`, effect, `operation:${effect}`, hex(`request:${effect}`), observation, digest(canonicalJson(observation))]); }
@@ -167,10 +173,10 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     // These are real signed-event bytes from the producer-shaped records. A
     // clone must reject an invalid signature or a broken owner/attestation
     // binding before it can create any retained archive.
-    await source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [{ ...fixture.ownerEvent, content: "tampered" }]);
+    await source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [wire({ ...fixture.ownerEvent, content: "tampered" })]);
     await expect(preparer.prepare(scope)).rejects.toThrow("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
     await source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [fixture.ownerEvent]);
-    await source.query("UPDATE production_real.publication_effect_intents SET observation_json=$1 WHERE intent_id='publication:retained' AND effect_kind='attestation'", [{ ...attestation, tags: [["e", "wrong"]] }]);
+    await source.query("UPDATE production_real.publication_effect_intents SET observation_json=$1 WHERE intent_id='publication:retained' AND effect_kind='attestation'", [wire({ ...attestation, tags: [["e", "wrong"]] })]);
     await expect(preparer.prepare(scope)).rejects.toThrow("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
     await source.query("UPDATE production_real.publication_effect_intents SET observation_json=$1 WHERE intent_id='publication:retained' AND effect_kind='attestation'", [attestation]);
     await expect(preparer.prepare(scope)).rejects.toThrow("OBJECT_ACK_LOST");

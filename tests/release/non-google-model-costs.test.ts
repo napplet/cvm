@@ -13,6 +13,7 @@ import {
 import { captureOpenAiResponsesPricingDocument, OPENAI_RESPONSES_PRICING_URL } from "../../src/release/costs/official-sources";
 import { createNonGoogleModelCostCatalog } from "../../src/release/costs/production-catalog";
 import { createAuthoritativeUsageReportEnvelopeV2, verifyAuthoritativeUsageReportArtifactV2 } from "../../src/release/authoritative-usage-report";
+import { OpenAiResponsesCandidateModelGateway } from "../../src/production/openai-responses-model-gateway";
 
 const hex = (character: string) => character.repeat(64);
 const now = 1_000_000;
@@ -152,4 +153,31 @@ test("missing response identity remains held and is never resent", async () => {
   expect(await client.dispatch({ operationId: "operation:openai-2", idea: "One focused counter", systemInstruction: "Return JSON only", maximumInputTokens: 1_000, maximumOutputTokens: 200 })).toMatchObject({ status: "unknown", reason: "response_id_unknown", originalOperationOnly: true });
   expect(await client.reconcileOriginal({ operationId: "operation:openai-2" })).toMatchObject({ status: "unknown", reason: "response_id_unknown" });
   expect(posts).toBe(1);
+});
+
+test("stale and cap refusal never claims an operation or reports paid ambiguity", async () => {
+  let journalCalls = 0;
+  let httpCalls = 0;
+  const client = createOpenAiResponsesClient({
+    candidateSha256: hex("a"), credentialReference: "openai:api-key:production-reference", model: "gpt-4.1-2025-04-14",
+    rate: await rate(), maximumChargeMicros: 10_000_000,
+    journal: {
+      async claim() { journalCalls += 1; throw new Error("JOURNAL_MUST_NOT_RUN"); },
+      async read() { journalCalls += 1; throw new Error("JOURNAL_MUST_NOT_RUN"); },
+      async write() { journalCalls += 1; throw new Error("JOURNAL_MUST_NOT_RUN"); },
+    },
+    port: {
+      async create() { httpCalls += 1; throw new Error("HTTP_MUST_NOT_RUN"); },
+      async get() { httpCalls += 1; throw new Error("HTTP_MUST_NOT_RUN"); },
+    },
+    now: () => now + 60_001,
+  });
+  const gateway = new OpenAiResponsesCandidateModelGateway(client);
+  const observation = await gateway.dispatch({
+    operationId: "operation:openai-stale", providerRequestId: "request:openai-stale", accountId: "account:fixture", sessionId: "session:fixture", actionId: "action:fixture", expectedVersion: 0,
+    actionBudgetReference: "budget:fixture", profileId: "openai-responses-candidate", priceCardId: "openai-source-bound", requestFingerprint: hex("b"), prompt: "One focused counter",
+    maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "200" }], selection: "unselected",
+  }, new AbortController().signal);
+  expect(observation).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
+  expect({ journalCalls, httpCalls }).toEqual({ journalCalls: 0, httpCalls: 0 });
 });

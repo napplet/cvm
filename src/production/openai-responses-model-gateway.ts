@@ -3,6 +3,13 @@ import type { ModelDispatchObservation, ModelGateway, ModelLookupObservation, No
 import { parseOpenAiResponsesProviderReceipt, type OpenAiResponsesProviderReceipt, type createOpenAiResponsesClient } from "../release/deployment/openai-responses-client";
 
 const SYSTEM = "Return one focused napplet as JSON. Do not use network, relay, signer, storage outside declared SDK capabilities, dynamic imports, workers, or server code.";
+const PRE_DISPATCH_REJECTIONS = new Set([
+  "OPENAI_RESPONSES_INTENT_CAP_REQUIRED",
+  "OPENAI_USAGE_CAP_EXCEEDED",
+  "OPENAI_RESPONSES_PRICE_STALE",
+  "OPENAI_RESPONSES_INPUT_CAP_EXCEEDED",
+  "OPENAI_RESPONSES_MAXIMUM_CAP_EXCEEDED",
+]);
 
 function maximum(intent: ProviderOperationIntent, dimension: "input_tokens" | "output_tokens"): number {
   const unit = intent.maximumUnits.find((value) => value.dimension === dimension)?.units;
@@ -42,7 +49,7 @@ export class OpenAiResponsesCandidateModelGateway implements ModelGateway {
       const observed = await this.client.dispatch({ operationId: intent.operationId, idea: intent.prompt, systemInstruction: SYSTEM, maximumInputTokens: maximum(intent, "input_tokens"), maximumOutputTokens: maximum(intent, "output_tokens") });
       return this.#observation(intent, observed);
     } catch (error) {
-      if (error instanceof Error && ["OPENAI_RESPONSES_INTENT_CAP_REQUIRED", "OPENAI_USAGE_CAP_EXCEEDED"].includes(error.message)) return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `openai-responses-pre-dispatch:${intent.operationId}` } };
+      if (error instanceof Error && PRE_DISPATCH_REJECTIONS.has(error.message)) return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `openai-responses-pre-dispatch:${intent.operationId}` } };
       return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "lost_response", provenance: { protectedEvidenceReference: `openai-responses-operation:${intent.operationId}` } };
     }
   }

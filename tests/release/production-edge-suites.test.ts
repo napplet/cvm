@@ -125,7 +125,9 @@ test("tracer: successor edge material rejects legacy authority and holds before 
     credentialReference: "openai:api-key:production-reference", model: "gpt-4.1-2025-04-14", maximumChargeMicros: 1_000_000,
     rate: { version: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-4.1", sourceDocumentSha256: digest("8"), sourceArtifactSha256: digest("8"), quoteSha256: digest("9"), observedAtMs: 1, freshUntilMs: 2, model: "gpt-4.1-2025-04-14", currency: "USD", inputMicrosPerMillion: 1, cachedInputMicrosPerMillion: 1, outputMicrosPerMillion: 1 },
   }} as const;
-  await expect(createMountedNonGoogleEdgeClient({ material, pool: { async connect() { effects += 1; throw new Error("DATABASE_MUST_NOT_CONNECT"); } } as never })).rejects.toThrow("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
+  const pool = { async connect() { effects += 1; throw new Error("DATABASE_MUST_NOT_CONNECT"); } } as never;
+  await expect(createMountedNonGoogleEdgeClient({ material, pool })).rejects.toThrow("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
+  await expect(createMountedNonGoogleEdgeClient({ material, authority: { candidateSha256: material.candidateSha256 }, pool })).rejects.toThrow("NON_GOOGLE_EDGE_CONTROLLER_AUTHORITY_REQUIRED");
   expect(effects).toBe(0);
 });
 

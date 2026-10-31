@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { z } from "zod";
 
+import { canonicalJson } from "../promotion/schema";
 import { assertNonGoogleSuccessorRequestHeld, verifyNonGoogleAuthorizationReceiptV4 } from "../release/contracts";
 import { OpenAiResponsesRateSnapshotSchema } from "../release/costs/non-google-cost-bound";
 import { createOpenAiResponsesClient, createOpenAiResponsesHttpPort } from "../release/deployment/openai-responses-client";
@@ -33,6 +34,50 @@ export const NonGoogleEdgeMaterialSchema = z.object({
   }
 });
 export type NonGoogleEdgeMaterial = z.infer<typeof NonGoogleEdgeMaterialSchema>;
+
+/** Plan 70 owns the controller-authenticated issuer for this opaque
+ * capability. Its private brand prevents mounted JSON, a legacy receipt, or a
+ * certification request from manufacturing native OpenAI authority. */
+export type NonGoogleEdgeConsumptionAuthority = Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+  requestSha256: string;
+  receiptSha256: string;
+  materialSha256: string;
+}>;
+const consumptionAuthorities = new WeakSet<object>();
+
+function isConsumptionAuthority(value: object): value is NonGoogleEdgeConsumptionAuthority {
+  return "candidateSha256" in value && typeof value.candidateSha256 === "string"
+    && "topologySha256" in value && typeof value.topologySha256 === "string"
+    && "requestSha256" in value && typeof value.requestSha256 === "string"
+    && "receiptSha256" in value && typeof value.receiptSha256 === "string"
+    && "materialSha256" in value && typeof value.materialSha256 === "string";
+}
+
+async function sha256(value: unknown): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function assertConsumptionAuthority(input: Readonly<{
+  authority: unknown;
+  material: NonGoogleEdgeMaterial;
+  receipt: Readonly<{ requestSha256: string; candidateSha256: string; topologySha256: string; receiptSha256: string }>;
+}>): Promise<NonGoogleEdgeConsumptionAuthority> {
+  if (!input.authority || typeof input.authority !== "object" || !consumptionAuthorities.has(input.authority) || !isConsumptionAuthority(input.authority)) {
+    throw new Error("NON_GOOGLE_EDGE_CONTROLLER_AUTHORITY_REQUIRED");
+  }
+  const authority = input.authority;
+  if (authority.candidateSha256 !== input.material.candidateSha256
+    || authority.topologySha256 !== input.material.topologySha256
+    || authority.requestSha256 !== input.receipt.requestSha256
+    || authority.receiptSha256 !== input.receipt.receiptSha256
+    || authority.materialSha256 !== await sha256(input.material)) {
+    throw new Error("NON_GOOGLE_EDGE_CONTROLLER_BINDING_REQUIRED");
+  }
+  return authority;
+}
 
 /** Mount-only resolver. It performs no read during construction and reads only
  * the fixed referenced key after the Responses client has claimed an original
@@ -71,6 +116,7 @@ export class MountedOpenAiApiKeyBroker {
  */
 export async function createMountedNonGoogleEdgeClient(input: Readonly<{
   material: unknown;
+  authority?: unknown;
   pool: PostgresSqlPool;
   now?: () => number;
   secretRoot?: string;
@@ -80,10 +126,11 @@ export async function createMountedNonGoogleEdgeClient(input: Readonly<{
   if (receipt.candidateSha256 !== material.candidateSha256 || receipt.topologySha256 !== material.topologySha256) {
     throw new Error("NON_GOOGLE_EDGE_SUCCESSOR_BINDING_REQUIRED");
   }
-  // This always throws until the successor controller has authenticated the
-  // v4 issuer and supplied a trusted consumption authority. Do not replace it
-  // with a legacy receipt, digest comparison, or caller-provided callback.
-  assertNonGoogleSuccessorRequestHeld(material.successorAuthorization.request);
+  // Until Plan 70 installs the private controller issuer, retain the existing
+  // explicit hold. A v3/v4 shape match alone is never authority to resolve a
+  // key, create a client, or issue a request.
+  if (input.authority === undefined) assertNonGoogleSuccessorRequestHeld(material.successorAuthorization.request);
+  await assertConsumptionAuthority({ authority: input.authority, material, receipt });
 
   const broker = new MountedOpenAiApiKeyBroker({ credentialReference: material.openAiResponses.credentialReference, ...(input.secretRoot === undefined ? {} : { root: input.secretRoot }) });
   const journal = createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(input.pool, {

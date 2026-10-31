@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import fixture from "../fixtures/contextvm-phase-03.json";
 import { buildContextVmAnnouncement } from "../../src/contextvm/announcement";
 import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
-import { ContextVmSdkBridge, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
+import { ContextVmSdkBridge, PRICED_CONTINUATION_EVENT_TAG, PRICED_CONTINUATION_META_KEY, PRICED_CONTINUATION_VERSION, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
 import { FundingService } from "../../src/funding/funding-service";
 import { AccountStatusService } from "../../src/funding/account-status";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
@@ -98,23 +98,34 @@ describe("verified ContextVM funding adapter", () => {
     const quote = await prepareResumePricingQuote({ context, pricing: await resumePricingMaterial(now), preparationKey: "prepare:v2", nowMs: now, lifetimeMs: 30_000 });
     const calls: unknown[] = []; let requireCapApproval = false;
     const adapter = new ContextVmFundingAdapter({ service, transport, pricedContinuation: {
+      isReady: () => true,
       prepare: async input => { calls.push(input); return projectResumePricingQuote(quote); },
       resume: async input => { calls.push(input); return requireCapApproval
         ? { status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" }
         : { status: "completed", code: "ACTION_COMMITTED", accountId: "account:internal", sessionId: context.sessionId, sessionVersion: 1, artifactVersion: 1, confirmedSpend: "3", remainingCap: "97", remainingBalance: "497", nextAction: "revise_session", operationId: "operation:priced" }; },
     } });
 
-    await adapter.handle(envelope({ request: { id: "prepare-v2", method: "tools/call", params: { name: "prepare_resume", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "prepare:v2" } } } }));
+    const pricedEnvelope = (id: string, name: "prepare_resume" | "resume_session_v2", arguments_: unknown) => envelope({
+      rawEvent: { id: "event-0001", tags: [["pmi", fixture.requests.cashuPmi], ["payment_interaction", "explicit_gating"], ["direct_payment", fixture.requests.cashuPmi, fixture.requests.directPayment], [...PRICED_CONTINUATION_EVENT_TAG]] },
+      request: { id, method: "tools/call", params: { name, arguments: arguments_, _meta: { [PRICED_CONTINUATION_META_KEY]: { pricedContinuation: PRICED_CONTINUATION_VERSION } } } },
+    });
+    const prepareArguments = { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "prepare:v2" };
+    // An installed facade does not make V2 available to a legacy request.
+    await adapter.handle(envelope({ request: { id: "prepare-v2-unnegotiated", method: "tools/call", params: { name: "prepare_resume", arguments: prepareArguments } } }));
+    expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
+    expect(calls).toEqual([]);
+
+    await adapter.handle(pricedEnvelope("prepare-v2", "prepare_resume", prepareArguments));
     expect(calls[0]).toEqual({ principal: { id: accountId }, sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "prepare:v2" });
     expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "quoted", quoteReference: quote.quoteReference } });
     expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:|checkpointSha|commandSha|operationId:|settlement/i);
 
-    await adapter.handle(envelope({ request: { id: "resume-v2", method: "tools/call", params: { name: "resume_session_v2", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } } } } }));
+    await adapter.handle(pricedEnvelope("resume-v2", "resume_session_v2", { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } }));
     expect(calls[1]).toEqual(expect.objectContaining({ principal: { id: accountId }, idempotencyKey: "resume:v2", pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } }));
     expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "completed", sessionId: context.sessionId, operationId: "operation:priced" } });
     expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:internal|provider|archive|credential|lease|action-budget/i);
     requireCapApproval = true;
-    await adapter.handle(envelope({ request: { id: "resume-v2-cap", method: "tools/call", params: { name: "resume_session_v2", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2-cap", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } } } } }));
+    await adapter.handle(pricedEnvelope("resume-v2-cap", "resume_session_v2", { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2-cap", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } }));
     expect(transport.responses.at(-1)?.response).toEqual({ jsonrpc: "2.0", id: "resume-v2-cap", result: { status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" } });
     expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:internal|provider|archive|credential|lease|action-budget/i);
     void adapter;
@@ -202,6 +213,47 @@ describe("verified ContextVM funding adapter", () => {
       params: { _meta: { requestEventId: signed.id }, name: "account_status", arguments: {} },
     }, { clientPubkey: fixture.requests.forgedPubkey });
     expect(delivered).toHaveLength(1);
+  });
+
+  test("keeps default discovery at V1 and exposes V2 only for a matching signed request negotiation", async () => {
+    let inbound: ((message: unknown, context: { clientPubkey: string }) => Promise<void> | void) | undefined;
+    let event: ReturnType<typeof finalizeEvent> | undefined;
+    const responses: ContextVmWireResponse[] = [];
+    const bridge = new ContextVmSdkBridge({
+      setAnnouncementExtraTags: () => undefined,
+      setAnnouncementPricingTags: () => undefined,
+      setSupportedPaymentInteraction: () => undefined,
+      getNostrRequestEvent: () => event,
+      async sendTargetedResponse(_pubkey: string, response: ContextVmWireResponse) { responses.push(response); },
+      set onmessage(_handler: undefined) {},
+      set onmessageWithContext(handler: typeof inbound) { inbound = handler; },
+    } as never);
+    bridge.configureAnnouncement(buildContextVmAnnouncement(fixture.announcement));
+    bridge.configurePricedContinuationAvailability(true);
+    bridge.onInbound(async () => undefined);
+    const secret = generateSecretKey();
+    const list = async (metadata: unknown, tags: string[][], clientPubkey?: string) => {
+      event = finalizeEvent({ kind: 25910, created_at: 1000, content: "{}", tags }, secret);
+      await inbound?.({ id: `list-${responses.length}`, method: "tools/list", params: { _meta: { requestEventId: event.id, ...(metadata ? { [PRICED_CONTINUATION_META_KEY]: metadata } : {}) } } }, { clientPubkey: clientPubkey ?? event.pubkey });
+      await Bun.sleep(1);
+      return responses.at(-1);
+    };
+
+    const legacy = await list(undefined, []);
+    const v1Tools = ["account_status", "top_up", "funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication"]
+      .filter(name => fixture.announcement.tools.some(tool => tool.name === name && tool.available));
+    expect(legacy?.result).toEqual({ tools: v1Tools.map(name => ({ name })) });
+
+    const negotiated = await list({ pricedContinuation: PRICED_CONTINUATION_VERSION }, [[...PRICED_CONTINUATION_EVENT_TAG]]);
+    expect((negotiated?.result as { tools: Array<{ name: string }> }).tools.map(tool => tool.name)).toEqual([...v1Tools, "prepare_resume", "resume_session_v2"]);
+
+    const tampered = await list({ pricedContinuation: "v1" }, [[...PRICED_CONTINUATION_EVENT_TAG]]);
+    expect(tampered).toMatchObject({ error: { code: -32602 } });
+    const stale = await list({ pricedContinuation: "v1" }, [["cvm", "napplet-cvm.priced-continuation", "v1"]]);
+    expect(stale).toMatchObject({ error: { code: -32602 } });
+    const responsesBeforeForgedSender = responses.length;
+    await list({ pricedContinuation: PRICED_CONTINUATION_VERSION }, [[...PRICED_CONTINUATION_EVENT_TAG]], fixture.requests.forgedPubkey);
+    expect(responses).toHaveLength(responsesBeforeForgedSender);
   });
 
   test("SDK bridge confines the pinned transport setters and canonical explicit-gating identity to the adapter folder", () => {

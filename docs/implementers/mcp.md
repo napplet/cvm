@@ -48,6 +48,23 @@ The current development server announces names without full input schemas and re
 
 The bridge uses the installed SDK's `NostrMCPProxy`, `StdioServerTransport` and stable private signer. The current service accepts transparent CEP-8 negotiation; the example supplies no payment handlers and does not expose `top_up`, faucet, publication or operator tools. No wallet is connected to it. It is a repository compatibility example, not a separately published MCP package.
 
+## Priced continuation V2 negotiation
+
+V2 continuation is deliberately absent from the default V1 announcement and
+`tools/list` result. A client that implements the migration described in
+[Issue #94](https://github.com/napplet/cvm/issues/94) must request version
+`v2` on every discovery or invocation with both of these matching facts:
+
+- MCP metadata: `_meta.nappletCvm.pricedContinuation: "v2"`
+- signed ContextVM request-event tag: `["cvm", "napplet-cvm.priced-continuation", "v2"]`
+
+The CVM enables `prepare_resume` and `resume_session_v2` only when its sealed
+production facade is bound and both facts match. A missing, forged, mismatched,
+or unsupported version is rejected; it never silently falls back from a V2
+request. Existing V1 clients omit both fields and retain their original
+discovery schemas and behavior. The tag is required because `_meta` alone is
+not a signed capability.
+
 ## Enable generation deliberately
 
 Set `CVM_MCP_ALLOW_GENERATION=1` in the host environment to additionally expose `funded_admission`, `start_session`, `revise_session` and `resume_session`. Existing account funds and valid admission/approval references are still required. The bridge's key identifies its account; funding a different browser key will not fund it.

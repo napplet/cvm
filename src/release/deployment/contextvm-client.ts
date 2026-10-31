@@ -181,6 +181,7 @@ export function createDurableContextVmTransport(input: Readonly<{ source: Contex
     recoverPendingGenerations: () => input.generationIntakes?.scan((envelope,original) => dispatchOriginal(envelope,original,true)) ?? Promise.resolve(0),
     onInbound(value) { handler = value; },
     configureAnnouncement: (announcement) => input.source.configureAnnouncement(announcement),
+    configurePricedContinuationAvailability: (available) => input.source.configurePricedContinuationAvailability?.(available),
     async sendResponse(clientPubkey, response, requestEventId) {
       const active = dispatching.get(requestEventId);
       if (active && active.envelope.verifiedClientPubkey === clientPubkey) {

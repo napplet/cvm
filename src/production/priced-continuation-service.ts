@@ -30,12 +30,22 @@ type PricedContinuationSurface = Readonly<{
  * resume handler a production authority. */
 export class SealedProductionPricedContinuationFacade implements PricedContinuationSurface {
   #service: PricedContinuationSurface | undefined;
+  #readyListeners = new Set<() => void>();
 
   bind(service: PricedContinuationSurface): void {
     if (this.#service || !service || typeof service.prepare !== "function" || typeof service.resume !== "function") {
       throw new Error("PRODUCTION_PRICED_CONTINUATION_BINDING_REQUIRED");
     }
     this.#service = service;
+    for (const listener of this.#readyListeners) listener();
+    this.#readyListeners.clear();
+  }
+
+  isReady(): boolean { return this.#service !== undefined; }
+
+  onReady(listener: () => void): void {
+    if (this.#service) listener();
+    else this.#readyListeners.add(listener);
   }
 
   #get(): PricedContinuationSurface {

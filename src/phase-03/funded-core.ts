@@ -145,7 +145,6 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if (publicGenerationSurface && !verifiedCreditWake) throw new Error("PRODUCTION_VERIFIED_CREDIT_WAKE_REQUIRED");
   const sessionCaps = publicGenerationSurface && database ? new SessionCapApprovalService(database.funding) : undefined;
   const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
-  const publicPricedContinuationSurface = Boolean(publicFundingSurface && options.pricedContinuation);
   const publicPreviewSurface = Boolean(publicFundingSurface && options.preview);
   // Do not let a caller-provided `{ status: "available" }` become a public
   // publication capability. The exact Plan 05 identity/provenance/surface is
@@ -161,7 +160,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
       pmis: ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"],
       paymentInteraction: ["transparent", "explicit_gating"],
       tools: [
-        { name: "start_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "revise_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "resume_session", available: publicContinuationSurface, planned: !publicContinuationSurface }, { name: "prepare_resume", available: publicPricedContinuationSurface, planned: !publicPricedContinuationSurface }, { name: "resume_session_v2", available: publicPricedContinuationSurface, planned: !publicPricedContinuationSurface }, { name: "session_status", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "account_status", available: true, planned: false },
+        { name: "start_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "revise_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "resume_session", available: publicContinuationSurface, planned: !publicContinuationSurface }, { name: "session_status", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "account_status", available: true, planned: false },
         { name: "top_up", available: true, planned: false }, { name: "funded_admission", available: true, planned: false },
         { name: "preview", available: false, planned: true }, { name: "publication", available: false, planned: true },
       ],
@@ -169,7 +168,6 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
     options.transport.configureAnnouncement(buildContextVmAnnouncement(configureContextVmToolAvailability(announcement, {
       preview: publicPreviewSurface,
       sessionCaps: Boolean(sessionCaps),
-      pricedContinuation: publicPricedContinuationSurface,
       publicationSourceContract: publicPublicationSurface ? sourceContract : undefined,
     })));
   }

@@ -27,9 +27,35 @@ export type ContextVmInboundEnvelope = Readonly<{
 export interface ContextVmTransportPort {
   onInbound(handler: (input: ContextVmInboundEnvelope) => Promise<void>): void;
   configureAnnouncement(announcement: ContextVmAnnouncement): void;
+  /** V2 discovery is only enabled by a ready, project-owned facade. */
+  configurePricedContinuationAvailability?(available: boolean): void;
   sendResponse(clientPubkey: string, response: ContextVmWireResponse, requestEventId: string): Promise<void>;
   sendNotification(clientPubkey: string, notification: ContextVmWireNotification, requestEventId: string): Promise<void>;
   canonicalInvocation(clientPubkey: string, method: string, params: unknown): Readonly<{ clientPubkey: string; invocationHash: string }>;
+}
+
+/**
+ * Explicit per-request V2 negotiation.  `nappletCvm` is project-owned MCP
+ * metadata; the matching tag is part of the SDK-verified signed Nostr event.
+ * Both are required so a mutable JSON-RPC metadata object cannot upgrade a
+ * legacy request by itself.
+ */
+export const PRICED_CONTINUATION_META_KEY = "nappletCvm";
+export const PRICED_CONTINUATION_VERSION = "v2";
+export const PRICED_CONTINUATION_EVENT_TAG = Object.freeze(["cvm", "napplet-cvm.priced-continuation", PRICED_CONTINUATION_VERSION] as const);
+
+export type PricedContinuationNegotiation = "absent" | "verified" | "invalid";
+
+export function pricedContinuationNegotiation(params: unknown, tags: readonly (readonly string[])[]): PricedContinuationNegotiation {
+  const values = params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, unknown> : undefined;
+  const metadata = values?._meta && typeof values._meta === "object" && !Array.isArray(values._meta) ? values._meta as Record<string, unknown> : undefined;
+  const requested = metadata?.[PRICED_CONTINUATION_META_KEY];
+  const signedTag = tags.find(tag => tag[0] === PRICED_CONTINUATION_EVENT_TAG[0] && tag[1] === PRICED_CONTINUATION_EVENT_TAG[1]);
+  if (requested === undefined && !signedTag) return "absent";
+  if (!requested || typeof requested !== "object" || Array.isArray(requested)
+    || (requested as Record<string, unknown>).pricedContinuation !== PRICED_CONTINUATION_VERSION
+    || !signedTag || signedTag.length !== 3 || signedTag[2] !== PRICED_CONTINUATION_VERSION) return "invalid";
+  return "verified";
 }
 
 const InboundMessageSchema = z.object({
@@ -57,6 +83,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
   lastInbound?: Readonly<{ verifiedClientPubkey: string; requestEventId: string; method: string }>;
   readonly observedMethods = new Set<string>();
   #availableTools = new Set<string>();
+  #pricedContinuationAvailable = false;
 
   constructor(private readonly transport: NostrServerTransport, private readonly extraTools: readonly string[] = []) {}
 
@@ -77,6 +104,10 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
     this.transport.setAnnouncementExtraTags(extra);
     this.transport.setAnnouncementPricingTags(pricing);
     this.transport.setSupportedPaymentInteraction("optional");
+  }
+
+  configurePricedContinuationAvailability(available: boolean): void {
+    this.#pricedContinuationAvailable = available === true;
   }
 
   async sendResponse(clientPubkey: string, response: ContextVmWireResponse, requestEventId: string): Promise<void> {
@@ -112,9 +143,17 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
       return;
     }
     if (parsed.method === "tools/list") {
+      const negotiation = pricedContinuationNegotiation(parsed.params, event.tags);
+      if (negotiation === "invalid") {
+        await this.sendResponse(clientPubkey, { jsonrpc: "2.0", id: parsed.id, error: { code: -32602, message: "invalid ContextVM priced-continuation negotiation" } }, requestEventId);
+        return;
+      }
+      const tools = ["account_status", "top_up", "funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication"]
+        .filter(name => this.#availableTools.has(name));
+      if (negotiation === "verified" && this.#pricedContinuationAvailable) tools.push("prepare_resume", "resume_session_v2");
       await this.sendResponse(clientPubkey, {
         jsonrpc: "2.0", id: parsed.id,
-        result: { tools: ["account_status", "top_up", "funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session", "prepare_resume", "resume_session_v2", "session_status", "preview", "publication"].filter(name => this.#availableTools.has(name)).concat(this.extraTools).map((name) => ({ name })) },
+        result: { tools: tools.concat(this.extraTools).map((name) => ({ name })) },
       }, requestEventId);
       return;
     }

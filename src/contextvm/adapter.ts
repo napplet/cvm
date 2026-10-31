@@ -16,7 +16,7 @@ import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/sessi
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
 import { validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
 import { AdmissionLifecycleContextSchema, protectedLifecycleCorrelation, type AdmissionLifecycleContext } from "../telemetry/contracts";
-import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
+import { pricedContinuationNegotiation, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
 const InteractionModeSchema = z.enum(["transparent", "explicit_gating"]);
@@ -153,7 +153,13 @@ export interface ContextVmFundingAdapterOptions {
   /** Explicit post-grace continuation only; rails and status cannot call this facade. */
   continuation?: Readonly<{ resumeSession(input: unknown): Promise<unknown> }>;
   /** V2 continuation has a separately priced, signed acceptance lifecycle. */
-  pricedContinuation?: Readonly<{ prepare(input: unknown): Promise<unknown>; resume(input: unknown): Promise<unknown> }>;
+  pricedContinuation?: Readonly<{
+    prepare(input: unknown): Promise<unknown>;
+    resume(input: unknown): Promise<unknown>;
+    /** A production facade remains unavailable until its mounted authority binds. */
+    isReady(): boolean;
+    onReady?(listener: () => void): void;
+  }>;
   sessionStatus?: Readonly<{ read(input: unknown): Promise<unknown> }>;
   /** Optional composition-owned HTTPS origin for remote opaque-grant previews. */
   publicPreviewOrigin?: string;
@@ -214,6 +220,10 @@ export class ContextVmFundingAdapter {
     // It must have passed the full Plan 05 source-contract validator before
     // construction and still pass again immediately before dispatch.
     this.publicationSourceContract = validatedAvailablePromotedCliSourceContract(options.publicationSourceContract);
+    const pricedContinuation = options.pricedContinuation;
+    const enablePricedContinuation = () => this.options.transport.configurePricedContinuationAvailability?.(true);
+    if (pricedContinuation?.isReady() === true) enablePricedContinuation();
+    pricedContinuation?.onReady?.(enablePricedContinuation);
     options.transport.onInbound((input) => this.handle(input));
   }
 
@@ -239,6 +249,8 @@ export class ContextVmFundingAdapter {
 
   private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
+    const pricedNegotiation = pricedContinuationNegotiation(request.params, rawEvent.tags);
+    if (pricedNegotiation === "invalid") throw new Error("PRICED_CONTINUATION_NEGOTIATION_INVALID");
     if (["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"].includes(name)) {
       const handler = this.options.extensions?.[name as keyof NonNullable<ContextVmFundingAdapterOptions["extensions"]>];
       if (!handler) throw new Error("CONTEXTVM_TOOL_UNAVAILABLE");
@@ -276,7 +288,7 @@ export class ContextVmFundingAdapter {
       return this.resumeResponse(verifiedPubkey, requestEventId, request.id, result);
     }
     if (name === "prepare_resume") {
-      if (!this.options.pricedContinuation) throw new Error("PRICED_CONTINUATION_UNAVAILABLE");
+      if (pricedNegotiation !== "verified" || !this.options.pricedContinuation || !this.options.pricedContinuation.isReady()) throw new Error("PRICED_CONTINUATION_UNAVAILABLE");
       const args = PrepareResumeArgumentsSchema.parse(argumentsInput);
       const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
       const result = PrepareResumeResultSchema.parse(await this.options.pricedContinuation.prepare({ ...args, principal: { id: accountId } }));
@@ -284,7 +296,7 @@ export class ContextVmFundingAdapter {
       return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
     }
     if (name === "resume_session_v2") {
-      if (!this.options.pricedContinuation) throw new Error("PRICED_CONTINUATION_UNAVAILABLE");
+      if (pricedNegotiation !== "verified" || !this.options.pricedContinuation || !this.options.pricedContinuation.isReady()) throw new Error("PRICED_CONTINUATION_UNAVAILABLE");
       const args = ResumeSessionV2ArgumentsSchema.parse(argumentsInput);
       const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
       const result = PricedResumeExecutionResultSchema.parse(await this.options.pricedContinuation.resume({ ...args, principal: { id: accountId } }));

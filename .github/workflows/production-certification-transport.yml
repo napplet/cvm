@@ -99,8 +99,15 @@ on:
       - "src/release/deployment/production-core-suite-*.ts"
       - "src/production/certification-services.ts"
       - "src/production/certification-edge.ts"
+      - "src/production/certification-edge-protocol.ts"
+      - "src/production/non-google-invocation-authority.ts"
+      - "src/production/non-google-successor-control.ts"
+      - "src/release/deployment/non-google-private-control.ts"
       - "src/release/deployment/production-edge-suite-adapters.ts"
       - "tests/release/production-edge-suites.test.ts"
+      - "tests/production/certification-edge-import-order.test.ts"
+      - "tests/production/non-google-invocation-authority.test.ts"
+      - "tests/release/non-google-edge-runtime.integration.test.ts"
       - "src/production/worker-capacity.ts"
       - "src/production/worker-lifecycle.ts"
       - "tests/production/worker-lifecycle-postgres.test.ts"
@@ -127,4 +134,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Signed TLS relay and durable original-operation recovery
-        run: bun test tests/persistence/continuation-store.test.ts tests/production/account-owner-postgres.test.ts tests/contextvm/adapter.test.ts tests/production/contextvm-generation-intake-postgres.test.ts tests/model/retained-generation-command.test.ts tests/release/vertex-creation-budget.test.ts tests/release/vertex-recovery-progress-postgres.test.ts tests/release/vertex-current-wire.test.ts tests/production/checkpoint-retention-postgres.test.ts tests/phase-04/revision.test.ts tests/production/original-model-recovery-postgres.test.ts tests/production/initial-pending-checkpoint-postgres.test.ts tests/production/protected-command.test.ts tests/production/resumed-generation-postgres.test.ts tests/production/session-cap-postgres.test.ts tests/production/model-composition-postgres.test.ts tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/production/checkpoint-postgres.test.ts tests/production/gcs-generation-recovery.test.ts tests/production/resume-retry-postgres.test.ts tests/phase-05/resume-session.test.ts tests/phase-05/checkpoint-envelope.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000
+        run: bun test tests/persistence/continuation-store.test.ts tests/production/account-owner-postgres.test.ts tests/contextvm/adapter.test.ts tests/production/contextvm-generation-intake-postgres.test.ts tests/model/retained-generation-command.test.ts tests/release/vertex-creation-budget.test.ts tests/release/vertex-recovery-progress-postgres.test.ts tests/release/vertex-current-wire.test.ts tests/production/checkpoint-retention-postgres.test.ts tests/phase-04/revision.test.ts tests/production/original-model-recovery-postgres.test.ts tests/production/initial-pending-checkpoint-postgres.test.ts tests/production/protected-command.test.ts tests/production/resumed-generation-postgres.test.ts tests/production/session-cap-postgres.test.ts tests/production/model-composition-postgres.test.ts tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/production/checkpoint-postgres.test.ts tests/production/gcs-generation-recovery.test.ts tests/production/resume-retry-postgres.test.ts tests/phase-05/resume-session.test.ts tests/phase-05/checkpoint-envelope.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts tests/production/certification-edge-import-order.test.ts tests/production/non-google-invocation-authority.test.ts tests/release/non-google-edge-runtime.integration.test.ts --timeout 60000

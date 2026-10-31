@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { bindAccountingRealmPool, createAccountingRealm } from "../../src/funding/accounting-realm";
 import { FundingService } from "../../src/funding/funding-service";
+import { SessionCapApprovalService } from "../../src/funding/session-cap";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 import { PostgresSqlFundingStore } from "../../src/persistence/postgres-sql-funding-store";
 import { ContinuationService } from "../../src/continuity/continuation-service";
@@ -63,7 +64,7 @@ const migrations = [
   "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql",
   "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql",
   "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql",
-  "phase-07/003_production_checkpoints.sql",
+  "phase-07/003_production_checkpoints.sql", "phase-07/005_production_session_caps.sql",
   "phase-07/008_production_account_owners.sql", "phase-07/009_production_resume_pricing_quotes.sql",
   "phase-07/010_production_priced_continuations.sql", "phase-07/011_production_priced_continuation_workers.sql",
   "phase-07/012_production_priced_continuation_restores.sql", "phase-07/013_production_priced_continuation_finalizations.sql",
@@ -181,23 +182,24 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const originalPricing = await resumePricingMaterial(now, "retained-profile", "500");
     const originalMaximumUsdMicros = maximumOperationCharge(originalPricing);
     const originalMaximumSat = convertUsdMicrosToSats({ usdMicros: Number(originalMaximumUsdMicros), conversion: originalPricing.conversion, at: new Date(now).toISOString() }).amount;
-    const remainingAfterOriginalAction = Number(BigInt(originalMaximumSat) - 1n);
-    expect({ originalMaximumUsdMicros, originalMaximumSat, remainingAfterOriginalAction }).toEqual({ originalMaximumUsdMicros: "1020", originalMaximumSat: "11", remainingAfterOriginalAction: 10 });
+    const initialFundedSat = (BigInt(originalMaximumSat) - 1n).toString(), remainingAfterOriginalAction = Number(BigInt(initialFundedSat) - 1n);
+    expect({ originalMaximumUsdMicros, originalMaximumSat, initialFundedSat, remainingAfterOriginalAction }).toEqual({ originalMaximumUsdMicros: "1020", originalMaximumSat: "11", initialFundedSat: "10", remainingAfterOriginalAction: 9 });
     const fundingDatabase = new PostgresFundingDatabase(pool, { realm: "production-real" });
     const funding = new FundingService(fundingDatabase.funding);
-    const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: originalMaximumSat, externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
+    const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: initialFundedSat, externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
     const accountId = credited.accountId, sessionId = `session:${digest(canonicalJson({ accountId, key: "retained-reattach" })).slice(0, 24)}`, actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
     // Isolated pricing source records are registered through the same catalog
     // used by V2 preparation. They are not a quote, provider, or release claim.
     await registerProductionPricing({ pool, ...originalPricing });
-    await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,'fixture:admission',$3,$4,0,'prepared')", [sessionId, accountId, originalPricing.profile.id, originalPricing.card.id]);
-    await source.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:retained',$1,'fixture:admission',$2,$2,'active')", [accountId, Number(originalMaximumSat)]);
-    await source.query("INSERT INTO production_real.admissions(admission_id,account_id,reference,capacity_reference,state) VALUES('admission:retained',$1,'fixture:admission','capacity:fixture','accepted')", [accountId]);
-    await source.query("INSERT INTO production_real.action_budget_reservations(reservation_id,account_id,admission_reference,idempotency_key,fingerprint_sha256,reservation_reference,amount,unit,state) VALUES('reservation:retained',$1,'fixture:admission','retained-action',$2,'budget:retained',1,'sat','authorized')", [accountId, hex("action-fingerprint")]);
+    const admitted = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "funded_admission", idempotencyKey: "retained-fixture-admission", policyVersion: "fixture", protocolVersion: "fixture", payload: { requestedCap: initialFundedSat, unit: "sat", capacity: { usable: true, reference: "capacity:fixture" } } });
+    if (admitted.status !== "accepted" || admitted.accountId !== accountId || admitted.approvedCap !== initialFundedSat) throw new Error("RETAINED_FIXTURE_ADMISSION_REQUIRED");
+    const admissionReference = admitted.reference;
+    await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,$3,$4,$5,0,'prepared')", [sessionId, accountId, admissionReference, originalPricing.profile.id, originalPricing.card.id]);
+    await source.query("INSERT INTO production_real.action_budget_reservations(reservation_id,account_id,admission_reference,idempotency_key,fingerprint_sha256,reservation_reference,amount,unit,state) VALUES('reservation:retained',$1,$2,'retained-action',$3,'budget:retained',1,'sat','authorized')", [accountId, admissionReference, hex("action-fingerprint")]);
     const actionSeed = await source.connect();
     try {
       await actionSeed.query("BEGIN; SET CONSTRAINTS ALL DEFERRED");
-      await actionSeed.query("INSERT INTO production_real.metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,terminal_result,evidence_reference,settled_at,admission_reference,receipt_charge,provider_receipt_reference,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,validation_report_reference) VALUES($1,$2,$3,'retained-action',$4,0,'budget:retained',1,'provider:retained',$5,$6,'verified',$7,'evidence:action',clock_timestamp(),'fixture:admission',1,'receipt-original',0,1,$10,$10,$8,$9,'checkpoint:retained','snapshot:retained',('verification:' || $8),NULL)", [actionId, accountId, sessionId, hex("action-fingerprint"), originalPricing.profile.id, originalPricing.card.id, { status: "verified", releaseEvidence: false }, artifactId, `workspace:${sessionId}`, remainingAfterOriginalAction]);
+      await actionSeed.query("INSERT INTO production_real.metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,terminal_result,evidence_reference,settled_at,admission_reference,receipt_charge,provider_receipt_reference,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,validation_report_reference) VALUES($1,$2,$3,'retained-action',$4,0,'budget:retained',1,'provider:retained',$5,$6,'verified',$7,'evidence:action',clock_timestamp(),$10,1,'receipt-original',0,1,$11,$11,$8,$9,'checkpoint:retained','snapshot:retained',('verification:' || $8),NULL)", [actionId, accountId, sessionId, hex("action-fingerprint"), originalPricing.profile.id, originalPricing.card.id, { status: "verified", releaseEvidence: false }, artifactId, `workspace:${sessionId}`, admissionReference, remainingAfterOriginalAction]);
       await actionSeed.query("INSERT INTO production_real.provider_operations(id,account_id,action_id,provider,model,provider_request_id,sub_reservation_sat,state) VALUES('provider:retained',$1,$2,'fixture-provider','fixture-model','request-original',1,'verified')", [accountId, actionId]);
       await actionSeed.query("COMMIT");
     } catch (error) { await actionSeed.query("ROLLBACK").catch(() => undefined); throw error; }
@@ -225,7 +227,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const persistedArtifact = await new ProductionWorkerArtifactStore({ journal, objects, toolchainSha256: hex("toolchain") }).persist({ request: artifactRequest, accountId, ownerId: fixture.ownerId, bytes: fixture.artifact, scannerReportSha256: hex("scanner"), conformanceReportSha256: hex("conformance"), result: artifactResult });
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
-    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: digest(canonicalJson({ idea: "Build one focused retained-subject fixture." })), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: originalMaximumSat, admissionReference: "fixture:admission" };
+    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: digest(canonicalJson({ idea: "Build one focused retained-subject fixture." })), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: originalMaximumSat, admissionReference };
     const retainedCommand = StartSessionCommandSchema.parse({ principal: { pubkey: fixture.ownerId }, admissionReference: pauseIntent.admissionReference,
       idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: originalMaximumSat, policyVersion: pauseIntent.policyVersion,
       idea: "Build one focused retained-subject fixture." });
@@ -235,6 +237,10 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const pause = await new ContinuationService({ store: fundingDatabase.continuationFunding, includeAdmissionHold: false,
       pendingCommands: checkpoint.pendingCommands, clock: { nowMs: () => now } }).pauseForFunding({ intent: pauseIntent, command: retainedCommand });
     if (!pause) throw new Error("RETAINED_SUBJECT_PAUSE_REQUIRED");
+    await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-topup", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture-topup", rail: "lightning", unit: "sat", amount: "1", externalReference: "fixture:topup", settlementReference: "fixture:topup", verifiedAt: new Date(now).toISOString() } } });
+    const capApproval = await new SessionCapApprovalService(fundingDatabase.funding).approve({ principal: { pubkey: fixture.ownerId }, sessionId, admissionReference,
+      idempotencyKey: "retained-fixture-cap-approval", expectedApprovedCap: initialFundedSat, maximum: originalMaximumSat, unit: "sat", policyVersion: "fixture", protocolVersion: "fixture" }, { consentReference: `nostr:${hex("retained-cap-consent")}` });
+    expect(capApproval).toMatchObject({ approvedCap: originalMaximumSat, heldAmount: originalMaximumSat });
     const paused = await fundingDatabase.continuationFunding.findContinuationPause(accountId, sessionId, 1);
     if (!paused?.liveLeaseToken) throw new Error("RETAINED_SUBJECT_LIVE_LEASE_REQUIRED");
     await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.beginDeadlineCheckpoint({ sessionId, pauseGeneration: 1, liveLeaseToken: paused.liveLeaseToken! }));

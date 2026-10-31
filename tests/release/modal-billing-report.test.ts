@@ -262,6 +262,7 @@ process.stdout.write(${JSON.stringify(report)});
       if (!completed) throw new Error("ATTEMPT_MISSING");
       await journal.compareAndSet({ reportRequestSha256: captured.reportRequestSha256, expectedRevision: saved.revision, record: { ...saved.record, attempts: [{ ...completed, envelopeSha256: hex("forged-envelope") }], result: { ...saved.record.result, observedMicros: "999999999" } } });
       await expect(collector.recover(approved)).resolves.toMatchObject({ reason: "artifact_unavailable" });
+      await expect(collector.capture(approved)).resolves.toMatchObject({ reason: "artifact_unavailable" });
       const stale = await journal.read(captured.reportRequestSha256);
       if (!stale) throw new Error("STALE_MISSING");
       await journal.compareAndSet({ reportRequestSha256: captured.reportRequestSha256, expectedRevision: stale.revision, record: { ...stale.record, attempts: [{ ...stale.record.attempts[0]!, stdout: { ...stale.record.attempts[0]!.stdout!, uri: `memory://foreign/modal-billing/${captured.reportRequestSha256}/1/stdout`, generation: "2" } }] } });
@@ -282,6 +283,36 @@ process.stdout.write(${JSON.stringify(report)});
       expect(() => ModalBillingReportJournalRecordSchema.parse(saved?.record)).not.toThrow();
       expect(saved?.record.attempts).toMatchObject([{ state: "completed", disposition: "dispatch_unknown" }]);
       expect(artifacts.objects.size).toBe(0);
+    } finally { await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["credential_unavailable", "grant_expired", "dispatch_unknown"] as const)("recovers the durable %s outcome without resolving credentials or reading artifacts", async (outcome) => {
+    const executable = await fixture(`#!/usr/bin/env bun\nprocess.stdout.write(${JSON.stringify(report)});\n`);
+    const journal = createMemoryModalBillingReportJournal();
+    let clock = Date.now(), resolves = 0, artifactCalls = 0;
+    const artifacts = {
+      async createImmutable(): Promise<never> { artifactCalls++; throw new Error("UNEXPECTED_ARTIFACT_WRITE"); },
+      async readExact(): Promise<never> { artifactCalls++; throw new Error("UNEXPECTED_ARTIFACT_READ"); },
+    };
+    try {
+      const { grantSha256: _hash, ...fields } = grant(executable.sha256);
+      const approved = createModalBillingObservationGrant({ ...fields, expiresAtMs: clock + 60_000 });
+      if (outcome === "grant_expired") clock = approved.expiresAtMs;
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() {
+        resolves++;
+        if (outcome === "credential_unavailable") throw new Error("OFFLINE_CREDENTIAL_UNAVAILABLE");
+        if (outcome === "dispatch_unknown") await rm(executable.executable);
+        return { tokenId: "fixture-id", tokenSecret: "fixture-secret" };
+      } }, journal, artifacts, artifactOrigin: "memory://origin/", now: () => clock });
+      const captured = await collector.capture(approved);
+      expect(captured.reason).toBe(outcome === "dispatch_unknown" ? "child_failure" : outcome);
+      const reopened = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve(): Promise<never> { throw new Error("RECOVERY_MUST_NOT_RESOLVE"); } }, journal, artifacts, artifactOrigin: "memory://origin/", now: () => clock });
+      expect(await reopened.recover(approved)).toEqual(captured);
+      expect(await reopened.capture(approved)).toEqual(captured);
+      expect(artifactCalls).toBe(0);
+      expect(resolves).toBe(outcome === "grant_expired" ? 0 : 1);
+      const saved = await journal.read(captured.reportRequestSha256);
+      expect(ModalBillingReportJournalRecordSchema.parse(saved?.record).attempts).toHaveLength(1);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 });

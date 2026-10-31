@@ -111,6 +111,17 @@ test("normal mounted boot rejects an invalid fixed config before opening any pro
   await expect(openMountedProductionSession({ config: {} })).rejects.toThrow();
 });
 
+test("sealed Modal selection is evaluated before any mounted credential or process authority", async () => {
+  const text = await readFile(source, "utf8");
+  const selector = text.indexOf("selectMountedModalBilling({ configuration: input.resolved.modalBilling })");
+  const edge = text.indexOf("createMountedProductionEdgeMaterial({ config: input.config, secrets: input.secrets })");
+  const contextvm = text.indexOf("openContextVmCertificationClient({");
+  expect(selector).toBeGreaterThan(-1);
+  expect(edge).toBeGreaterThan(selector);
+  expect(contextvm).toBeGreaterThan(selector);
+  expect(text).toContain("authority verifier always disables this optional collector");
+});
+
 test("pinned execution forwards the fixed secret mount, while workers and ContextVM are built from runtime authority", async () => {
   const [material, execution] = await Promise.all([readFile(source, "utf8"), readFile(pinnedExecution, "utf8")]);
   expect(execution).toContain("generation, authorization, secrets");

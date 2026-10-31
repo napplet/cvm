@@ -430,6 +430,11 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     || input.generation.config.candidateSha256 !== input.config.candidateSha256
     || input.generation.config.topologySha256 !== input.config.topologySha256
     || input.resolved.workerCandidate.id !== input.config.candidateSha256) throw new Error("PRODUCTION_MOUNTED_SESSION_BINDING_REQUIRED");
+  /* Evaluate the sealed Modal record before opening any mounted secret,
+   * relay, provider, or worker authority.  The currently-unimplemented
+   * authority verifier always disables this optional collector. */
+  const mountedModalBilling = await selectMountedModalBilling({ configuration: input.resolved.modalBilling });
+  if (mountedModalBilling.status !== "disabled") throw new Error("PRODUCTION_MODAL_BILLING_SELECTION_INVALID");
   const { dependencies } = input.generation;
   const now = input.now;
   const authorization = input.generation.authorization;
@@ -462,11 +467,6 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   /* The mount-record parser guarantees JSON-only data; the Google factory
    * re-parses this exact controller shape before it creates ADC clients. */
   const mountedGoogle = createMountedGoogleControls({ config: input.config, generation: input.generation, configuration: input.resolved.googleControls as MountedGoogleControlConfiguration, telemetry: coreSuites.telemetry, now });
-  /* This performs only sealed-material parsing/refusal. It intentionally has
-   * no credential resolver or child-process handle, so no Modal report can
-   * run until a future authority-specific verifier upgrades the selection. */
-  const mountedModalBilling = await selectMountedModalBilling({ configuration: input.resolved.modalBilling });
-  if (mountedModalBilling.status !== "disabled") throw new Error("PRODUCTION_MODAL_BILLING_SELECTION_INVALID");
   const { google } = mountedGoogle;
   const cloudRun = createNativeCloudRunProvider({ config: input.resolved.providerConfigurations.cloud_run, port: mountedGoogle.cloudRun, now });
   const cloudSql = createNativeCloudSqlPostgresProvider({ config: input.resolved.providerConfigurations.cloud_sql_postgres, port: mountedGoogle.cloudSql, now });

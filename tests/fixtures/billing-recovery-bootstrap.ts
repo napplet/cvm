@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import type { AuthoritativeUsageRecoveryPort } from "../../src/release/controller";
 
 // This child is intentionally isolated: module substitutions affect only the
 // filesystem mount and native SQL/HTTP/ADC drivers, never the production loader,
@@ -23,6 +24,17 @@ const projectId = "napplet-cvm-01";
 const principal = "release-runner@napplet-cvm-01.iam.gserviceaccount.com";
 const key = (values: readonly unknown[]) => JSON.stringify(values.slice(0, 3));
 const journalKeys = z.tuple([z.string(), z.string(), z.string()]);
+let artifactDenials = 0;
+const artifactIo = () => JSON.stringify([effects.pools, effects.adc, effects.queryGets, effects.queryPosts, effects.objectReads, effects.objectWrites, effects.journalWrites, effects.secretReads.length]);
+async function denyArtifact(port: AuthoritativeUsageRecoveryPort, reference: Readonly<{ uri: string; generation: string; sha256: string }>, code = "PRODUCTION_USAGE_RECOVERY_ARTIFACT_NOT_AUTHORIZED") {
+  const before = artifactIo();
+  let denied = false;
+  try { await port.readArtifact(reference); }
+  catch (error) { if (!(error instanceof Error) || error.message !== code) throw error; denied = true; }
+  if (!denied) throw new Error("UNBOUND_ARTIFACT_WAS_READABLE");
+  if (artifactIo() !== before) throw new Error("ARTIFACT_DENIAL_PERFORMED_IO");
+  artifactDenials++;
+}
 
 mock.module("node:fs/promises", () => ({
   ...files,
@@ -181,6 +193,8 @@ try {
   await reporter.capture(captureInput);
   if (effects.queryPosts !== 2) throw new Error("ORIGINAL_QUERY_SEED_REQUIRED");
   seed = false;
+  const unrelated = "private-checkpoint-source";
+  objects.set("checkpoints/another-session", { bytes: new TextEncoder().encode(unrelated), sha256: digest(unrelated) });
   now = fixture.request.expiresAtMs + 1_000;
   effects.pools = effects.closes = effects.adc = effects.queryGets = effects.queryPosts = effects.objectReads = effects.objectWrites = effects.journalWrites = effects.captures = 0;
   effects.secretReads.length = 0;
@@ -212,13 +226,28 @@ try {
       const malicious = { ...captureInput, mode: "dispatch" };
       if ((await prepared.reporter.recover(malicious)).status !== "held") throw new Error("RECOVERY_MODE_ESCALATED");
     }
+    if (scenario === "completed") await denyArtifact(prepared.reporter, { uri: `gs://${fixture.config.gcs.bucket}/checkpoints/another-session`, generation: "1", sha256: digest(unrelated) });
     await prepared.close?.();
   }
   process.argv = [process.execPath, join(repositoryRoot, "scripts/certify-release.ts"), "--candidate", fixture.candidatePath];
   await import("../../scripts/certify-release");
   const cliExitCode = Number(process.exitCode ?? 0);
+  if (scenario === "completed") {
+    const configuration = await loadCertifierConfig();
+    const session = await loadReleaseAuthoritativeUsageRecoverySession({ config: configuration, candidateSha256: fixture.candidateSha256, workspace });
+    const prepared = await session.prepareAuthoritativeUsageRecovery({ authorizationRequest: fixture.request });
+    const recovered = await prepared.reporter.recover(captureInput);
+    if (recovered.status !== "captured") throw new Error("RECOVERED_ARTIFACT_REQUIRED");
+    const envelope = z.object({ rawArtifact: z.object({ uri: z.string(), generation: z.string(), sha256: z.string() }).strict() }).passthrough().parse(recovered.envelope);
+    if (!(await prepared.reporter.readArtifact(envelope.rawArtifact))?.length) throw new Error("AUTHORIZED_ARTIFACT_UNREADABLE");
+    await denyArtifact(prepared.reporter, { ...envelope.rawArtifact, uri: `gs://${fixture.config.gcs.bucket}/checkpoints/another-session` });
+    await denyArtifact(prepared.reporter, { ...envelope.rawArtifact, generation: "2" });
+    await denyArtifact(prepared.reporter, { ...envelope.rawArtifact, sha256: digest("different-checksum") });
+    await prepared.close?.();
+    await denyArtifact(prepared.reporter, envelope.rawArtifact, "PRODUCTION_USAGE_RECOVERY_CLOSED");
+  }
   const storedCaptures = await files.readdir(join(workspace, "billing-report-captures")).catch(() => []);
-  console.log(`BOOTSTRAP_PROOF_RESULT=${JSON.stringify({ scenario, cliExitCode, effects, captureFiles: storedCaptures.length, captureRows: captures.size })}`);
+  console.log(`BOOTSTRAP_PROOF_RESULT=${JSON.stringify({ scenario, cliExitCode, effects, artifactDenials, captureFiles: storedCaptures.length, captureRows: captures.size })}`);
   process.exitCode = 0;
 } finally {
   globalThis.fetch = originalFetch;

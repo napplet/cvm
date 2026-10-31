@@ -5,7 +5,9 @@ DO $$ BEGIN CREATE ROLE napplet_production_object NOLOGIN; EXCEPTION WHEN duplic
 
 CREATE TABLE IF NOT EXISTS production_real.immutable_object_key_heads (
   object_key text PRIMARY KEY CHECK(length(object_key) BETWEEN 1 AND 2048),
-  next_generation bigint NOT NULL CHECK(next_generation BETWEEN 1 AND 9007199254740991)
+  -- Zero is an internal exhausted sentinel; persisted object generations are
+  -- always positive JavaScript-safe integers.
+  next_generation bigint NOT NULL CHECK(next_generation BETWEEN 0 AND 9007199254740991)
 );
 
 CREATE TABLE IF NOT EXISTS production_real.immutable_object_generations (
@@ -58,9 +60,11 @@ BEGIN
     RETURN QUERY SELECT latest.generation,latest.checksum,latest.byte_count,latest.chunk_count,latest.state;
     RETURN;
   END IF;
-  UPDATE production_real.immutable_object_key_heads SET next_generation=next_generation+1
-    WHERE object_key=input_key AND next_generation < 9007199254740991 RETURNING next_generation-1 INTO allocated;
-  IF allocated IS NULL THEN RAISE EXCEPTION 'OBJECT_GENERATION_EXHAUSTED'; END IF;
+  SELECT next_generation INTO allocated FROM production_real.immutable_object_key_heads WHERE object_key=input_key FOR UPDATE;
+  IF allocated IS NULL OR allocated=0 THEN RAISE EXCEPTION 'OBJECT_GENERATION_EXHAUSTED'; END IF;
+  UPDATE production_real.immutable_object_key_heads
+    SET next_generation=CASE WHEN allocated=9007199254740991 THEN 0 ELSE allocated+1 END
+    WHERE object_key=input_key;
   -- ObjectStorePort has no caller operation-id field. The adapter binds the
   -- original creation identity to its copied payload checksum; the immutable
   -- `(object_key,generation)` primary key, not a mutable logical key, is the

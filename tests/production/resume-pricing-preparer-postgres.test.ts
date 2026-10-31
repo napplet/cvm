@@ -671,7 +671,12 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         readyWorkers.set(value.intentReference, ready);
         await capacityJournal.claim(`capacity-intent:${createHash("sha256").update(value.intentReference).digest("hex")}`,
           productionCapacityIdentity({ intentReference: value.intentReference, expectedSessionBindingDigest: value.expectedSessionBindingDigest, provider: fixtureProvider }),
-          { ...value, reference, workerOperationId: `capacity-${capacityDigest.slice(0, 40)}`, provider: fixtureProvider, deadlineEpochMs: Date.parse(expiresAt) });
+          { ...value, reference, workerOperationId: `capacity-${capacityDigest.slice(0, 40)}`, provider: fixtureProvider, deadlineEpochMs: Date.parse(expiresAt),
+            // The mounted Fly prewarm below reconciles this exact original
+            // worker.  Persist its immutable execution tuple when the
+            // fixture creates the original intent; do not rely on a current
+            // capacity default to fill an old profile-less record.
+            ...(fixtureProvider === "fly" ? { execution: { image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: workspaceToolchain, policyVersion: PRODUCTION_WORKER_POLICY.version, flyRegion: "ams" } } : {}) });
         throw new Error("WORKER_RESERVE_ACK_LOST");
       },
       async observe(value) {
@@ -1047,7 +1052,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       fundedAdmission: new FundedAdmissionService({ funding: new FundingService(store), store, receiptAuthority: trustedAdmissionReceiptAuthority,
         capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
     const core = new MeteredGenerationService(coreOptions);
-    const mountedToolchain = directWorker ? "e".repeat(64) : workspaceToolchain;
+    // The mounted runtime must reconcile the original retained workspace,
+    // even when the direct-worker fixture also installs a newer default.
+    const mountedToolchain = workspaceToolchain;
     const mountedRouter = new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       executables: [{ image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: mountedToolchain, clients: workerClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] });

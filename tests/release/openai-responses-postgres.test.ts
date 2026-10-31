@@ -36,7 +36,7 @@ integration("Responses journal uses restricted PostgreSQL for concurrent claims,
     await admin.query("GRANT napplet_production_real TO responses_journal_test");
     application = new Pool({ connectionString: `postgresql://responses_journal_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
     const journal = () => createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(application, { namespace: "openai:responses", scopeSha256: digest("a") }));
-    const rate = { version: 2 as const, sourceUrl: OPENAI_RESPONSES_PRICING_URL as "https://developers.openai.com/api/docs/pricing", sourceDocumentSha256: digest("b"), sourceArtifactSha256: digest("b"), quoteSha256: digest("c"), observedAtMs: 1, freshUntilMs: 10_000, model: "gpt-4.1-2025-04-14", currency: "USD" as const, inputMicrosPerMillion: 2_000_000, cachedInputMicrosPerMillion: 200_000, outputMicrosPerMillion: 8_000_000 };
+    const rate = { version: 2 as const, sourceUrl: OPENAI_RESPONSES_PRICING_URL as typeof OPENAI_RESPONSES_PRICING_URL, sourceDocumentSha256: digest("b"), sourceArtifactSha256: digest("b"), quoteSha256: digest("c"), observedAtMs: 1, freshUntilMs: 10_000, model: "gpt-4.1-2025-04-14", currency: "USD" as const, inputMicrosPerMillion: 2_000_000, cachedInputMicrosPerMillion: 500_000, outputMicrosPerMillion: 8_000_000 };
     let posts = 0, gets = 0;
     const bytes = new TextEncoder().encode(JSON.stringify({ id: "resp_pg17", model: rate.model, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: '{"files":[]}' }] }], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: 10, output_tokens_details: { reasoning_tokens: 0 } } }));
     const portAdapter: OpenAiResponsesPort = { async create() { posts++; return { bytes }; }, async get(responseId) { gets++; expect(responseId).toBe("resp_pg17"); return { bytes }; } };
@@ -65,7 +65,10 @@ integration("Responses journal uses restricted PostgreSQL for concurrent claims,
     expect(posts).toBe(2);
     // A fresh PostgreSQL 17 dump/restore retains the immutable original and
     // terminal receipt; the restored client cannot redispatch it.
-    const dump = await docker("exec", name, "pg_dump", "-U", "postgres", "--no-owner", "--no-privileges", "postgres");
+    // Ownership is intentionally not restored, but the dump must carry the
+    // constrained role's schema/table ACLs.  Its role membership was created
+    // by the recovery bootstrap and is verified below as the runtime role.
+    const dump = await docker("exec", name, "pg_dump", "-U", "postgres", "--no-owner", "postgres");
     await admin.query("CREATE DATABASE responses_restore");
     const restoreProcess = Bun.spawn(["docker", "exec", "-i", name, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "responses_restore"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     restoreProcess.stdin.write(dump); restoreProcess.stdin.end();
@@ -75,10 +78,11 @@ integration("Responses journal uses restricted PostgreSQL for concurrent claims,
     const restoredJournal = createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(restored, { namespace: "openai:responses", scopeSha256: digest("a") }));
     expect(await client(restoredJournal).reconcileOriginal({ operationId: command.operationId })).toMatchObject({ status: "completed", responseId: "resp_pg17" });
     expect(posts).toBe(2);
-    const restricted = await application.connect();
+    const restricted = await restored.connect();
     try {
       await expect(restricted.query("DELETE FROM production_real.release_operation_journal")).rejects.toThrow();
       await expect(restricted.query("UPDATE production_real.release_operation_journal SET revision=revision+2")).rejects.toThrow();
+      await expect(restricted.query("SELECT * FROM production_real.funding_accounts")).rejects.toThrow();
     } finally { restricted.release(); }
   } finally {
     await restored?.end(); await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined);

@@ -100,6 +100,62 @@ const CandidateIdentitySchema = z.object({
 export { ReleaseAuthorizationRequestSchema };
 export type { ReleaseAuthorizationRequest };
 
+/** Disjoint successor bytes. Historical v2/v3 authorization records stay
+ * query-only and must never be coerced into this envelope. The successor is
+ * deliberately only a review binding in Plan 67: it has no receipt issuer,
+ * secret reference or effect callback. */
+const SuccessorIdentitySchema = z.object({
+  candidateSha256: DigestSchema,
+  sourceSha256: DigestSchema,
+  configSha256: DigestSchema,
+  toolchainSha256: DigestSchema,
+  topologySha256: DigestSchema,
+  failureDomainSha256: DigestSchema,
+  retentionSha256: DigestSchema,
+  cleanupSha256: DigestSchema,
+  controllerStateSha256: DigestSchema,
+}).strict();
+const SuccessorEnvelopeBindingSchema = z.object({
+  providerGraphRevision: z.literal("non-google-v1"),
+  roleInventorySha256: DigestSchema,
+  roleCostBoundSha256: DigestSchema,
+  scopesSha256: DigestSchema,
+  effectsSha256: DigestSchema,
+}).strict();
+export const NonGoogleAuthorizationRequestV3Schema = z.object({
+  kind: z.literal("release-authorization-request-v3"),
+  version: z.literal(3),
+  identity: SuccessorIdentitySchema,
+  binding: SuccessorEnvelopeBindingSchema,
+  requestSha256: DigestSchema,
+}).strict();
+export type NonGoogleAuthorizationRequestV3 = z.infer<typeof NonGoogleAuthorizationRequestV3Schema>;
+
+export const NonGoogleAuthorizationReceiptV4Schema = z.object({
+  kind: z.literal("release-authorization-receipt-v4"),
+  version: z.literal(4),
+  requestSha256: DigestSchema,
+  candidateSha256: DigestSchema,
+  topologySha256: DigestSchema,
+  providerGraphRevision: z.literal("non-google-v1"),
+  roleInventorySha256: DigestSchema,
+  roleCostBoundSha256: DigestSchema,
+  receiptSha256: DigestSchema,
+}).strict();
+export type NonGoogleAuthorizationReceiptV4 = z.infer<typeof NonGoogleAuthorizationReceiptV4Schema>;
+
+/** Plan 67 deliberately leaves successor issuance closed. Parsing validates
+ * only immutable review bytes; the architecture guard stops before any
+ * credential or client boundary even when every supplied digest is shaped. */
+export function assertNonGoogleSuccessorRequestHeld(input: unknown): never {
+  const successor = NonGoogleAuthorizationRequestV3Schema.safeParse(input);
+  if (!successor.success) {
+    if (ReleaseAuthorizationRequestSchema.safeParse(input).success) throw new Error("SUCCESSOR_GRAPH_HISTORICAL_AUTHORITY_QUERY_ONLY");
+    throw new Error("SUCCESSOR_GRAPH_REQUEST_INVALID");
+  }
+  throw new Error("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
+}
+
 export const RELEASE_LIVE_CONTROLLER_STATES = [
   "receipt_valid", "bootstrap", "provisioning", "observing", "billing_observing", "materializing",
   "protected_suite_running", "finalizing", "cleaning", "blocked", "completed",

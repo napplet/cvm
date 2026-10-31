@@ -1,9 +1,30 @@
 import { z } from "zod";
 import { ReleaseProviderIdSchema, type ReleaseProviderId } from "./contracts";
 import { ReleaseAuthorizationReceiptSchema as ExactReleaseAuthorizationReceiptSchema, type ReleaseAuthorizationReceipt as ExactReleaseAuthorizationReceipt } from "./authorization";
+import {
+  createSuccessorGraphInventory,
+  type SuccessorGraphInventory,
+  type SuccessorGraphRole,
+} from "./costs/non-google-cost-bound";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const CostSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+/** Product-owned successor inventory entrypoint. This does not obtain a port,
+ * resolve a credential, or inspect a provider; it only binds reviewed native
+ * constructor provenance into the disjoint non-google-v1 graph. */
+export async function prepareNonGoogleSuccessorInventory(input: Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+  roles: readonly SuccessorGraphRole[];
+}>): Promise<SuccessorGraphInventory> {
+  return createSuccessorGraphInventory({
+    graphRevision: "non-google-v1",
+    candidateSha256: input.candidateSha256,
+    topologySha256: input.topologySha256,
+    roles: input.roles,
+  });
+}
 const ProviderOperationKindSchema = z.enum(["create_or_update", "benchmark", "configure", "verify_integration"]);
 export const ReleaseProviderCostObservationSchema = z.object({
   version: z.literal(1), provider: ReleaseProviderIdSchema,

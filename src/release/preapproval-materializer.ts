@@ -1,6 +1,15 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { canonicalJson } from "../promotion/schema";
+import { ReleaseAuthorizationRequestSchema } from "./authorization";
+import { NonGoogleAuthorizationRequestV3Schema } from "./contracts";
+import {
+  assertSuccessorGraphPreapprovalHeld,
+  type CostEvidenceArtifactResolver,
+  type SuccessorGraphInventory,
+  type SuccessorRoleCostBound,
+} from "./costs/non-google-cost-bound";
+import { createNonGoogleDeploymentReviewConfig } from "./deployment/config";
 import type { PreparedCollectorImage } from "./collector-image";
 
 const DIGEST = /^[a-f0-9]{64}$/iu;
@@ -44,6 +53,48 @@ export type MaterializePreapprovalInput = Readonly<{
   collector: PreparedCollectorImage;
   factory: Readonly<{ root: string; modulePath: string; moduleSha256: string; configPath: string; configSha256: string }>;
 }>;
+
+/** The successor graph is consumed here, at the same normal preapproval seam
+ * that creates inert candidate bytes. It intentionally cannot materialize an
+ * authorization request: it remeasures the supplied source artifacts and
+ * then returns the specific Plan 67 hold before filesystem materialization,
+ * credential lookup, client construction, or any provider call. */
+export async function assertNonGooglePreapprovalHeld(input: Readonly<{
+  request: unknown;
+  deployment: unknown;
+  graph: SuccessorGraphInventory;
+  bound: SuccessorRoleCostBound;
+  nowMs: number;
+  evidence: CostEvidenceArtifactResolver;
+}>): Promise<never> {
+  const request = NonGoogleAuthorizationRequestV3Schema.safeParse(input.request);
+  if (!request.success) {
+    if (ReleaseAuthorizationRequestSchema.safeParse(input.request).success) throw new Error("SUCCESSOR_GRAPH_HISTORICAL_AUTHORITY_QUERY_ONLY");
+    throw new Error("SUCCESSOR_GRAPH_REQUEST_INVALID");
+  }
+  const deployment = createNonGoogleDeploymentReviewConfig(input.deployment);
+  if (request.data.identity.candidateSha256 !== input.graph.candidateSha256
+    || request.data.identity.topologySha256 !== input.graph.topologySha256
+    || request.data.binding.roleInventorySha256 !== input.graph.inventorySha256
+    || request.data.binding.roleCostBoundSha256 !== input.bound.boundSha256
+    || deployment.candidateSha256 !== input.graph.candidateSha256
+    || deployment.topologySha256 !== input.graph.topologySha256
+    || deployment.sourceSha256 !== request.data.identity.sourceSha256
+    || deployment.configSha256 !== request.data.identity.configSha256
+    || deployment.toolchainSha256 !== request.data.identity.toolchainSha256
+    || deployment.failureDomainSha256 !== request.data.identity.failureDomainSha256
+    || deployment.retentionSha256 !== request.data.identity.retentionSha256
+    || deployment.cleanupSha256 !== request.data.identity.cleanupSha256
+    || deployment.controllerStateSha256 !== request.data.identity.controllerStateSha256) {
+    throw new Error("SUCCESSOR_GRAPH_PREAPPROVAL_BINDING_INVALID");
+  }
+  return assertSuccessorGraphPreapprovalHeld({
+    graph: input.graph,
+    bound: input.bound,
+    nowMs: input.nowMs,
+    evidence: input.evidence,
+  });
+}
 
 const validDigest = (value: unknown): value is Digest => typeof value === "string" && DIGEST.test(value);
 const under = (root: string, child: string) => {

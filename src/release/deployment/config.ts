@@ -35,6 +35,24 @@ const DeploymentExecutionConfigSchema = z.object({
 
 export type DeploymentExecutionConfig = Readonly<z.infer<typeof DeploymentExecutionConfigSchema>>;
 
+/** Immutable successor review policy. It has no endpoint, credential,
+ * provider label, price, or transport field: native constructors and their
+ * cost facts must establish those separately. */
+const NonGoogleDeploymentReviewConfigSchema = z.object({
+  version: z.literal(1),
+  providerGraphRevision: z.literal("non-google-v1"),
+  candidateSha256: DigestSchema,
+  topologySha256: DigestSchema,
+  sourceSha256: DigestSchema,
+  configSha256: DigestSchema,
+  toolchainSha256: DigestSchema,
+  failureDomainSha256: DigestSchema,
+  retentionSha256: DigestSchema,
+  cleanupSha256: DigestSchema,
+  controllerStateSha256: DigestSchema,
+}).strict();
+export type NonGoogleDeploymentReviewConfig = Readonly<z.infer<typeof NonGoogleDeploymentReviewConfigSchema>>;
+
 function freeze<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const child of Object.values(value as Record<string, unknown>)) freeze(child);
@@ -53,4 +71,8 @@ export function createDeploymentExecutionConfig(input: unknown): DeploymentExecu
     publicSettings: { ...config.publicSettings, regions: [...config.publicSettings.regions] },
     secretReferences: { ...config.secretReferences },
   });
+}
+
+export function createNonGoogleDeploymentReviewConfig(input: unknown): NonGoogleDeploymentReviewConfig {
+  return freeze(NonGoogleDeploymentReviewConfigSchema.parse(input));
 }

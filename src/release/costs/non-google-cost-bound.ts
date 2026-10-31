@@ -1,6 +1,7 @@
 import { canonicalJson } from "../../promotion/schema";
 import { z } from "zod";
 import { OPENAI_RESPONSES_PRICING_URL, type OpenAiResponsesPricingDocument } from "./official-sources";
+import type { OfficialPricingSourcePort } from "./production-catalog";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PositiveMicrosSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -65,7 +66,7 @@ export type OpenAiResponsesUsage = z.infer<typeof UsageSchema>;
  * available accounting fact by choosing a provider label or clock. */
 const CostEvidenceSchema = z.object({
   artifactReference: z.string().regex(/^evidence:[a-z0-9._:-]{3,255}$/u),
-  sourceKind: z.enum(["official_openai_model", "contextvm_transport_policy", "operator_homelab_policy", "operator_approval_policy", "unknown"]),
+  sourceKind: z.enum(["official_openai_model", "official_modal_pricing", "official_fly_pricing", "contextvm_transport_policy", "operator_homelab_policy", "operator_approval_policy", "funding_fee_contract", "publication_contract", "unknown"]),
   sourceUrl: z.string().url().max(2048),
   sourceArtifactSha256: DigestSchema,
   sourceDocumentSha256: DigestSchema,
@@ -131,6 +132,7 @@ const SuccessorRoleSchema = z.object({
   construction: z.enum(["native", "unconstructed"]),
 }).strict();
 type SuccessorRole = z.infer<typeof SuccessorRoleSchema>;
+export type SuccessorGraphRole = SuccessorRole;
 
 export type SuccessorGraphInventory = Readonly<{
   graphRevision: "non-google-v1";
@@ -170,9 +172,25 @@ export type SuccessorRoleCostBound = Readonly<{
   candidateSha256: string;
   topologySha256: string;
   inventorySha256: string;
+  boundSha256: string;
   facts: readonly SuccessorRoleCostFact[];
   heldRoleIds: readonly string[];
 }>;
+const WorkerPricingSnapshotSchema = z.object({
+  sourceId: z.string().min(3).max(128),
+  bytes: z.instanceof(Uint8Array).refine((bytes) => bytes.byteLength > 0 && bytes.byteLength <= 8 * 1024 * 1024, "SUCCESSOR_GRAPH_WORKER_SOURCE_BYTES_REJECTED"),
+  observedAtMs: z.number().int().positive(),
+  freshUntilMs: z.number().int().positive(),
+  quotes: z.array(z.object({
+    provider: z.enum(["modal", "fly"]),
+    componentId: z.string().min(3).max(128),
+    skuId: z.string().min(3).max(128),
+    region: z.string().min(1).max(128),
+    currency: z.literal("USD"),
+    unit: z.string().min(1).max(128),
+    priceMicros: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }).strict()).min(1).max(8),
+}).strict();
 
 function freeze<T>(value: T): T { return Object.freeze(value); }
 async function sha256(value: Uint8Array): Promise<string> { return Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer)).toString("hex"); }
@@ -216,14 +234,65 @@ export async function createSuccessorGraphInventory(input: Readonly<{
   return freeze({ graphRevision: "non-google-v1" as const, candidateSha256, topologySha256, roles: freeze(boundRoles), inventorySha256 });
 }
 
+/** Captures a bounded public Modal/Fly source as the role's own evidence
+ * producer. The result intentionally remains held: a public price cannot
+ * establish the selected placement, account arrangement, availability or
+ * native backend. It therefore cannot be mistaken for an OpenAI rate or a
+ * production authorization line. */
+export async function createHeldSuccessorWorkerCostFact(input: Readonly<{
+  graph: SuccessorGraphInventory;
+  roleId: "worker.modal" | "worker.fly";
+  source: OfficialPricingSourcePort;
+}>): Promise<SuccessorRoleCostFact> {
+  const role = input.graph.roles.find((candidate) => candidate.roleId === input.roleId);
+  if (!role) throw new Error("SUCCESSOR_GRAPH_WORKER_ROLE_REQUIRED");
+  const provider = input.roleId === "worker.modal" ? "modal" : "fly";
+  const snapshot = WorkerPricingSnapshotSchema.parse(await input.source.readOfficialPricing({ provider }));
+  if (snapshot.freshUntilMs <= snapshot.observedAtMs
+    || snapshot.quotes.length !== 1
+    || snapshot.quotes[0]?.provider !== provider
+    || snapshot.quotes[0]?.currency !== "USD"
+    || snapshot.quotes[0]?.unit !== "worker-100-seconds") {
+    throw new Error("SUCCESSOR_GRAPH_WORKER_SOURCE_INVALID");
+  }
+  const sourceDocumentSha256 = await sha256(snapshot.bytes);
+  const sourceUrl = provider === "modal" ? "https://modal.com/pricing" : "https://docs.fly.io/about/pricing";
+  return SuccessorRoleCostFactSchema.parse({
+    roleId: role.roleId,
+    effectId: role.effectId,
+    costComponentId: role.costComponentId,
+    constructorSha256: role.constructorSha256,
+    disposition: "unknown_held",
+    status: "held",
+    provider,
+    holdReason: "official price captured but selected placement, account contract and native backend remain unverified",
+    evidence: {
+      artifactReference: `evidence:official-${provider}-worker:${sourceDocumentSha256}`,
+      sourceKind: provider === "modal" ? "official_modal_pricing" : "official_fly_pricing",
+      sourceUrl,
+      sourceArtifactSha256: sourceDocumentSha256,
+      sourceDocumentSha256,
+      observedAtMs: snapshot.observedAtMs,
+      freshUntilMs: snapshot.freshUntilMs,
+      currency: "USD",
+      fx: { kind: "native_usd", sourceDocumentSha256, numerator: 1, denominator: 1 },
+      unit: snapshot.quotes[0].unit,
+      precision: 6,
+      scope: `${provider} worker candidate source only; no placement or account authority`,
+      candidateSha256: input.graph.candidateSha256,
+      topologySha256: input.graph.topologySha256,
+    },
+  });
+}
+
 /** Links a concrete successor role/effect to its own source-bound cost fact.
  * It is intentionally incapable of producing a maximum charge.  A later
  * native factory must supply all backends and the precise pricing/usage
  * adapters; until then, every held component blocks preapproval. */
-export function createSuccessorRoleCostBound(input: Readonly<{
+export async function createSuccessorRoleCostBound(input: Readonly<{
   graph: SuccessorGraphInventory;
   facts: readonly SuccessorRoleCostFact[];
-}>): SuccessorRoleCostBound {
+}>): Promise<SuccessorRoleCostBound> {
   const graph = input.graph;
   if (GraphRevisionSchema.parse(graph.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
   const facts = input.facts.map((fact) => SuccessorRoleCostFactSchema.parse(fact));
@@ -237,12 +306,21 @@ export function createSuccessorRoleCostBound(input: Readonly<{
     if (role.roleId === "model.openai-responses" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
   }
   const heldRoleIds = facts.filter((fact) => fact.status === "held").map((fact) => fact.roleId);
+  const boundSha256 = await hashCanonical({
+    schemaVersion: "non-google-successor-role-cost-v1",
+    graphRevision: "non-google-v1",
+    candidateSha256: graph.candidateSha256,
+    topologySha256: graph.topologySha256,
+    inventorySha256: graph.inventorySha256,
+    facts,
+  });
   return freeze({
     schemaVersion: "non-google-successor-role-cost-v1" as const,
     graphRevision: "non-google-v1" as const,
     candidateSha256: graph.candidateSha256,
     topologySha256: graph.topologySha256,
     inventorySha256: graph.inventorySha256,
+    boundSha256,
     facts: freeze(facts),
     heldRoleIds: freeze(heldRoleIds),
   });
@@ -250,18 +328,28 @@ export function createSuccessorRoleCostBound(input: Readonly<{
 
 /** Plan 67's sole normal-path result. It checks canonical graph bytes and
  * returns a typed throw before any credential/client/provider boundary. */
-export function assertSuccessorGraphPreapprovalHeld(input: Readonly<{
+export async function assertSuccessorGraphPreapprovalHeld(input: Readonly<{
   graph: SuccessorGraphInventory;
   bound: SuccessorRoleCostBound;
   nowMs: number;
-}>): never {
+  evidence: CostEvidenceArtifactResolver;
+}>): Promise<never> {
   if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("SUCCESSOR_GRAPH_CLOCK_INVALID");
   if (input.bound.graphRevision !== input.graph.graphRevision || input.bound.candidateSha256 !== input.graph.candidateSha256 || input.bound.topologySha256 !== input.graph.topologySha256 || input.bound.inventorySha256 !== input.graph.inventorySha256) throw new Error("SUCCESSOR_GRAPH_BINDING_INVALID");
+  for (const fact of input.bound.facts) {
+    if (fact.evidence.freshUntilMs <= input.nowMs) throw new Error("SUCCESSOR_GRAPH_COST_STALE");
+    const artifact = await input.evidence.read(fact.evidence.artifactReference);
+    if (!(artifact.bytes instanceof Uint8Array)
+      || artifact.sourceUrl !== fact.evidence.sourceUrl
+      || await sha256(artifact.bytes) !== fact.evidence.sourceArtifactSha256
+      || fact.evidence.sourceArtifactSha256 !== fact.evidence.sourceDocumentSha256) {
+      throw new Error("SUCCESSOR_GRAPH_COST_EVIDENCE_INVALID");
+    }
+  }
   const missingSuites = SuccessorSuiteSchema.options.filter((suite) => !input.graph.roles.some((role) => role.suite === suite));
   if (missingSuites.length > 0) throw new Error("SUCCESSOR_GRAPH_SUITE_BACKEND_MISSING");
   if (input.graph.roles.some((role) => role.construction !== "native")) throw new Error("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
   if (input.bound.heldRoleIds.length > 0) throw new Error("SUCCESSOR_GRAPH_COST_HELD");
-  if (input.bound.facts.some((fact) => fact.evidence.freshUntilMs <= input.nowMs)) throw new Error("SUCCESSOR_GRAPH_COST_STALE");
   throw new Error("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
 }
 

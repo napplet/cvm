@@ -183,7 +183,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const accountId = credited.accountId, sessionId = "session:retained", actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
     // Isolated pricing source records are registered through the same catalog
     // used by V2 preparation. They are not a quote, provider, or release claim.
-    const originalPricing = await resumePricingMaterial(now, "retained-profile");
+    const originalPricing = await resumePricingMaterial(now, "retained-profile", "500");
     await registerProductionPricing({ pool, ...originalPricing });
     await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,'fixture:admission',$3,$4,0,'prepared')", [sessionId, accountId, originalPricing.profile.id, originalPricing.card.id]);
     await source.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:retained',$1,'fixture:admission',10,10,'active')", [accountId]);
@@ -220,9 +220,9 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const persistedArtifact = await new ProductionWorkerArtifactStore({ journal, objects, toolchainSha256: hex("toolchain") }).persist({ request: artifactRequest, accountId, ownerId: fixture.ownerId, bytes: fixture.artifact, scannerReportSha256: hex("scanner"), conformanceReportSha256: hex("conformance"), result: artifactResult });
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
-    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: hex("retained-idea"), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "3", admissionReference: "fixture:admission" };
+    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: hex("retained-idea"), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "11", admissionReference: "fixture:admission" };
     const retainedCommand = StartSessionCommandSchema.parse({ principal: { pubkey: fixture.ownerId }, admissionReference: pauseIntent.admissionReference,
-      idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: "3", policyVersion: pauseIntent.policyVersion,
+      idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: "11", policyVersion: pauseIntent.policyVersion,
       idea: "Build one focused retained-subject fixture." });
     // The source worker is paused because its immediately spendable balance
     // is exhausted. The later V2 acceptance still revalidates the original

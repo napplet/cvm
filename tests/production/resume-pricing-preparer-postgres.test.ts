@@ -51,7 +51,7 @@ import { loadProductionConfig } from "../../src/production/config";
 import { listProductionRetentionCandidates } from "../../src/production/checkpoint-retention";
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 import { ProductionPricedContinuationCleanup } from "../../src/production/priced-continuation-cleanup";
-import { createProductionReadyCapacity, type ProductionReadyCapacityPort } from "../../src/production/worker-capacity";
+import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 import { openLocalProductionWorker } from "../fixtures/local-production-worker";
 import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
 import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
@@ -794,7 +794,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const nativeWorkerRecords = createPostgresWorkerOperationJournal(nativeWorkerJournal);
     const nativeCreatedAtMs = Date.now();
     await nativeWorkerRecords.claim({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceName: workerOperationId, provider: "fly", appName: "resume-workspace-fixture",
-      policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry.example/worker@sha256:${"a".repeat(64)}`,
+      region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry.example/worker@sha256:${"a".repeat(64)}`,
       sessionLeaseSha256: workspaceCapacityIntent.sessionBindingDigest.slice(7), toolchainSha256: workspaceToolchain,
       providerDeadlineEpochMs: Date.parse(workspaceAllocation.allocation.expiresAt), createdAtMs: nativeCreatedAtMs });
     await nativeWorkerRecords.update({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceId: "fixture-workspace-machine", state: "reconciled", providerCreatedAtMs: nativeCreatedAtMs });
@@ -821,7 +821,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const workerClients = createWorkerDeploymentClients({ image: `registry.example/worker@sha256:${"a".repeat(64)}`, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot,
       policyVersion: PRODUCTION_WORKER_POLICY.version, modalAppName: "resume-workspace-fixture", modalTags: {}, journal: nativeWorkerRecords,
       modalSdk: { apps: { fromName: noNativeEffect }, images: { fromRegistry: noNativeEffect }, sandboxes: { create: noNativeEffect, findByName: noNativeEffect, fromId: noNativeEffect } },
-      fly: { create: noNativeEffect, observe: noNativeEffect, terminate: nativeFly.terminate, observeTermination: nativeFly.observeTermination,
+      fly: { create: noNativeEffect, async observe(value) {
+        if (value.operationId !== workerOperationId) throw new Error("UNEXPECTED_NATIVE_WORKER_OBSERVATION");
+        return { status: "completed" as const, resourceId: "fixture-workspace-machine", readiness: { readyMonotonicMs: 100, readinessProbeDigest: `sha256:${"b".repeat(64)}` } };
+      }, terminate: nativeFly.terminate, observeTermination: nativeFly.observeTermination,
         async exec(value): Promise<{ status: "completed"; exitCode: number; stdout: string }> {
           const [, action, archiveSha256, index, data] = value.command;
           if (action === "restore-plan") { nativePlans++; const plan = JSON.parse(Buffer.from(index ?? "", "base64").toString("utf8")); return { status: "completed", exitCode: 0,
@@ -980,16 +983,15 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const mountedRouter = new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       executables: [{ image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: mountedToolchain, clients: workerClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] });
-    // The mounted facade must reconcile the exact original capacity record,
-    // not a second production-capacity instance with no knowledge of this
-    // fixture's retained worker. The extra methods are strict outer-provider
-    // observations only; the worker/claim/journal authority remains real SQL.
-    const mountedCapacity: ProductionReadyCapacityPort = {
-      ...capacity,
-      async prewarm() { throw new Error("MOUNTED_FACADE_PREWARM_NOT_EXPECTED"); },
-      async inspect() { return undefined; },
-      async observeRelease() { return { status: nativeDeletes > 0 ? "terminated" as const : "pending" as const }; },
-    };
+    // This is a distinct mounted production-capacity instance, prewarmed
+    // against the exact original native worker. It can only observe/reconcile
+    // that record; create remains an explicit no-effect fixture denial.
+    const mountedCapacity = createProductionReadyCapacity({ provider: "fly", workers: workerClients,
+      journal: new PostgresOperationJournal(pool, { namespace: "fixture-mounted-priced-capacity", scopeSha256: "7".repeat(64) }),
+      workerJournal: nativeWorkerJournal, image: `registry.example/worker@sha256:${"a".repeat(64)}`,
+      toolchainSha256: mountedToolchain, flyRegion: "ams" });
+    await mountedCapacity.prewarm({ intentReference: workspaceCapacityIntent.capacityIntentReference,
+      expectedSessionBindingDigest: workspaceCapacityIntent.sessionBindingDigest });
     let failFirstMountedTerminalWrite = true;
     const mountedFailurePool = sqlPool(runtime, undefined, undefined, () => {
       const value = failFirstMountedTerminalWrite;

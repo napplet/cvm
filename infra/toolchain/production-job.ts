@@ -71,7 +71,7 @@ async function measureDirectToolchain() {
 type RequestCore = { actionId: string; sessionId: string; expectedVersion: number; proposalSha256: string; toolchainSha256: string; deadlineEpochMs: number; files: Array<{ path: string; content: string }> };
 type LegacyRequest = RequestCore & { version: 1; publication?: { server: string } };
 type DirectRequest = RequestCore & { version: 2; artifactContract: "nip5d-direct-v1"; purpose: string; publication: { server: string } };
-type EdgeCertification = { version: 1; candidateSha256: string; topologySha256: string; workerOperationId: string; sessionLeaseSha256: string; providerImage: string };
+type EdgeCertification = { version: 1; candidateSha256: string; topologySha256: string; workerOperationId: string; sessionLeaseSha256: string; providerImage: string; workerProfileSha256: string };
 type EdgeRequest = RequestCore & { version: 3; edgeCertification: EdgeCertification; publication?: { server: string } };
 type Request = LegacyRequest | DirectRequest | EdgeRequest;
 function isObject(value: unknown): value is object { return typeof value === "object" && value !== null; }
@@ -125,9 +125,9 @@ function parseRequest(value: unknown): Request {
   }
   if (version === 3) {
     const edgeRaw = objectRecord(raw.edgeCertification, "JOB_EDGE_CERTIFICATION_INVALID");
-    const edge: EdgeCertification = { version: edgeRaw.version === 1 ? 1 : fail("JOB_EDGE_CERTIFICATION_INVALID"), candidateSha256: stringField(edgeRaw, "candidateSha256", "JOB_EDGE_CERTIFICATION_INVALID"), topologySha256: stringField(edgeRaw, "topologySha256", "JOB_EDGE_CERTIFICATION_INVALID"), workerOperationId: stringField(edgeRaw, "workerOperationId", "JOB_EDGE_CERTIFICATION_INVALID"), sessionLeaseSha256: stringField(edgeRaw, "sessionLeaseSha256", "JOB_EDGE_CERTIFICATION_INVALID"), providerImage: stringField(edgeRaw, "providerImage", "JOB_EDGE_CERTIFICATION_INVALID") };
-    if (Object.keys(edgeRaw).sort().join(",") !== "candidateSha256,providerImage,sessionLeaseSha256,topologySha256,version,workerOperationId" || edge.version !== 1
-      || ![edge.candidateSha256, edge.topologySha256, edge.sessionLeaseSha256].every(item => typeof item === "string" && /^[a-f0-9]{64}$/u.test(item))
+    const edge: EdgeCertification = { version: edgeRaw.version === 1 ? 1 : fail("JOB_EDGE_CERTIFICATION_INVALID"), candidateSha256: stringField(edgeRaw, "candidateSha256", "JOB_EDGE_CERTIFICATION_INVALID"), topologySha256: stringField(edgeRaw, "topologySha256", "JOB_EDGE_CERTIFICATION_INVALID"), workerOperationId: stringField(edgeRaw, "workerOperationId", "JOB_EDGE_CERTIFICATION_INVALID"), sessionLeaseSha256: stringField(edgeRaw, "sessionLeaseSha256", "JOB_EDGE_CERTIFICATION_INVALID"), providerImage: stringField(edgeRaw, "providerImage", "JOB_EDGE_CERTIFICATION_INVALID"), workerProfileSha256: stringField(edgeRaw, "workerProfileSha256", "JOB_EDGE_CERTIFICATION_INVALID") };
+    if (Object.keys(edgeRaw).sort().join(",") !== "candidateSha256,providerImage,sessionLeaseSha256,topologySha256,version,workerOperationId,workerProfileSha256" || edge.version !== 1
+      || ![edge.candidateSha256, edge.topologySha256, edge.sessionLeaseSha256, edge.workerProfileSha256].every(item => typeof item === "string" && /^[a-f0-9]{64}$/u.test(item))
       || typeof edge.workerOperationId !== "string" || !/^capacity-[a-f0-9]{40}$/u.test(edge.workerOperationId)
       || typeof edge.providerImage !== "string" || !/^.+@sha256:[a-f0-9]{64}$/iu.test(edge.providerImage)) fail("JOB_EDGE_CERTIFICATION_INVALID");
     return { version: 3, ...common, edgeCertification: edge, ...(mountedPublication === undefined ? {} : { publication: mountedPublication }) };
@@ -140,7 +140,13 @@ async function assertImageContract(request: Request) {
   const info = await lstat(path).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
   if (info && (!info.isFile() || info.isSymbolicLink() || info.uid !== 0 || info.nlink !== 1 || (info.mode & 0o022) !== 0 || info.size > 64)) fail("JOB_IMAGE_CONTRACT_INVALID");
   const contract = info ? (await readFile(path, "utf8")).trim() : "legacy-aggregate-v1";
-  if (!["legacy-aggregate-v1", "nip5d-direct-v1"].includes(contract) || (request.version === 2) !== (contract === "nip5d-direct-v1")) fail("JOB_IMAGE_CONTRACT_MISMATCH");
+  const expected = request.version === 1 ? "legacy-aggregate-v1" : request.version === 2 ? "nip5d-direct-v1" : "edge-native-v3-unpromoted";
+  if (contract !== expected) fail("JOB_IMAGE_CONTRACT_MISMATCH");
+  if (request.version !== 3) return;
+  const selector = objectRecord(JSON.parse(await readFile("/toolchain/edge-worker-current.json", "utf8")), "JOB_EDGE_PROFILE_INVALID");
+  const profile = objectRecord(JSON.parse(await readFile("/toolchain/edge-worker-profile-v3.json", "utf8")), "JOB_EDGE_PROFILE_INVALID");
+  if (selector.version !== 1 || selector.status !== "unpromoted" || selector.profile !== "toolchains/recipes/capabilities-worker-profile-v3-unpromoted.json" || selector.sourceVersion !== 3 || typeof selector.profileSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(selector.profileSha256)
+    || profile.sourceVersion !== 3 || profile.status !== "prepared-profile-not-promoted" || profile.artifactContract !== "nip5d-direct-v1" || profile.workerContract !== "edge-native-v3-unpromoted" || profile.workerImageTarget !== "edge-production-worker" || selector.profileSha256 !== sha(canonical(profile)) || request.edgeCertification.workerProfileSha256 !== selector.profileSha256) fail("JOB_EDGE_PROFILE_MISMATCH");
 }
 async function dataReceipt(project: string, relative: string, limit: number) {
   const handle = await open(join(project, relative), constants.O_RDONLY | constants.O_NOFOLLOW);

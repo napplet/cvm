@@ -70,10 +70,15 @@ async function writableSurfaceConfined() {
   const mounts = lines.map(line => {
     const separator = line.indexOf(" - "); const fields = separator < 0 ? [] : line.slice(0, separator).split(" ");
     if (fields.length < 6 || !fields[4]?.startsWith("/")) throw new Error("WORKER_MOUNTINFO_INVALID");
-    return unescapeMount(fields[4]);
+    return Object.freeze({ path: unescapeMount(fields[4]), readOnly: fields[5]!.split(",").includes("ro") });
   });
-  if (new Set(mounts).size !== mounts.length) return false;
-  for (const path of mounts) {
+  if (new Set(mounts.map(mount => mount.path)).size !== mounts.length) return false;
+  for (const mount of mounts) {
+    const { path } = mount;
+    // Mount-root permissions do not describe writable descendants. The exact
+    // policy therefore rejects every unlisted read-write mount by mountinfo
+    // metadata before consulting discretionary access bits.
+    if (!mount.readOnly && !allowed.has(path)) return false;
     const writable = await access(path, constants.W_OK).then(() => true).catch(() => false);
     if (!writable) continue;
     const maximum = allowed.get(path); if (maximum === undefined) return false;
@@ -143,9 +148,12 @@ async function ready() {
   const remainingLifetimeMs = deadlineEpochMs - Date.now();
   if (!Number.isSafeInteger(deadlineEpochMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("WORKER_PROVIDER_FACTS_INVALID");
   const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
-  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)]);
+  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)].map(check => check.catch(() => false)));
   const ports = await noInboundListeners().catch(() => false);
-  if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("WORKER_ISOLATION_REFUSED");
+  if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) {
+    console.error(JSON.stringify({ code: "WORKER_ISOLATION_REFUSED", checks: { workspaceBounded, writableSurface, network, namespace, kernel, toolchain, ports, environmentClean, nonRoot: process.getuid?.() === 65532 } }));
+    throw new Error("WORKER_ISOLATION_REFUSED");
+  }
   console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
 }
 /** A fixed hostile probe, run through the same unprivileged bootstrap path as

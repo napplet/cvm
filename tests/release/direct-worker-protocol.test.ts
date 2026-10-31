@@ -35,7 +35,7 @@ test("direct profile retains authoritative scaffold scripts and legacy default",
   const selected = await Bun.file("toolchains/recipes/capabilities-worker-current.json").json();
   expect(selected).toMatchObject({ version: 1, status: "unpromoted", profile: "toolchains/recipes/capabilities-worker-profile-v3-unpromoted.json", sourceVersion: 3, promotion: { selected: false, protectedEvidence: null } });
   const profile = await Bun.file(selected.profile).json();
-  expect(profile).toMatchObject({ status: "prepared-profile-not-promoted", artifactContract: "nip5d-direct-v1", sourceVersion: 3, transportBundleVersion: 4, promotion: { selected: false, protectedEvidence: null } });
+  expect(profile).toMatchObject({ status: "prepared-profile-not-promoted", artifactContract: "nip5d-direct-v1", workerContract: "edge-native-v3-unpromoted", workerImageTarget: "edge-production-worker", sourceVersion: 3, transportBundleVersion: 4, promotion: { selected: false, protectedEvidence: null } });
   expect(profile.inputs).toEqual([...profile.inputs].sort((left, right) => left.path.localeCompare(right.path)));
   for (const input of profile.inputs) expect(new Bun.CryptoHasher("sha256").update(await Bun.file(input.path).bytes()).digest("hex")).toBe(input.sha256);
   const generated = await generateCapabilitiesWorkerProfile();
@@ -47,6 +47,7 @@ test("direct profile retains authoritative scaffold scripts and legacy default",
   expect(legacy).not.toContain("capabilities-worker");
   expect(legacy).toContain("toolchains/locks/initial/");
   expect(direct).toContain(cli.upstream.commit);
+  expect(direct).toContain("edge-production-worker");
   expect(direct).toContain(cli.upstream.sourceArchiveSha256);
   expect(direct).toContain(cli.upstream.sourceLockSha256);
   expect(direct).toContain(cli.lockOverlay.sha256);

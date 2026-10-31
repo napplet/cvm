@@ -15,6 +15,9 @@ const POLICY = "production-worker-policy-2026-10-27";
 const MAX_OUTPUT = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const direct = process.argv.includes("--direct-artifact");
+const edgeNative = process.argv.includes("--edge-native-v3");
+if (direct && edgeNative) throw new Error("WORKER_HARNESS_MODE_INVALID");
+const legacy = !direct && !edgeNative;
 const image = process.argv[2] ?? "napplet-cvm-production-worker:local";
 const run = `${process.pid}-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const reportPath = process.env.NAPPLET_CVM_WORKER_REPORT ?? `/tmp/napplet-cvm-production-worker-${run}.json`;
@@ -28,6 +31,9 @@ const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
 const toolchain = "c".repeat(64);
 const REQUIRED_READINESS_CHECKS = ["toolchain_readonly", "workspace_bounded", "non_root", "no_ambient_credentials", "network_denied", "no_inbound_ports", "minimal_capabilities"] as const;
+const edgeSelector = edgeNative ? await Bun.file("toolchains/recipes/capabilities-worker-current.json").json() as Record<string, unknown> : undefined;
+const edgeProfile = edgeNative ? await Bun.file(String(edgeSelector?.profile ?? "")).json() as Record<string, unknown> : undefined;
+if (edgeNative && (edgeSelector?.profile !== "toolchains/recipes/capabilities-worker-profile-v3-unpromoted.json" || typeof edgeSelector.profileSha256 !== "string" || edgeProfile?.workerContract !== "edge-native-v3-unpromoted" || edgeProfile?.workerImageTarget !== "edge-production-worker")) throw new Error("WORKER_EDGE_PROFILE_INVALID");
 
 type CommandResult = Readonly<{ argv: string[]; status: number; stdout: string; stderr: string; elapsedMs: number }>;
 type WorkerCommand = Readonly<{ argv: string[]; cwd?: string; status: number; stdout: string; stderr: string; elapsedMs: number }>;
@@ -129,7 +135,7 @@ async function containerLogs(name: string) {
 }
 
 const report: Record<string, unknown> = {
-  localMechanism: true, artifactContract: direct ? "nip5d-direct-v1" : "legacy-aggregate-v1", realProviderEvidence: false, requestedImage: image,
+  localMechanism: true, artifactContract: direct ? "nip5d-direct-v1" : edgeNative ? "edge-native-v3-unpromoted" : "legacy-aggregate-v1", realProviderEvidence: false, requestedImage: image,
   startedAt: new Date().toISOString(), logPath, hostDockerNetwork: "ordinary-default (no --network override)", privilegedBootstrap: ["SYS_ADMIN", "NET_ADMIN"],
   hostAppArmor: "unconfined (trusted bootstrap mount test only)",
   resources: { cpus: 1, memoryBytes: 1_073_741_824, memoryAndSwapBytes: 1_073_741_824 },
@@ -156,7 +162,7 @@ try {
   if (unboundedPids.status === 0 || writableEscape.status === 0) throw new Error("WORKER_EDGE_AUDIT_FALSE_POSITIVE");
   report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableEscape: writableEscape.status };
 
-  if (!direct) {
+  if (legacy) {
   const buildName = containers[0]!; const buildDeadline = Date.now() + 600_000;
   await requireDocker(["create", "--name", buildName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...buildCommand(buildDeadline)]);
   const buildConfig = JSON.parse((await requireDocker(["inspect", "--format", "{{json .HostConfig}}", buildName])).stdout);
@@ -190,7 +196,7 @@ try {
     if (refused.status === 0 || !refused.stderr.includes("WORKER_ASYNC_DIRECT_JOB_REQUIRED")) throw new Error("WORKER_LEGACY_ENTRYPOINT_NOT_REFUSED");
     report.legacyEntrypointRefusal = "WORKER_ASYNC_DIRECT_JOB_REQUIRED";
   }
-  const wrongSource = direct
+  const wrongSource = direct || edgeNative
     ? { version: 1, sessionId: "local-wrong-profile", actionId: "wrong", expectedVersion: 0, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: directFiles }
     : { version: 2, artifactContract: "nip5d-direct-v1", purpose: "Wrong image profile refusal", publication: { server: "https://publication.example" }, sessionId: "local-wrong-profile", actionId: "wrong", expectedVersion: 0, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: [...JSON.parse(sourceJson).files, { path: "src/capabilities.json", content: '{"required":[],"optional":[]}' }] };
   const wrongBytes = Buffer.from(canonicalJson(wrongSource)), wrongId = new Bun.CryptoHasher("sha256").update(wrongBytes).digest("hex");
@@ -201,7 +207,7 @@ try {
   const jobs: unknown[] = [];
   let checkpointWorkspace: Buffer | undefined, lastJobId = "";
   const jobManifests: unknown[] = [];
-  for (let revision = 1; revision <= 2; revision++) {
+  for (const revision of edgeNative ? [] : [1, 2]) {
     const body = canonicalJson({ ...(direct ? { version: 2, artifactContract: "nip5d-direct-v1", purpose: `Keep one short note, revision ${revision}` } : { version: 1 }), sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: [...JSON.parse(sourceJson).files, ...(!direct && revision === 2 ? [{ path: "src/capabilities.json", content: '{"required":[],"optional":[]}' }] : [])], ...(direct || revision === 2 ? { publication: { server: "https://publication.example" } } : {}) });
     const bytes = Buffer.from(body), id = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     for (let offset = 0, index = 0; offset < bytes.length; offset += 24_576, index++) {
@@ -254,9 +260,9 @@ try {
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;
     }
   }
-  if (!direct) {
+  if (legacy || edgeNative) {
     const edgeBody = canonicalJson({ version: 3, sessionId: "native-edge-proof", actionId: "hostile-supply", expectedVersion: 0, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000,
-      edgeCertification: { version: 1, candidateSha256: "d".repeat(64), topologySha256: "e".repeat(64), workerOperationId: `capacity-${"f".repeat(40)}`, sessionLeaseSha256: lease, providerImage: `registry.example/worker@sha256:${imageHash}` }, files: JSON.parse(sourceJson).files });
+      edgeCertification: { version: 1, candidateSha256: "d".repeat(64), topologySha256: "e".repeat(64), workerOperationId: `capacity-${"f".repeat(40)}`, sessionLeaseSha256: lease, providerImage: `registry.example/worker@sha256:${imageHash}`, workerProfileSha256: edgeNative ? edgeSelector!.profileSha256 : "f".repeat(64) }, files: JSON.parse(sourceJson).files });
     const edgeBytes = Buffer.from(edgeBody), edgeId = new Bun.CryptoHasher("sha256").update(edgeBytes).digest("hex");
     for (let offset = 0, index = 0; offset < edgeBytes.length; offset += 24_576, index++) await jobCommand("put", edgeId, String(index), edgeBytes.subarray(offset, offset + 24_576).toString("base64"));
     await jobCommand("start", edgeId, String(Math.ceil(edgeBytes.length / 24_576)));
@@ -280,7 +286,8 @@ try {
     // does not possess a provider account or control-plane authority, so it
     // cannot certify expiry/image provider facts; production assembly requires
     // the separate authenticated readback port before accepting this result.
-    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, cgroup: certification.cgroup, imageToolchain: certification.imageToolchain, supply: certification.supply, providerReadback: "unavailable-in-native-image-harness" };
+    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, cgroup: certification.cgroup, imageToolchain: certification.imageToolchain, supply: certification.supply, selectedProfileSha256: edgeNative ? edgeSelector!.profileSha256 : "not-applicable-legacy-image", providerReadback: "unavailable-in-native-image-harness" };
+    if (edgeNative) { checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(edgeBody), artifact: edgeArtifact, toolchainSha256: toolchain })); lastJobId = edgeId; jobs.push({ ...edgeResult, revision: "edge-v3", resultAccess: "denied-to-generated-uid" }); }
   }
   report.durableJobs = jobs; report.durableJobManifests = jobManifests;
   const fence = await jobCommand("fence", lastJobId, lease);
@@ -334,7 +341,7 @@ try {
   const repairResults = [repairOne, repairTwo].filter(result => result.status === 0).map(result => lastJson(result.stdout)), recoveryStatus = await recoveryCommand("restore-status", archiveSha256);
   if (!repairResults.length || repairResults.some(result => result.state !== "restored" || canonicalJson(result) !== canonicalJson(recoveryStatus))) throw new Error("WORKER_RECOVERY_REPAIR_FAILED");
   report.nativeRestoreRecovery = { killedSupervisor: true, nativeExit, exactSupervisorPid: killed.stdout.trim(), concurrentRepairs: [repairOne.status, repairTwo.status], repaired: repairResults.length, status: recoveryStatus };
-  if (!direct) {
+  if (legacy) {
   // Real new-job bytes projected into the historical format exercise reader
   // compatibility. This is not an observation from an old provider/image.
   const legacyWorkspace = JSON.parse(archive.toString("utf8")); legacyWorkspace.artifact.version = 1; delete legacyWorkspace.artifact.capabilityReceipt;

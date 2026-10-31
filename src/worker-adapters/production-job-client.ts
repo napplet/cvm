@@ -39,7 +39,7 @@ export const ProviderReadbackSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("verified"), originalOperationId: z.string().min(1).max(256), resourceId: z.string().min(1).max(512), image: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), sessionLeaseSha256: Digest, toolchainMeasurementSha256: Digest, expiresAtEpochMs: z.number().int().positive(), observedAtEpochMs: z.number().int().positive(), hardStop: z.object({ kind: z.literal("provider-enforced"), policyVersion: z.string().min(1).max(128), maximumLifetimeMs: z.number().int().positive().max(1_200_000) }).strict(), observedTermination: z.object({ state: z.enum(["not-observed", "observed"]), observedAtEpochMs: z.number().int().positive().optional() }).strict() }).strict(),
 ]);
 export type ProviderReadbackPort = Readonly<{ observe(input: Readonly<{ provider: "modal" | "fly"; workerOperationId: string; resourceId: string; expectedImage: string; sessionLeaseSha256: string }>): Promise<z.infer<typeof ProviderReadbackSchema>> }>;
-type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; artifactContract?: "nip5d-direct-v1"; edgeCertification?: Readonly<{ candidateSha256: string; topologySha256: string }>; providerReadback?: ProviderReadbackPort; restoreRecoveryVersion?: 1; publication?: ProductionWorkerPublication; now?: () => number }>;
+type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; artifactContract?: "nip5d-direct-v1"; edgeCertification?: Readonly<{ candidateSha256: string; topologySha256: string }>; edgeProfileSha256?: string; providerReadback?: ProviderReadbackPort; restoreRecoveryVersion?: 1; publication?: ProductionWorkerPublication; now?: () => number }>;
 const WorkspaceSource = z.object({ version: z.literal(1), actionId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, deadlineEpochMs: z.number().int().positive(), files: z.array(z.object({ path: z.enum(["src/main.ts", "src/styles.css", "src/capabilities.json"]), content: z.string().refine(value => Buffer.byteLength(value) <= 30_000) }).strict()).min(1).max(3) }).strict();
 const LegacySource = WorkspaceSource.extend({ publication: ProductionWorkerPublicationSchema.optional() }).strict();
 const DirectSource = WorkspaceSource.extend({ version: z.literal(2), artifactContract: z.literal("nip5d-direct-v1"), purpose: z.string().trim().min(1).max(4096), publication: ProductionWorkerPublicationSchema }).strict().superRefine((source, context) => {
@@ -47,7 +47,7 @@ const DirectSource = WorkspaceSource.extend({ version: z.literal(2), artifactCon
   try { ProductionCapabilityDeclarationSchema.parse(JSON.parse(content ?? "null")); }
   catch { context.addIssue({ code: "custom", message: "PRODUCTION_DIRECT_DECLARATION_INVALID" }); }
 });
-const EdgeSource = LegacySource.extend({ version: z.literal(3), edgeCertification: z.object({ version: z.literal(1), candidateSha256: Digest, topologySha256: Digest, workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), sessionLeaseSha256: Digest, providerImage: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu) }).strict() }).strict();
+const EdgeSource = LegacySource.extend({ version: z.literal(3), edgeCertification: z.object({ version: z.literal(1), candidateSha256: Digest, topologySha256: Digest, workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), sessionLeaseSha256: Digest, providerImage: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), workerProfileSha256: Digest }).strict() }).strict();
 const PublishedWorkspaceSource = z.discriminatedUnion("version", [LegacySource, DirectSource, EdgeSource]);
 const Workspace = z.object({ version: z.literal(1), source: PublishedWorkspaceSource, artifact: Bundle, toolchainSha256: Digest }).strict();
 function validateDirectBundle(source: z.infer<typeof PublishedWorkspaceSource>, bundle: z.infer<typeof Bundle>) {
@@ -91,6 +91,7 @@ export class ProductionWorkerJobClient {
     Digest.parse(input.toolchainSha256);
     if (input.restoreRecoveryVersion !== undefined) z.literal(1).parse(input.restoreRecoveryVersion);
     if (input.artifactContract !== undefined) { z.literal("nip5d-direct-v1").parse(input.artifactContract); if (!input.publication) throw new Error("PRODUCTION_DIRECT_PUBLICATION_REQUIRED"); }
+    if (input.edgeProfileSha256 !== undefined) Digest.parse(input.edgeProfileSha256);
     if (!["modal", "fly"].includes(input.provider) || !/^[a-z][a-z0-9_-]{2,48}$/u.test(input.workerOperationId)) throw new Error("PRODUCTION_JOB_WORKER_INVALID");
   }
   get toolchainSha256(): string { return this.input.toolchainSha256; }
@@ -152,7 +153,8 @@ export class ProductionWorkerJobClient {
     const deadlineEpochMs = Math.min(now + 600_000, worker.providerDeadlineEpochMs! - 600_000);
     if (deadlineEpochMs <= now) throw new Error("PRODUCTION_JOB_LEASE_EXPIRED");
     const publication = this.input.publication === undefined ? {} : { publication: this.input.publication };
-    const edgeCertification = this.input.edgeCertification === undefined ? {} : { edgeCertification: { version: 1 as const, candidateSha256: Digest.parse(this.input.edgeCertification.candidateSha256), topologySha256: Digest.parse(this.input.edgeCertification.topologySha256), workerOperationId: this.input.workerOperationId, sessionLeaseSha256: worker.sessionLeaseSha256!, providerImage: worker.image! } };
+    if (this.input.edgeCertification && !this.input.edgeProfileSha256) throw new Error("PRODUCTION_EDGE_PROFILE_REQUIRED");
+    const edgeCertification = this.input.edgeCertification === undefined ? {} : { edgeCertification: { version: 1 as const, candidateSha256: Digest.parse(this.input.edgeCertification.candidateSha256), topologySha256: Digest.parse(this.input.edgeCertification.topologySha256), workerOperationId: this.input.workerOperationId, sessionLeaseSha256: worker.sessionLeaseSha256!, providerImage: worker.image!, workerProfileSha256: Digest.parse(this.input.edgeProfileSha256) } };
     const profile = this.input.artifactContract ? { version: 2, artifactContract: this.input.artifactContract, purpose: DirectSource.shape.purpose.parse(request.idea) } : this.input.edgeCertification ? { version: 3, ...edgeCertification } : { version: 1 };
     if (this.input.artifactContract && !request.sourceProposalFiles.some(file => file.path === "src/capabilities.json")) throw new Error("PRODUCTION_DIRECT_DECLARATION_REQUIRED");
     const requestBody = canonicalJson({ ...profile, actionId: request.actionId, sessionId: request.sessionId, expectedVersion: request.expectedVersion, proposalSha256: request.sourceProposalSha256, toolchainSha256: this.input.toolchainSha256, deadlineEpochMs, files: request.sourceProposalFiles, ...publication });

@@ -53,6 +53,11 @@ jobs:
         run: |
           set -euo pipefail
           timeout 30m docker build --progress=plain --platform linux/amd64 --target production-worker --tag napplet-cvm-production-worker:ci --file infra/toolchain/Dockerfile . 2>&1 | tee "$RUNNER_TEMP/production-worker-build.log"
+      - name: Build distinct unpromoted edge-native v3 worker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m docker build --progress=plain --platform linux/amd64 --build-arg CVM_WORKER_CONTRACT=edge-native-v3-unpromoted --target edge-production-worker --tag napplet-cvm-edge-native-v3-worker:ci --file infra/toolchain/capabilities.Dockerfile . 2>&1 | tee "$RUNNER_TEMP/edge-native-v3-worker-build.log"
       - name: Verify distinct source candidate and sealed input binding
         run: |
           bun scripts/build-toolchain-image.ts --verify-only
@@ -64,6 +69,13 @@ jobs:
         run: |
           set -euo pipefail
           timeout 12m scripts/test-production-worker.sh napplet-cvm-production-worker:ci
+      - name: Validate native edge-v3 producer mechanism
+        shell: bash
+        env:
+          NAPPLET_CVM_WORKER_REPORT: ${{ runner.temp }}/edge-native-v3-worker-report.json
+        run: |
+          set -euo pipefail
+          timeout 12m bun scripts/test-production-worker.ts napplet-cvm-edge-native-v3-worker:ci --edge-native-v3
       - name: Diagnose denied bootstrap mounts
         if: failure()
         shell: bash
@@ -85,5 +97,8 @@ jobs:
             ${{ runner.temp }}/production-worker-report.json
             ${{ runner.temp }}/production-worker-report.log
             ${{ runner.temp }}/production-worker-build.log
+            ${{ runner.temp }}/edge-native-v3-worker-report.json
+            ${{ runner.temp }}/edge-native-v3-worker-report.log
+            ${{ runner.temp }}/edge-native-v3-worker-build.log
           if-no-files-found: warn
           retention-days: 3

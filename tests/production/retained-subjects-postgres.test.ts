@@ -345,7 +345,9 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     for (const subject of recoveredInventory) {
       const descriptor = CoreRestoreDescriptorSchema.parse(await restore.restore({ operationId: `restore:describe:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "describe" } }));
       const expectedStatus = subject.kind === "checkpoint" ? "reconciliation_pending" : "reattached";
-      await expect(restore.restore({ operationId: `restore:reattach:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "reattach", archiveSha256: subject.payloadSha256, expected: descriptor.expected } })).resolves.toMatchObject({ status: expectedStatus });
+      try {
+        await expect(restore.restore({ operationId: `restore:reattach:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "reattach", archiveSha256: subject.payloadSha256, expected: descriptor.expected } })).resolves.toMatchObject({ status: expectedStatus });
+      } catch (error) { throw new Error(`MOUNTED_REATTACH_${subject.kind}:${error instanceof Error ? error.message : "UNKNOWN"}`); }
     }
     await restore.restore({ operationId: "restore:retained", action: "restore.lose-local", payload: {} });
     for (const subject of recoveredInventory) {

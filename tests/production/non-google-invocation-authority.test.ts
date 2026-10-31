@@ -12,7 +12,7 @@ function ownedArrayBuffer(value: Uint8Array): ArrayBuffer {
 const digest = async (value: string | Uint8Array) => { const source = typeof value === "string" ? new TextEncoder().encode(value) : value; return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", ownedArrayBuffer(source))), byte => byte.toString(16).padStart(2, "0")).join(""); };
 const hex = (value: string) => value.repeat(64);
 
-async function fixture(now = 1_000_000) {
+async function fixture(now = 1_000_000, options: Readonly<{ expiresAtMs?: number; verificationNow?: number; expiredOriginalObservationScopes?: readonly string[]; originalOperations?: readonly { operationId: string; operationSha256: string; candidateSha256: string; topologySha256: string; roleCostBoundSha256: string }[] }> = {}) {
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const publicKeySpkiDer = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
   const costBytes = new TextEncoder().encode("controller-cost-artifact");
@@ -21,9 +21,9 @@ async function fixture(now = 1_000_000) {
     identity: { candidateSha256: hex("a"), sourceSha256: hex("b"), configSha256: hex("c"), toolchainSha256: hex("d"), topologySha256: hex("e"), failureDomainSha256: hex("f"), retentionSha256: hex("0"), cleanupSha256: hex("1"), controllerStateSha256: hex("2") },
     binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: hex("3"), roleCostBoundSha256: hex("4"), scopesSha256: await digest(canonicalJson(scopes)), effectsSha256: await digest(canonicalJson(effects)) },
   });
-  const unsigned = { version: "non-google-invocation-envelope-v1" as const, issuerId: "controller-root-1", issuedAtMs: now - 1, expiresAtMs: now + 60_000, request, receipt: { kind: "release-authorization-receipt-v4" as const, version: 4 as const, requestSha256: request.requestSha256, candidateSha256: hex("a"), topologySha256: hex("e"), providerGraphRevision: "non-google-v1" as const, roleInventorySha256: hex("3"), roleCostBoundSha256: hex("4"), receiptSha256: hex("5") }, scopes, effects, costArtifactSha256: await digest(costBytes) };
+  const unsigned = { version: "non-google-invocation-envelope-v1" as const, issuerId: "controller-root-1", issuedAtMs: now - 1, expiresAtMs: options.expiresAtMs ?? now + 60_000, request, receipt: { kind: "release-authorization-receipt-v4" as const, version: 4 as const, requestSha256: request.requestSha256, candidateSha256: hex("a"), topologySha256: hex("e"), providerGraphRevision: "non-google-v1" as const, roleInventorySha256: hex("3"), roleCostBoundSha256: hex("4"), receiptSha256: hex("5") }, scopes, effects, costArtifactSha256: await digest(costBytes), ...(options.originalOperations ? { originalOperations: options.originalOperations } : {}) };
   const signature = Buffer.from(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(canonicalJson(unsigned)))).buffer).toString("base64url");
-  const verifier = createNonGoogleInvocationAuthorityVerifier({ trustedIssuers: [{ issuerId: unsigned.issuerId, publicKeySpkiDer }], allowedScopes: scopes, allowedEffects: effects, costArtifact: { bytes: costBytes, sha256: unsigned.costArtifactSha256 }, now: () => now });
+  const verifier = createNonGoogleInvocationAuthorityVerifier({ trustedIssuers: [{ issuerId: unsigned.issuerId, publicKeySpkiDer }], allowedScopes: scopes, allowedEffects: effects, costArtifact: { bytes: costBytes, sha256: unsigned.costArtifactSha256 }, ...(options.expiredOriginalObservationScopes ? { expiredOriginalObservationScopes: options.expiredOriginalObservationScopes } : {}), now: () => options.verificationNow ?? now });
   return { verifier, envelope: { ...unsigned, signature }, now };
 }
 
@@ -51,4 +51,17 @@ test("only verifier-created authority instances cross the internal authority bou
   expect(() => assertNonGoogleInvocationAuthority(authority)).not.toThrow();
   expect(() => assertNonGoogleInvocationAuthority({ assertDispatch() {}, assertOriginalObservation() {} })).toThrow("NON_GOOGLE_INVOCATION_AUTHORITY_REQUIRED");
   expect(() => assertNonGoogleInvocationAuthority(new Proxy(authority, {}))).toThrow("NON_GOOGLE_INVOCATION_AUTHORITY_REQUIRED");
+});
+
+test("an expired signed wrapper is observation-only for its finite trusted original tuple", async () => {
+  const now = 1_000_000;
+  const original = { operationId: "model_original_operation", operationSha256: hex("6"), candidateSha256: hex("a"), topologySha256: hex("e"), roleCostBoundSha256: hex("4") };
+  const { verifier, envelope } = await fixture(now - 2, { expiresAtMs: now - 1, verificationNow: now, expiredOriginalObservationScopes: ["edge.payment"], originalOperations: [original] });
+  const authority = await verifier.verify(envelope);
+  expect(() => authority.assertDispatch({ scope: "edge.payment", effect: "edge.payment.model", candidateSha256: hex("a"), topologySha256: hex("e"), requestSha256: envelope.request.requestSha256, roleCostBoundSha256: hex("4"), nowMs: now })).toThrow("NON_GOOGLE_INVOCATION_EXPIRED");
+  expect(() => authority.assertOriginalObservation({ scope: "edge.payment", effect: "edge.payment.model", candidateSha256: hex("a"), topologySha256: hex("e"), requestSha256: envelope.request.requestSha256, roleCostBoundSha256: hex("4"), originalRecorded: true, operationId: original.operationId, operationSha256: original.operationSha256, nowMs: now })).not.toThrow();
+  expect(() => authority.assertOriginalObservation({ scope: "edge.payment", effect: "edge.payment.model", candidateSha256: hex("a"), topologySha256: hex("e"), requestSha256: envelope.request.requestSha256, roleCostBoundSha256: hex("4"), originalRecorded: false, operationId: original.operationId, operationSha256: original.operationSha256, nowMs: now })).toThrow("NON_GOOGLE_INVOCATION_ORIGINAL_REQUIRED");
+  expect(() => authority.assertOriginalObservation({ scope: "edge.payment", effect: "edge.payment.model", candidateSha256: hex("a"), topologySha256: hex("e"), requestSha256: envelope.request.requestSha256, roleCostBoundSha256: hex("4"), originalRecorded: true, operationId: "model_other_operation", operationSha256: original.operationSha256, nowMs: now })).toThrow("NON_GOOGLE_INVOCATION_ORIGINAL_DENIED");
+  const denied = await fixture(now - 2, { expiresAtMs: now - 1, verificationNow: now, originalOperations: [original] });
+  await expect(denied.verifier.verify(denied.envelope)).rejects.toThrow("NON_GOOGLE_INVOCATION_EXPIRED");
 });

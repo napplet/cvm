@@ -92,13 +92,26 @@ test("uses the Plan 63 ADC source directly without accepting a caller-supplied b
 });
 
 test("captures only the current global gross Gemini price table and rejects pricing-page drift", async () => {
-  const sources = createOfficialPricingSources({ now: () => 1_000, fetch: async (url) => {
+  const sources = createOfficialPricingSources({ now: () => 1_000, fetch: async (url, init) => {
+    expect(String(url)).toBe("https://cloud.google.com/model-garden/pricing");
+    expect(init).toMatchObject({ method: "GET", redirect: "error" });
     if (String(url) !== VERTEX_GEMINI_PRICING_URL) return new Response("no", { status: 404 });
     return new Response("Gemini 4 Argon* through November 30, 2026 Input (text, image, video, audio) Global $2.00 $0.10 Non-global $2.20 $0.11 Text output (response and reasoning) Global $10.00 $10.00 Non-global $11.00 $11.00 Gemini 4 Argon (Starting December 1, 2026), Gemini 4 Argon Cyber Permissive Input (text, image, video, audio) Global $4.00 $0.20 Non-global $4.40 $0.22 Text output (response and reasoning) Global $20.00 $20.00 Non-global $22.00 $22.00 Promotional pricing provided through 50% credits back on net spend");
   }, google: { selectors: [{ componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" }] }, workers: { modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-second" }, fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" } } });
   await expect(sources.sources.readVertexGeminiPrice()).resolves.toMatchObject({ sourceUrl: VERTEX_GEMINI_PRICING_URL, location: "global", model: "gemini-4-argon", currency: "USD", inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 });
   const drift = createOfficialPricingSources({ now: () => 1_000, fetch: async () => new Response("Gemini 4 Argon Global $2.00 / 1M"), google: { selectors: [{ componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" }] }, workers: { modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-second" }, fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" } } });
   await expect(drift.sources.readVertexGeminiPrice()).rejects.toThrow("VERTEX_PRICE_SOURCE_GROSS_UNPROVEN");
+});
+
+test.each([301, 302, 307, 308])("official Gemini price capture rejects HTTP %s rather than following it", async status => {
+  let calls = 0;
+  const sources = createOfficialPricingSources({ now: () => 1_000, fetch: async (_url, init) => {
+    calls++;
+    expect(init?.redirect).toBe("error");
+    return new Response(null, { status, headers: { location: "https://example.com/pricing" } });
+  }, google: { selectors: [{ componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" }] }, workers: { modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-second" }, fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" } } });
+  await expect(sources.sources.readVertexGeminiPrice()).rejects.toThrow("OFFICIAL_SOURCE_RESPONSE_REJECTED");
+  expect(calls).toBe(1);
 });
 
 test("USD receipt settlement captures a fresh executable USD/SAT source quote and always rounds against the service", async () => {

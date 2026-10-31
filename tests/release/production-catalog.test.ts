@@ -16,7 +16,7 @@ function source(provider: "modal" | "fly", priceMicros: number) {
 }
 function vertex() {
   return {
-    sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing" as const,
+    sourceUrl: "https://cloud.google.com/model-garden/pricing" as const,
     bytes: new TextEncoder().encode("vertex-gemini-4-argon-official-pricing"), observedAtMs: nowMs - 1, freshUntilMs: nowMs + 60_000,
     currency: "USD" as const, location: "global" as const, model: "gemini-4-argon" as const,
     effectiveFrom: "2026-10-13" as const, effectiveUntil: "2026-11-30" as const,

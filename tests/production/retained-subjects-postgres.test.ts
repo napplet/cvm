@@ -38,6 +38,12 @@ const migrations = [
   "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql",
   "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql",
   "phase-07/003_production_checkpoints.sql",
+  "development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql",
+  "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql",
+  "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql",
+  "development/010_projects.sql", "development/011_publication_relays.sql", "development/012_remix_imports.sql",
+  "development/013_publication_tracking.sql", "development/014_request_cost_history.sql", "development/015_revision_restore.sql",
+  "development/016_usage_evidence.sql",
 ] as const;
 const retainedSubjectMigrations = ["phase-07/014_production_durability_subjects.sql", "phase-07/015_production_publication_signed_events.sql"] as const;
 

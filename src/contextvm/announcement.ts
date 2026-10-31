@@ -9,6 +9,8 @@ const ToolNameSchema = z.enum([
   "start_session",
   "revise_session",
   "resume_session",
+  "prepare_resume",
+  "resume_session_v2",
   "session_status",
   "preview",
   "publication",
@@ -26,7 +28,7 @@ const ContextVmAnnouncementInputSchema = z.object({
     name: ToolNameSchema,
     available: z.boolean(),
     planned: z.boolean(),
-  }).strict()).min(8).max(10),
+  }).strict()).min(8).max(12),
 }).strict().superRefine((value, context) => {
   if (new Set(value.pmis).size !== 2) context.addIssue({ code: "custom", message: "PMIs must be unique" });
   if (new Set(value.paymentInteraction).size !== 2) context.addIssue({ code: "custom", message: "payment interactions must be unique" });
@@ -46,13 +48,18 @@ export type ContextVmAnnouncementInput = z.infer<typeof ContextVmAnnouncementInp
  * tool registry, but preview and publication cannot be advertised merely by
  * configuration: their availability is overwritten by installed safe facades.
  */
-export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publicationSourceContract?: unknown; sessionCaps?: boolean }>): ContextVmAnnouncementInput {
+export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publicationSourceContract?: unknown; sessionCaps?: boolean; pricedContinuation?: boolean }>): ContextVmAnnouncementInput {
   const parsed = ContextVmAnnouncementInputSchema.parse(input);
   const publication = Boolean(validatedAvailablePromotedCliSourceContract(availability.publicationSourceContract));
   return ContextVmAnnouncementInputSchema.parse({
     ...parsed,
-    tools: [...parsed.tools, ...(availability.sessionCaps && !parsed.tools.some(tool => tool.name === "approve_session_cap") ? [{ name: "approve_session_cap" as const, available: true, planned: false }] : [])].map((tool) => tool.name === "approve_session_cap"
+    tools: [...parsed.tools,
+      ...(availability.sessionCaps && !parsed.tools.some(tool => tool.name === "approve_session_cap") ? [{ name: "approve_session_cap" as const, available: true, planned: false }] : []),
+      ...(availability.pricedContinuation && !parsed.tools.some(tool => tool.name === "prepare_resume") ? [{ name: "prepare_resume" as const, available: true, planned: false }, { name: "resume_session_v2" as const, available: true, planned: false }] : []),
+    ].map((tool) => tool.name === "approve_session_cap"
       ? { ...tool, available: Boolean(availability.sessionCaps), planned: !availability.sessionCaps }
+      : tool.name === "prepare_resume" || tool.name === "resume_session_v2"
+        ? { ...tool, available: Boolean(availability.pricedContinuation), planned: !availability.pricedContinuation }
       : tool.name === "preview"
       ? { ...tool, available: availability.preview, planned: !availability.preview }
       : tool.name === "publication"

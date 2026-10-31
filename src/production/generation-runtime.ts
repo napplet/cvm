@@ -19,6 +19,7 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accou
 import { ProductionContinuationCoordinator } from "./continuation-coordinator";
 import { ProductionCertificationCoreServices } from "./certification-services";
 import { loadProductionCertificationPubkey } from "./certification-identity";
+import { ProductionPricedContinuationService, SealedProductionPricedContinuationFacade } from "./priced-continuation-service";
 
 async function digest(value: unknown): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))); return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join(""); }
 export type ProductionGenerationRuntime = Readonly<{
@@ -27,6 +28,7 @@ export type ProductionGenerationRuntime = Readonly<{
   authorization: Awaited<ReturnType<typeof createMountedProductionAuthorization>>;
   generation: MeteredGenerationService;
   continuation: ProductionContinuationCoordinator;
+  pricedContinuation: ProductionPricedContinuationService;
   facade: SealedProductionGenerationFacade;
   funding: Awaited<ReturnType<typeof openProductionFunding>>;
   dependencies: Awaited<ReturnType<typeof materializeProductionRuntimeDependencies>>;
@@ -69,15 +71,21 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
       key: { reference: config.checkpoint.kekReference, load: () => loadMountedCheckpointKek({ kekPath: secrets.path("checkpoint.kekReference") }) }, now: input.now });
     relay = await openContextVmRelayTransport({ serviceKeyReference: config.contextvm.serviceKeyReference, relaySetSha256: await digest([config.contextvm.relay]), relays: [config.contextvm.relay], signerBroker: materials.contextvmSignerBroker, journal: dependencies.serviceJournals.contextvm, admissionObserver, certificationClientPubkey, generationIntakes });
     const facade = new SealedProductionGenerationFacade();
-    funding = await openProductionFunding({ postgresPool: postgres.pool, transport: relay.transport, cashuPolicies: materials.cashuPolicies, capacity: admissionObserver.capacityRouter(), protectedMaterialKey: await secrets.bytes32("funding.protectedMaterialReference"), admissionReceiptSecret: await secrets.bytes32("funding.admissionReceiptReference"), statusCursorSecret: await secrets.bytes32("funding.statusCursorReference"), accountingConfiguration: Object.freeze({ mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" }), meteredService: facade, continuationService: continuation.service, nwcConnectionReference: config.funding.nwcConnectionReference, nwcCredentialBroker: materials.nwcCredentialBroker, nwcJournal: dependencies.serviceJournals.nwc });
+    const pricedContinuationFacade = new SealedProductionPricedContinuationFacade();
+    funding = await openProductionFunding({ postgresPool: postgres.pool, transport: relay.transport, cashuPolicies: materials.cashuPolicies, capacity: admissionObserver.capacityRouter(), protectedMaterialKey: await secrets.bytes32("funding.protectedMaterialReference"), admissionReceiptSecret: await secrets.bytes32("funding.admissionReceiptReference"), statusCursorSecret: await secrets.bytes32("funding.statusCursorReference"), accountingConfiguration: Object.freeze({ mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" }), meteredService: facade, continuationService: continuation.service, pricedContinuation: pricedContinuationFacade, nwcConnectionReference: config.funding.nwcConnectionReference, nwcCredentialBroker: materials.nwcCredentialBroker, nwcJournal: dependencies.serviceJournals.nwc });
     const recoveryCommands = new ProtectedGenerationCommands({ reference: config.checkpoint.kekReference, load: () => loadMountedCheckpointKek({ kekPath: secrets.path("checkpoint.kekReference") }) }, input.now);
     const generation = new MeteredGenerationService({ fundedAdmission: funding.core.admissions, store: funding.database.meteredFunding, gateway: dependencies.gateway, worker: dependencies.workerBridge, artifactVerifier: dependencies.workerBridge, proposalStore: dependencies.proposals, pricing: { card: dependencies.vertexMaterial.pricing.card, profile: dependencies.vertexMaterial.pricing.profile }, settlement: dependencies.settlement, retainedPricing: dependencies.retainedPricing, recoveryCommands, continuation: continuation.service, toolchainIdentity: config.worker.toolchainSha256, clock: { nowMs: input.now ?? Date.now } });
+    const pricedContinuation = await ProductionPricedContinuationService.create({ pool: postgres.pool, config, generation, capacity: dependencies.capacity,
+      checkpoint: dependencies.checkpointCoordinator, vertexJournal: dependencies.vertexJournal, workerJournal: dependencies.workerJournal,
+      jobJournal: dependencies.jobJournal, requestJournal: dependencies.requestJournal, capacityJournal: dependencies.serviceJournals.capacity,
+      artifactStore: dependencies.artifactStore, workers: dependencies.workers, jobRouter: dependencies.jobRouter, gateway: dependencies.gateway,
+      pricing: dependencies.vertexMaterial.pricing, now: input.now });
     const generationRecovery = new ProductionGenerationRecovery({ pool: postgres.pool, commands: recoveryCommands, replayAuthority, acceptedToolchains: dependencies.jobRouter.toolchainSha256s, generation });
     await generationRecovery.assertReady();
     const admissionCapacityRecovery = new ProductionAdmissionCapacityRecovery({ pool: postgres.pool, capacity: dependencies.capacity,
       router: dependencies.jobRouter, workerJournal: dependencies.workerJournal, journal: dependencies.serviceJournals.capacity, now: input.now });
     await admissionCapacityRecovery.assertReady();
-    facade.bind(generation); await relay.start();
+    facade.bind(generation); pricedContinuationFacade.bind(pricedContinuation); await relay.start();
     // This is a bounded reconciliation poll over already-paused SQL rows, not
     // an admission queue. Every candidate remains fenced by the transaction.
     const continuationTimer = setInterval(() => { void continuation.scan(); }, 30_000);
@@ -90,7 +98,7 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
     capacityRecoveryTimer.unref?.();
     const mountedClosers = new Set<() => Promise<void>>();
     return Object.freeze({
-      config, certificationClientPubkey, authorization, generation, continuation, facade, funding, dependencies, admissionObserver,
+      config, certificationClientPubkey, authorization, generation, continuation, pricedContinuation, facade, funding, dependencies, admissionObserver,
       registerClose(close) {
         if (typeof close !== "function") throw new Error("PRODUCTION_RUNTIME_CLOSE_HANDLER_REQUIRED");
         mountedClosers.add(close);

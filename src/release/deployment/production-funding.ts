@@ -32,6 +32,7 @@ export type ProductionFundingInput = Readonly<{
   accountingConfiguration: unknown;
   meteredService?: NonNullable<FundedCoreOptions["meteredService"]>;
   continuationService?: Pick<ContinuationService, "resumeSession">;
+  pricedContinuation?: FundedCoreOptions["pricedContinuation"];
 }>;
 
 export function createSealedFundingFeePolicyProjection(input: Readonly<{ cashuPolicies: CashuMintPolicyRegistry; maximumCashuProofs: number; nwc: Readonly<{ maximumReceiverFeeSats: string; policySha256: string }>; observedAtMs?: number; freshnessMs?: number }>): SealedFundingFeePolicyProjection {
@@ -165,6 +166,7 @@ export function createProductionFunding(input: ProductionFundingInput): Readonly
     productionAccountingConfiguration: input.accountingConfiguration,
     ...(input.meteredService ? { meteredService: input.meteredService } : {}),
     ...(input.continuationService ? { continuationService: input.continuationService } : {}),
+    ...(input.pricedContinuation ? { pricedContinuation: input.pricedContinuation } : {}),
   });
   if (core.mode !== "configured" || core.externalSurfaces.postgres !== "configured" || core.externalSurfaces.lightning !== "configured" || core.externalSurfaces.cashu !== "configured") {
     throw new Error("PRODUCTION_FUNDING_COMPOSITION_BLOCKED");

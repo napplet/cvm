@@ -10,6 +10,9 @@ import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { runContextVmAllowlistProbe } from "../support/phase-04/session-artifact-probes";
 import { trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
+import { prepareResumePricingQuote } from "../../src/continuity/resume-pricing";
+import { projectResumePricingQuote } from "../../src/continuity/resume-v2-contracts";
+import { resumePricingContext, resumePricingMaterial } from "../fixtures/resume-pricing";
 
 class FakeContextVmTransport implements ContextVmTransportPort {
   inbound?: (input: ContextVmInboundEnvelope) => Promise<void>;
@@ -87,6 +90,30 @@ describe("ContextVM v1 announcement", () => {
 });
 
 describe("verified ContextVM funding adapter", () => {
+  test("binds priced V2 preparation and resume to the verified principal and redacts execution output", async () => {
+    const service = new FundingService(new TransactionalMemoryFundingStore());
+    const transport = new FakeContextVmTransport();
+    const now = Date.now(), accountId = await accountIdForPrincipal({ pubkey: fixture.requests.verifiedPubkey });
+    const context = { ...resumePricingContext(now), accountId };
+    const quote = await prepareResumePricingQuote({ context, pricing: await resumePricingMaterial(now), preparationKey: "prepare:v2", nowMs: now, lifetimeMs: 30_000 });
+    const calls: unknown[] = [];
+    const adapter = new ContextVmFundingAdapter({ service, transport, pricedContinuation: {
+      prepare: async input => { calls.push(input); return projectResumePricingQuote(quote); },
+      resume: async input => { calls.push(input); return { status: "completed", code: "ACTION_COMMITTED", accountId: "account:internal", sessionId: context.sessionId, sessionVersion: 1, artifactVersion: 1, confirmedSpend: "3", remainingCap: "97", remainingBalance: "497", nextAction: "revise_session", operationId: "operation:priced" }; },
+    } });
+
+    await adapter.handle(envelope({ request: { id: "prepare-v2", method: "tools/call", params: { name: "prepare_resume", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "prepare:v2" } } } }));
+    expect(calls[0]).toEqual({ principal: { id: accountId }, sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "prepare:v2" });
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "quoted", quoteReference: quote.quoteReference } });
+    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:|checkpointSha|commandSha|operationId:|settlement/i);
+
+    await adapter.handle(envelope({ request: { id: "resume-v2", method: "tools/call", params: { name: "resume_session_v2", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } } } } }));
+    expect(calls[1]).toEqual(expect.objectContaining({ principal: { id: accountId }, idempotencyKey: "resume:v2", pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } }));
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "completed", sessionId: context.sessionId, operationId: "operation:priced" } });
+    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:internal|provider|archive|credential|lease|action-budget/i);
+    void adapter;
+  });
+
   test("exposes exactly the locked start, revise, status, and explicit resume tools without registering repair", async () => {
     const probe = await runContextVmAllowlistProbe();
     expect(probe.calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array) });

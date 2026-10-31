@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS production_real.authoritative_usage_report_capture (
   report_request_sha256 text PRIMARY KEY CHECK(report_request_sha256 ~ '^[a-f0-9]{64}$'),
   grant_sha256 text NOT NULL CHECK(grant_sha256 ~ '^[a-f0-9]{64}$'),
   operation_record_sha256 text NOT NULL CHECK(operation_record_sha256 ~ '^[a-f0-9]{64}$'),
-  provider_job_id text NOT NULL CHECK(provider_job_id ~ '^[A-Za-z0-9_-]{1,1024}$'),
+  provider_job_id text NOT NULL CHECK(length(provider_job_id) BETWEEN 1 AND 1024 AND provider_job_id ~ '^[A-Za-z0-9_-]+$'),
   artifact_uri text NOT NULL CHECK(artifact_uri ~ '^gs://[^[:space:]]+$'),
   artifact_generation bigint NOT NULL CHECK(artifact_generation > 0),
   raw_report_sha256 text NOT NULL CHECK(raw_report_sha256 ~ '^[a-f0-9]{64}$'),

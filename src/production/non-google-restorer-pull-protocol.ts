@@ -5,7 +5,8 @@ import { NonGoogleCoreJournal } from "./non-google-native-runtime";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identifier = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
-const Job = z.object({ originalId: Identifier, candidateSha256: Digest, topologySha256: Digest, roleCostBoundSha256: Digest, capabilitySha256: Digest, archive: z.object({ key: Identifier, generation: z.number().int().positive(), checksum: Digest, byteCount: z.number().int().positive().max(64 * 1024 * 1024) }).strict(), expiresAtMs: z.number().int().positive() }).strict();
+const ObjectKey = z.string().min(1).max(2048);
+const Job = z.object({ originalId: Identifier, candidateSha256: Digest, topologySha256: Digest, roleCostBoundSha256: Digest, capabilitySha256: Digest, archive: z.object({ key: ObjectKey, generation: z.number().int().positive(), checksum: Digest, byteCount: z.number().int().positive().max(64 * 1024 * 1024) }).strict(), expiresAtMs: z.number().int().positive() }).strict();
 export type NonGoogleRestorerJob = z.infer<typeof Job>;
 export type NonGoogleRestorerResult = Readonly<{ backupSha256: string; sourceSystemIdentifier: string; freshSystemIdentifier: string }>;
 export type NonGoogleRestorerPullStore = Readonly<{
@@ -33,7 +34,7 @@ export class PostgresRestorerPullStore implements NonGoogleRestorerPullStore {
   }
   async readJob(originalId: string): Promise<NonGoogleRestorerJob | undefined> { const record = await this.journal.read<StoredJob>(this.#key(originalId)); return record && Job.parse(record.value); }
   async readArchive(input: Readonly<{ key: string; generation: number; checksum: string; start: number; end: number }>): Promise<Uint8Array | undefined> {
-    const full = await this.objects.readExact({ key: Identifier.parse(input.key), generation: z.number().int().positive().parse(input.generation), checksum: Digest.parse(input.checksum) });
+    const full = await this.objects.readExact({ key: ObjectKey.parse(input.key), generation: z.number().int().positive().parse(input.generation), checksum: Digest.parse(input.checksum) });
     if (!full || sha(full) !== input.checksum || input.start < 0 || input.end < input.start || input.end >= full.byteLength) return undefined;
     return full.slice(input.start, input.end + 1);
   }

@@ -15,6 +15,150 @@ without a model dispatch. Actual receipt settlement reduces both settled balance
 and the selected hold; terminal replay reads the original result. Shortfalls in
 the approved cap still require explicit approval and cannot consume another hold.
 
+## Admission COMMIT uncertainty
+
+The PostgreSQL money transaction distinguishes a failed COMMIT acknowledgment
+from a known pre-commit failure. `FundingCommitOutcomeUnknownError` preserves
+the original message/cause and carries no new public or persisted fields. Once
+COMMIT was attempted, an error remains uncertain unless PostgreSQL explicitly
+reported a serialization or deadlock abort. An uncertain COMMIT is not retried
+inside that transaction loop, and a later ROLLBACK attempt is not proof that
+the earlier COMMIT failed.
+
+Before compensating a reservation, admission reads the original account and
+idempotency command. An accepted result must match its owner, capacity and
+complete command fingerprint. A matching committed result is recovered without
+another cap hold or native release. Substituted evidence refuses without granting
+release authority. If readback is unavailable, or COMMIT is uncertain and no
+result is visible, the caller receives `reconciliation_pending`; the original
+capacity and funds are preserved. A later authenticated retry queries the same
+durable original. Known pre-commit failures with no recorded acceptance retain
+the existing compensation path.
+
+The actual restricted PostgreSQL proof faults before and after real hold COMMIT,
+fails readback, recreates admission services and checks one hold/result/reservation
+with no native release for uncertain or committed work. Known rollback still
+releases unused capacity. Unit tests reject owner/capacity/fingerprint substitution.
+Rails and worker observations in these tests are explicit local fixtures; this is
+not live funding or release certification evidence.
+
+No migration or saved identity changes. Deploy the SQL outcome classifier and
+admission consumer together; rollback must retain uncertainty handling.
+Abandoned-capacity discovery and proof of unused admission/action ownership
+remain required. A pending result or absent
+readback alone never authorizes refund or abandonment of a paid action.
+
+## Admission versus compensation
+
+Acceptance and compensation serialize on the same owned capacity intent. Before
+creating a hold, SQL acceptance locks an existing matching intent with a no-op
+write and requires its original reference and `available` state. The write also
+invalidates an older SERIALIZABLE snapshot that waited on this row. Trusted
+legacy FundingService callers with no intent retain their existing path; the
+production ContextVM admission path always creates its intent first.
+
+`claimCapacityCompensation` locks the intent and reads any original accepted
+command in the same transaction. If acceptance won, it returns that exact result
+and grants no cleanup. Otherwise it records the existing `refused` state and
+original capacity reference. Only the successful first claim authorizes native
+release. Terminal refused/released states cannot be revived by a delayed readiness
+response, and the original capacity reference cannot be replaced. The memory,
+reference and SQL authorities enforce these same rules.
+
+Compensation cannot proceed without an acknowledged durable fence. A SQL outage
+or lost claim COMMIT leaves the worker pending. Fresh retries never dispatch a
+release from a previous claim; they use `ReadyCapacityPort.observeRelease` to
+observe original termination. The production capacity router forwards this to
+the original provider, even after the selected default changes. Confirmed native
+termination alone permits `released`. Older ports without this optional observer
+remain pending; ordinary readiness refusal is not termination proof. A lost claim
+acknowledgment may therefore require observation through the worker's bounded
+provider lifetime rather than another cleanup dispatch.
+
+Restricted PostgreSQL tests hold acceptance in flight while another controller
+attempts compensation, and return stale readiness after compensation wins. They
+prove one original hold with no release in the first case and no hold with one
+release in the second. Lost claim, native-release and finalization acknowledgments,
+fresh service instances, immutable terminal state/reference and query-only retry
+are also tested. These are local mechanism tests, not live release evidence.
+
+No migration, new state variant, public schema or saved identity is introduced.
+Deploy matching acceptance writers, compensation readers and native observers
+together; drain older writers before relying on the fence. Rollback must retain
+the fence-aware code and both original journal histories. This is not authority
+to refund or abandon an accepted or unknown paid action. Full funded native
+CREATE certification remains open.
+
+## First generation and uncertain job START
+
+The normal worker bridge now sends an unknown START acknowledgment through the
+existing original-job status reader. A durable job claim can mean the worker
+accepted START before its response was lost. Reporting terminal build failure at
+that point would discard the running first build while charging its known model
+usage. Observation uses the exact retained request/job identity and original
+deadline; it sends no replacement upload or START. Proven missing or failed jobs
+still fail, and abort remains interruption. No public result variant, schema,
+pricing, cap or provider authority changes.
+
+The local direct-publication runner also exercises a complete fresh 0-to-1
+generation against restricted PostgreSQL and the actual source-checked image.
+There are no seeded session, action, native worker or artifact rows. Cases cover
+normal CREATE, lost CREATE acknowledgment and lost START acknowledgment, with
+one original CREATE, model POST and build START each. They require the real ready
+probe, eight successful pinned commands, Chromium wire conformance, immutable
+toolchain receipt, exact USD/FX settlement, version 1 owner-authorized artifact,
+foreign-owner denial and fresh-service replay after native termination. Local
+rail/model/provider/object fixtures remain explicit; this is not real-money,
+approved sandbox or release evidence. Process loss/abort through encrypted
+recovery and initial native dispatch-claim ambiguity remain separate work.
+
+## Bounded unused-capacity observation
+
+The normal mounted runtime polls ordinary unaccepted admission intents every
+30 seconds. Each scan examines at most 32 rows and checks a 30-second budget
+between observations. Native requests retain their transport deadlines. One
+instance coalesces overlapping scans; close stops new work and awaits an active
+observation before closing SQL. A versioned journal cursor preserves keyset
+progress across restarts and wraps after a short final page. Competing replicas
+may repeat queries; cursor compare-and-set prevents overwriting newer progress.
+
+Discovery selects production-real owners without an original funding command,
+admission, cap hold, action budget or metered action. It only recognizes the
+original account/key admission namespace, excluding continuation and priced-resume
+capacity. The scanner resolves the exact capacity and native operation, then
+uses the retained approved executable to observe termination. Missing approval,
+substituted metadata, unknown native state and an absent resource without a
+previously bound native ID remain pending. It cannot CREATE, execute a job,
+request termination, credit, refund or release a cap hold.
+
+A confirmed native termination creates immutable
+`admission-capacity-termination-v1` evidence in the existing operation journal.
+It binds the account, intent fingerprint, original capacity/session binding,
+deadline and exact native identity. Finalization locks the same SQL intent as
+acceptance, rechecks every financial ownership predicate, and only then records
+the existing `released` state and one `admission_capacity_observed_terminated`
+outbox event in the same transaction. If acceptance wins during observation, its
+hold and intent remain intact. The event is operational audit evidence; it
+authorizes no payment or redispatch. Existing event-specific readers ignore this
+additive kind. A lost proof/finalization acknowledgment is recovered from the
+original durable records without another native effect.
+
+No migration, public field or new capacity state is required. Startup checks the
+required existing tables and each runtime privilege before starting the relay.
+Deploy with the matching acceptance/compensation fence and retained-profile
+readers. Rollback must preserve the new versioned cursor/proof entries and outbox
+history; an older binary can leave this observer disabled while retaining the
+fence. This observer does not recover the initial native claim/CREATE dispatch
+gap, abandon paid actions or discover continuation-specific cleanup.
+
+Restricted PostgreSQL tests exercise cursor continuation beyond 32 candidates,
+retained-profile refusal/selection, metadata substitution, unknown/missing-ID
+observations, acceptance during lookup, concurrent scanners, lost proof and
+finalization COMMIT acknowledgments, time bounds and awaited shutdown. Local
+provider and rail fixtures prove the mechanism, not live isolation or release
+certification. Full funded native CREATE, live lifetime cleanup and protected
+release suites still require their own evidence.
+
 ## Immutable pricing catalog
 
 Runtime construction validates the mounted captured Vertex quote, its source

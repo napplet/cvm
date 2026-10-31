@@ -23,7 +23,7 @@ const logPath = reportPath.replace(/\.json$/u, "") + ".log";
 // Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
 // This is deliberately not a production provider isolation certificate.
 const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined"];
-const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`, `napplet-cvm-production-worker-legacy-restore-${run}`];
+const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`, `napplet-cvm-production-worker-legacy-restore-${run}`, `napplet-cvm-production-worker-restore-recovery-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
 const toolchain = "c".repeat(64);
@@ -267,6 +267,36 @@ try {
   await requireDocker(["exec", freshName, "/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-ec", "test -r /workspace/restored/src/main.ts; test -r /workspace/restored/dist/index.html; test ! -w /workspace/restored/src/main.ts; test ! -r /run/napplet-cvm-jobs/restoring"]);
   const originalAbsent = await restoreCommand("status", lastJobId);
   if (originalAbsent.state !== "missing") throw new Error("WORKER_RESTORE_DISPATCHED_BUILD");
+  // A FIFO makes the actual root supervisor block after its immutable claim.
+  // The test harness alone is allowed to replace and restore this known part.
+  const recoveryName = containers[6]!;
+  await requireDocker(["run", "-d", "--name", recoveryName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(Date.now() + 1_200_000)]);
+  const recoveryCommand = async (...args: string[]) => lastJson((await requireDocker(["exec", recoveryName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", ...args])).stdout);
+  const recoveryWorkspace = JSON.parse(archive.toString("utf8"));
+  const recoveryPlan = { version: 1, operationId: "priced-restore:local-recovery", archiveSha256, chunks: Math.ceil(archive.length / 24_576), bindingSha256: "d".repeat(64), workerOperationId: "local-recovery-worker", workerResourceId: "local-recovery-resource", leaseSha256: lease,
+    expected: { archiveSha256, toolchainSha256: toolchain, sourceSha256: new Bun.CryptoHasher("sha256").update(canonicalJson(recoveryWorkspace.source.files)).digest("hex"), artifactFilesSha256: new Bun.CryptoHasher("sha256").update(canonicalJson(recoveryWorkspace.artifact.files)).digest("hex") } };
+  if ((await recoveryCommand("restore-plan", archiveSha256, Buffer.from(canonicalJson(recoveryPlan)).toString("base64"))).state !== "planned") throw new Error("WORKER_RECOVERY_PLAN_FAILED");
+  for (let offset = 0, index = 0; offset < archive.length; offset += 24_576, index++) await recoveryCommand("restore-put", archiveSha256, String(index), archive.subarray(offset, offset + 24_576).toString("base64"));
+  const partPath = `/run/napplet-cvm-jobs/restore-${archiveSha256}/part-0`, originalPart = archive.subarray(0, 24_576).toString("base64");
+  await requireDocker(["exec", recoveryName, "/bin/sh", "-ec", `rm -f ${partPath}; mkfifo ${partPath}; chmod 600 ${partPath}`]);
+  const nativeRestore = Bun.spawn(["docker", "exec", recoveryName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", "restore", archiveSha256, String(recoveryPlan.chunks)], { stdout: "pipe", stderr: "pipe" });
+  const claimDeadline = Date.now() + 10_000;
+  for (;;) {
+    if ((await docker(["exec", recoveryName, "/bin/sh", "-ec", `test -f /run/napplet-cvm-jobs/restore-${archiveSha256}/claimed`])).status === 0) break;
+    if (Date.now() >= claimDeadline) throw new Error("WORKER_RECOVERY_CLAIM_NOT_REACHED");
+    await Bun.sleep(50);
+  }
+  const claimedPid = (await requireDocker(["exec", recoveryName, "/usr/local/bin/bun", "-e", `const value=JSON.parse(await Bun.file('/run/napplet-cvm-jobs/restore-${archiveSha256}/claimed').text()); if(value.archiveSha256!=='${archiveSha256}'||!Number.isSafeInteger(value.supervisorPid)||value.supervisorPid<1)process.exit(1); console.log(value.supervisorPid)`])).stdout.trim();
+  const killed = await requireDocker(["exec", recoveryName, "/bin/sh", "-ec", `kill -KILL '${claimedPid}'; echo '${claimedPid}'`]);
+  await Bun.sleep(100);
+  if ((await docker(["exec", recoveryName, "/bin/sh", "-ec", `kill -0 '${claimedPid}'`])).status === 0 || !killed.stdout.trim()) throw new Error("WORKER_RECOVERY_SUPERVISOR_KILL_FAILED");
+  nativeRestore.kill();
+  const nativeExit = await Promise.race([nativeRestore.exited, Bun.sleep(2_000).then(() => -1)]);
+  await requireDocker(["exec", recoveryName, "/bin/sh", "-ec", `rm -f ${partPath}; printf '%s' '${originalPart}' | /usr/bin/base64 -d > ${partPath}; chmod 600 ${partPath}`]);
+  const [repairOne, repairTwo] = await Promise.all([docker(["exec", recoveryName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", "restore-repair", archiveSha256], 30_000), docker(["exec", recoveryName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", "restore-repair", archiveSha256], 30_000)]);
+  const repairResults = [repairOne, repairTwo].filter(result => result.status === 0).map(result => lastJson(result.stdout)), recoveryStatus = await recoveryCommand("restore-status", archiveSha256);
+  if (!repairResults.length || repairResults.some(result => result.state !== "restored" || canonicalJson(result) !== canonicalJson(recoveryStatus))) throw new Error("WORKER_RECOVERY_REPAIR_FAILED");
+  report.nativeRestoreRecovery = { killedSupervisor: true, nativeExit, exactSupervisorPid: killed.stdout.trim(), concurrentRepairs: [repairOne.status, repairTwo.status], repaired: repairResults.length, status: recoveryStatus };
   if (!direct) {
   // Real new-job bytes projected into the historical format exercise reader
   // compatibility. This is not an observation from an old provider/image.

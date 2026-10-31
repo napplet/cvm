@@ -189,5 +189,16 @@ describe("explicit post-grace resume", () => {
     expect(await fixture.store.transact(fixture.accountId, (tx: ContinuationFundingTransaction) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
     const terminal = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
     expect(terminal).toMatchObject({ status: "ok", session: { state: "verified", progress: "verified", nextAction: "revise_session", continuation: null } });
+    const completedCheckpoint = await fixture.store.findContinuationCheckpoint(fixture.accountId, "checkpoint:resume");
+    if (!completedCheckpoint) throw new Error("COMPLETED_CHECKPOINT_REQUIRED");
+    const savedAction = await fixture.store.findMeteredAction(fixture.accountId, completion.finalization.idempotencyKey);
+    await expect(fixture.store.transact(fixture.accountId, (tx: ContinuationFundingTransaction) => tx.tombstoneExpiredCheckpoint({
+      checkpointId: completedCheckpoint.checkpointId, nowMs: completedCheckpoint.retentionDeadlineMs - 1 }))).rejects.toThrow("CHECKPOINT_RETENTION_ACTIVE");
+    for (let replay = 0; replay < 2; replay++) {
+      expect((await fixture.store.transact(fixture.accountId, (tx: ContinuationFundingTransaction) => tx.tombstoneExpiredCheckpoint({
+        checkpointId: completedCheckpoint.checkpointId, nowMs: completedCheckpoint.retentionDeadlineMs }))).state).toBe("expired");
+    }
+    expect(await fixture.store.findMeteredAction(fixture.accountId, completion.finalization.idempotencyKey)).toEqual(savedAction);
+    expect(await fixture.store.transact(fixture.accountId, (tx: ContinuationFundingTransaction) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
   });
 });

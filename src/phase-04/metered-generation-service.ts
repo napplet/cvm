@@ -58,6 +58,13 @@ export type PreparedContinuationExecution = Readonly<{
   readTerminal(binding: ContinuationExecutionBinding): Promise<boolean>;
   execute(input: ContinuationExecutionBinding & Readonly<{ finalizeTerminal(finalization: MeteredFinalizeInput): Promise<void> }>): Promise<SessionActionResult>;
 }>;
+/** Private coordinator callback: rejection and billing invariants must cross
+ * the same continuation authority as paid completion, with no actor fallback. */
+export type PreparedActionFinalizer = (input: Readonly<{ finalization: MeteredFinalizeInput; intent: ProviderOperationIntent; receipt?: NormalizedUsageReceipt }>) => Promise<void>;
+export type PreparedPricedContinuationExecution = Readonly<{
+  readTerminal(): Promise<SessionActionResult | undefined>;
+  execute(finalizeAction: PreparedActionFinalizer): Promise<SessionActionResult>;
+}>;
 type ContinuationWakePort = Readonly<{
   continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; operationId: string; liveLeaseToken: string }>): Promise<void>;
   /** Lookup-only exact-operation observer used during coordinator restart. */
@@ -102,6 +109,47 @@ export class MeteredGenerationService {
       const prepared = await loadPrepared(binding);
       return this.#executePrepared({ command, accountId: intent.accountId, fingerprint: binding.commandFingerprint, sessionId: intent.sessionId, operationId: prepared.operationId, profile, priceCard, profileCeiling, budget: { reference: prepared.actionBudgetReference }, prepared, finalizeTerminal: binding.finalizeTerminal });
     } });
+  }
+
+  /** Private accepted-action consumer. The coordinator supplies an owned,
+   * already accepted price/budget binding and authenticated original command.
+   * This neither creates a recovery-command record under a new identity nor
+   * prepares fresh settlement, admission, capacity or money reservations. */
+  async preparePricedContinuation(input: Readonly<{ intent: PendingActionIntent; restoredCommand: unknown;
+    pricing: Readonly<{ profile: ModelProfile; card: PriceCard }>; maximumSat: string; binding: ContinuationExecutionBinding }>): Promise<PreparedPricedContinuationExecution> {
+    if (!this.options.continuationCommands || !this.options.settlement || input.pricing.card.currency !== "usd_micros")
+      throw new Error("PRICED_CONTINUATION_EXECUTION_AUTHORITY_REQUIRED");
+    const intent = structuredClone(input.intent), binding = { ...input.binding };
+    const command = await this.options.continuationCommands.validateRetained(input.restoredCommand, intent);
+    const { profile, card } = input.pricing;
+    const maximum = DecimalSchema.parse(input.maximumSat);
+    if (binding.accountId !== intent.accountId || binding.actionKey === intent.idempotencyKey || profile.priceCardId !== card.id
+      || profile.provider !== card.provider || BigInt(maximum) > BigInt(command.maximum)
+      || (this.options.toolchainIdentity ?? "phase-04-deterministic-toolchain") !== intent.toolchainId)
+      throw new Error("PRICED_CONTINUATION_EXECUTION_BINDING_DENIED");
+    // Capture scalar authority now; a caller cannot mutate its argument after
+    // validation and turn a prepared executable into a different paid action.
+    const owned = freeze({ ...binding });
+    const prices = freeze({ profile: structuredClone(profile), card: structuredClone(card) });
+    const load = async () => {
+      const action = await this.options.store.findMeteredAction(owned.accountId, owned.actionKey);
+      if (!action || action.accountId !== intent.accountId || action.sessionId !== intent.sessionId || action.idempotencyKey !== owned.actionKey
+        || action.admissionReference !== intent.admissionReference || action.expectedVersion !== intent.expectedSessionVersion
+        || action.fingerprint !== owned.commandFingerprint || action.actionId !== owned.actionId || action.operationId !== owned.operationId
+        || action.actionBudgetReference !== owned.actionBudgetReference || action.maximum !== BigInt(maximum)
+        || action.profileId !== prices.profile.id || action.priceCardId !== prices.card.id)
+        throw new Error("PRICED_CONTINUATION_PREPARED_ACTION_BINDING_DENIED");
+      return action;
+    };
+    await load();
+    return freeze({ readTerminal: async () => { const action = await load(); return action.result ? SessionActionResultSchema.parse(action.result) : undefined; },
+      execute: async finalizeAction => {
+        if (typeof finalizeAction !== "function") throw new Error("PRICED_CONTINUATION_FINALIZER_REQUIRED");
+        const prepared = await load();
+        return this.#executePrepared({ command, accountId: owned.accountId, fingerprint: owned.commandFingerprint, sessionId: prepared.sessionId,
+          operationId: owned.operationId, profile: prices.profile, priceCard: prices.card, profileCeiling: maximum,
+          budget: { reference: owned.actionBudgetReference }, prepared, finalizePrepared: finalizeAction });
+      } });
   }
 
   #continuation(): ContinuationService {
@@ -360,11 +408,18 @@ export class MeteredGenerationService {
   /** The one receipt-first execution path for an already prepared paid action.
    * Preparation and ownership remain with the caller; this method never reserves
    * another budget or substitutes another provider operation. */
-  async #executePrepared(input: Readonly<{ command: GenerationCommand; accountId: string; fingerprint: string; sessionId: string; operationId: string; profile: ModelProfile; priceCard: PriceCard; profileCeiling: string; budget: Readonly<{ reference: string }>; prepared: MeteredAction; finalizeTerminal?: (finalization: MeteredFinalizeInput) => Promise<void> }>): Promise<SessionActionResult> {
+  async #executePrepared(input: Readonly<{ command: GenerationCommand; accountId: string; fingerprint: string; sessionId: string; operationId: string; profile: ModelProfile; priceCard: PriceCard; profileCeiling: string; budget: Readonly<{ reference: string }>; prepared: MeteredAction; finalizeTerminal?: (finalization: MeteredFinalizeInput) => Promise<void>; finalizePrepared?: PreparedActionFinalizer }>): Promise<SessionActionResult> {
     const { command, accountId, fingerprint, sessionId, operationId, profile, priceCard, profileCeiling, budget, prepared } = input;
     const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
+    let acceptedReceipt: NormalizedUsageReceipt | undefined;
     const finalize = async (finalization: MeteredFinalizeInput): Promise<MeteredAction> => {
+      if (input.finalizePrepared) {
+        await input.finalizePrepared({ finalization, intent, ...(acceptedReceipt ? { receipt: acceptedReceipt } : {}) });
+        const action = await this.options.store.findMeteredAction(accountId, prepared.idempotencyKey);
+        if (!action?.result) throw new Error("RESUMED_ACTION_TERMINAL_REQUIRED");
+        return action;
+      }
       if (input.finalizeTerminal && (finalization.status === "completed" || finalization.status === "failed")) {
         await input.finalizeTerminal(finalization);
         const action = await this.options.store.findMeteredAction(accountId, prepared.idempotencyKey);
@@ -426,6 +481,7 @@ export class MeteredGenerationService {
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "pending");
       return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     }
+    acceptedReceipt = observation.receipt;
     const priced = priceReceipt({ receipt: observation.receipt, card: priceCard, profile, ...(this.options.settlement ? {} : { reservation: profileCeiling }) });
     if (priced.status !== "priced") {
       const result = SessionActionResultSchema.parse({ status: "billing_invariant_failed", code: priced.code, accountId, sessionId, nextAction: "billing_reconciliation", operationId });
@@ -468,7 +524,12 @@ export class MeteredGenerationService {
           validationReportReference = outcome.diagnostic.evidenceIds.at(-1);
         }
       } else {
-        const request = WorkerRunRequestSchema.parse({ sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
+        const baseRequest = WorkerRunRequestSchema.parse({ sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
+        const request = this.options.worker.prepareRunRequest ? WorkerRunRequestSchema.parse(await this.options.worker.prepareRunRequest(baseRequest, idea)) : baseRequest;
+        const { idea: preparedPurpose, ...preparedAuthority } = request;
+        const { idea: basePurpose, ...baseAuthority } = baseRequest;
+        if (canonicalJson(preparedAuthority) !== canonicalJson(baseAuthority) || (basePurpose !== undefined && preparedPurpose !== basePurpose)
+          || (preparedPurpose !== undefined && preparedPurpose !== idea && preparedPurpose !== idea.trim())) throw new Error("WORKER_PREPARED_REQUEST_BINDING_DENIED");
         const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
         if (workerResult.status !== "completed") completed = false;
         else {

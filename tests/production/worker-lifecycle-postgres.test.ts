@@ -8,6 +8,8 @@ import { createAuthorizationRequest, createAuthorizationReceipt } from "../../sr
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 import { createProductionWorkerLifecycle } from "../../src/production/worker-lifecycle";
 import { createMountedReleaseCleanup } from "../../src/production/release-cleanup";
+import { proveFlyMissingIdCleanup, proveModalMissingIdCleanup } from "../fixtures/worker-missing-id-cleanup";
+import { proveMissingIdReadiness } from "../fixtures/worker-missing-id-readiness";
 const postgresIsolation = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 async function docker(args: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -111,10 +113,21 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
       const finalizer = createMountedReleaseCleanup({ effects: [{ provider, providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! }], providers: { [provider]: { port: { async observe() { throw new Error("GENERIC_OBSERVATION_MUST_NOT_BE_USED"); } } } } as never, workers: { modal: open(), fly: open() } });
       expect(await finalizer.observe!({ operationId: "finalize-original", providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! })).toBe("cleaned");
       expect(await open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256 })).toEqual({ status: "cleaned" });
+      expect(await router.observeRelease?.(retained)).toEqual({ status: "terminated" });
       expect(creates).toBe(before.creates + 1); expect(deletes).toBe(before.deletes + 1);
       await expect(open().apply({ ...plan, operationId: "new-after-expiry" })).rejects.toThrow("WORKER_LIFECYCLE_ORIGINAL_REQUIRED");
     }
     expect({ creates, deletes }).toEqual({ creates: 2, deletes: 2 });
+    await proveModalMissingIdCleanup(() => createPostgresWorkerOperationJournal(journal()));
+    await proveFlyMissingIdCleanup(() => createPostgresWorkerOperationJournal(journal()));
+    for (const provider of ["modal", "fly"] as const) {
+      await proveMissingIdReadiness(provider, { journal: () => createPostgresWorkerOperationJournal(workerJournal),
+        capacity: { journal, workerJournal } });
+      await proveMissingIdReadiness(provider, { journal: () => createPostgresWorkerOperationJournal(workerJournal),
+        capacity: { journal, workerJournal } }, "native-retirement");
+      await proveMissingIdReadiness(provider, { journal: () => createPostgresWorkerOperationJournal(workerJournal),
+        capacity: { journal, workerJournal } }, "legacy-retirement");
+    }
   } finally {
     await application?.end();
     await admin?.end();

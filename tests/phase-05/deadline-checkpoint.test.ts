@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ProtectedContinuationCommandSchema, type ProtectedContinuationCommand } from "../../src/continuity/contracts";
 import { AesGcmCheckpointCrypto, CheckpointEnvelopeService } from "../../src/continuity/checkpoint-envelope";
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
@@ -41,13 +42,13 @@ class DeadlineWorker implements ContinuationWorkerPort {
   }
 }
 
-async function setup(nowMs = deadlineMs, envelopeOverride?: CheckpointEnvelopeService) {
+async function setup(nowMs = deadlineMs, envelopeOverride?: CheckpointEnvelopeService, protectedCommand?: ProtectedContinuationCommand) {
   const store = new TransactionalMemoryFundingStore();
   const accountId = await accountIdForPrincipal(principal);
   const funding = new FundingService(store);
   await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "initial-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "initial", rail: "lightning", unit: "sat", amount: "3250", externalReference: "external:initial", settlementReference: "settlement:initial", verifiedAt: "2026-08-05T00:00:00.000Z" } } });
   await funding.execute({ principal, kind: "funded_admission", idempotencyKey: "admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat", capacity: { usable: true, reference: "admission:deadline" } } });
-  await store.transact(accountId, (transaction) => transaction.pauseForFunding({ accountId, sessionId: "session:deadline", admissionReference: "admission:deadline", idempotencyKey: "pause:deadline", fingerprint: "c".repeat(64), pendingFingerprint: "a".repeat(64), expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: deadlineMs, liveLeaseToken: leaseToken, intent: { accountId, sessionId: "session:deadline", idempotencyKey: "pause:deadline", fingerprint: "a".repeat(64), reference: "pending:deadline", actionKind: "revise_session", boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:deadline", priceCardId: "price:deadline", profileId: "model:deadline", toolchainId: "toolchain:deadline", actionMaximum: "3250", admissionReference: "admission:deadline" }, result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:deadline", pendingActionReference: "pending:deadline", pendingActionFingerprint: "a".repeat(64), pendingActionKind: "revise_session", actionMaximum: "3250", requiredAdditionalFunding: "3250", requiredCapApproval: "0", settledBalance: "3250", availableBalance: "0", remainingCap: "3250", graceDeadlineMs: deadlineMs, checkpoint: { state: "live_worker", reference: "checkpoint-pending:deadline" }, nextRequiredAction: "top_up" } }));
+  await store.transact(accountId, (transaction) => transaction.pauseForFunding({ accountId, sessionId: "session:deadline", admissionReference: "admission:deadline", idempotencyKey: "pause:deadline", fingerprint: "c".repeat(64), pendingFingerprint: "a".repeat(64), expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: deadlineMs, liveLeaseToken: leaseToken, intent: { accountId, sessionId: "session:deadline", idempotencyKey: "pause:deadline", fingerprint: "a".repeat(64), reference: "pending:deadline", actionKind: "revise_session", boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:deadline", priceCardId: "price:deadline", profileId: "model:deadline", toolchainId: "toolchain:deadline", actionMaximum: "3250", admissionReference: "admission:deadline", ...(protectedCommand ? { protectedCommand } : {}) }, result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:deadline", pendingActionReference: "pending:deadline", pendingActionFingerprint: "a".repeat(64), pendingActionKind: "revise_session", actionMaximum: "3250", requiredAdditionalFunding: "3250", requiredCapApproval: "0", settledBalance: "3250", availableBalance: "0", remainingCap: "3250", graceDeadlineMs: deadlineMs, checkpoint: { state: "live_worker", reference: "checkpoint-pending:deadline" }, nextRequiredAction: "top_up" } }));
   const archive = new TextEncoder().encode("complete durable workspace");
   const proposal: CheckpointProposal = { sessionId: "session:deadline", actionId: "action:pending:deadline", expectedVersion: 4, policyVersion: "policy:deadline", capabilityGrant: "phase-05-continuation-grant", workspaceId: "workspace:session:deadline", checkpointId: "checkpoint:deadline", formatVersion: "portable-checkpoint-v1", inventory, archiveBase64: Buffer.from(archive).toString("base64"), archiveSha256: await digest(archive), evidenceSha256: await digest({ evidence: "checkpoint" }), inventorySha256: await digest(inventory) };
   let pauseAfterTermination: unknown;
@@ -114,4 +115,29 @@ describe("fixed-deadline checkpoint reconciliation", () => {
     await expect(fixture.reconciler.scan()).resolves.toEqual([{ status: "already_checkpointed", code: "WAKE_DISPATCH_OWNS_PAUSE", sessionId: "session:deadline", pauseGeneration: 1 }]);
     expect(fixture.worker.exports).toBe(0);
   });
+});
+
+
+test("a protected revision cannot commit its checkpoint before command custody is acknowledged", async () => {
+  // Opaque envelope fixture for port ordering only; real encryption/readback
+  // and expiry are tested through the restricted PostgreSQL coordinator.
+  const encrypted = ProtectedContinuationCommandSchema.parse({ schemaVersion: "protected-continuation-command-v1", keyReference: "fixture:opaque",
+    retentionUntilMs: deadlineMs + 2_592_000_000, bindingSha256: "a".repeat(64), nonceBase64: "A".repeat(16),
+    wrapNonceBase64: "A".repeat(16), wrappedDekBase64: "A".repeat(64), ciphertextBase64: "A".repeat(24) });
+  const pending = await setup(deadlineMs, undefined, encrypted);
+  expect(await pending.reconciler.scan()).toMatchObject([{ status: "checkpoint_retryable", code: "CHECKPOINT_PENDING_COMMAND_CUSTODY_REQUIRED" }]);
+  expect(await pending.store.findContinuationCheckpoint(pending.accountId, "checkpoint:deadline")).toBeUndefined();
+  expect(pending.worker.terminations).toBe(0);
+  let calls = 0, fail = true;
+  Object.assign(pending.envelope, { async retainPendingCommand() {
+    calls++;
+    expect(await pending.store.findContinuationCheckpoint(pending.accountId, "checkpoint:deadline")).toBeUndefined();
+    if (fail) throw new Error("CUSTODY_ACK_UNKNOWN");
+  } });
+  expect(await pending.reconciler.scan()).toMatchObject([{ status: "checkpoint_retryable", code: "CHECKPOINT_PENDING_COMMAND_CUSTODY_RETRYABLE" }]);
+  expect(pending.worker.terminations).toBe(0);
+  fail = false;
+  expect(await pending.reconciler.scan()).toMatchObject([{ status: "checkpointed" }]);
+  expect(calls).toBe(2);
+  expect(pending.worker.terminations).toBe(1);
 });

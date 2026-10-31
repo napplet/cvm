@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { accountIdForPrincipal, fingerprintAccountCommand } from "../domain/account-command";
 import { PrincipalSchema, type FundedAdmission } from "../phase-03/contracts";
-import type { FundingStore, FundingTransaction } from "../persistence/funding-store";
+import type { FundingStore, FundingTransaction, StoredFundingCommand, CapacityCompensationClaim } from "../persistence/funding-store";
+import { FundingCommitOutcomeUnknownError } from "./transaction-outcome";
 import { FundingService } from "./funding-service";
 import type { AdmissionReceiptAuthority, VerifiedAdmissionReceipt } from "./admission-receipt";
 import { AdmissionLifecycleContextSchema, emitLifecycleObservationWithCorrelation, type AdmissionLifecycleContext, type LifecycleTelemetryPort } from "../telemetry/contracts";
@@ -16,7 +17,7 @@ const ActionCommandSchema = z.object({
 }).strict();
 
 const ProtectedDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-const ExactReadyProofSchema = z.object({
+export const ExactReadyProofSchema = z.object({
   intentReference: z.string().min(1),
   leaseReference: z.string().min(1),
   sessionBindingDigest: ProtectedDigestSchema,
@@ -35,6 +36,7 @@ export interface ReadyCapacityPort {
   reserveNow(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string }>): Promise<CapacityObservation>;
   observe(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string; reference?: string }>): Promise<CapacityObservation>;
   release(input: Readonly<{ intentReference: string; reference: string }>): Promise<void>;
+  observeRelease?(input: Readonly<{ intentReference: string; reference: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
 }
 
 export type FundedAdmissionOutcome = FundedAdmission | Readonly<{
@@ -103,13 +105,7 @@ export class FundedAdmissionService {
 
   private async admitParsed(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, receipt: VerifiedAdmissionReceipt, lifecycle: AdmissionLifecycleContext | undefined, intentFingerprint: string): Promise<FundedAdmissionOutcome> {
     const recorded = await this.options.store.findRecordedResult(accountId, command.idempotencyKey);
-    if (recorded) {
-      if (recorded.result.status !== "accepted") throw new Error("FUNDED_ADMISSION_REPLAY_INVALID");
-      const replayCommand = this.fundingCommand(command, recorded.result.reference);
-      const fingerprint = await fingerprintAccountCommand(replayCommand, accountId);
-      if (recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-      return freeze(structuredClone(recorded.result));
-    }
+    if (recorded) return this.matchRecordedAdmission(command, accountId, recorded);
 
     const intentReference = `capacity-intent:${await hash(`${accountId}:${command.idempotencyKey}`)}`;
     this.observeLifecycle(lifecycle, "capacity_intent_created", lifecycle?.receiptMonotonicMs);
@@ -127,6 +123,8 @@ export class FundedAdmissionService {
       observation = await this.observeCapacity({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest, reference: intent.capacityReference });
     } else if (intent.state === "reconciliation_pending") {
       observation = await this.observeCapacity({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest, reference: intent.capacityReference });
+    } else if (intent.state === "refused" && intent.capacityReference) {
+      return this.observeCompensation(accountId, intentReference, intent.capacityReference);
     } else if (intent.state === "refused" || intent.state === "released") {
       return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
     } else {
@@ -142,7 +140,12 @@ export class FundedAdmissionService {
 
     if (observation.status === "refused") {
       const outcome = freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
-      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "refused" }));
+      const refused = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "refused" }));
+      if (refused.state === "available") {
+        const recorded = await this.options.store.findRecordedResult(accountId, command.idempotencyKey);
+        if (recorded) return this.matchRecordedAdmission(command, accountId, recorded, refused.capacityReference);
+        return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      }
       this.observeLifecycle(lifecycle, "capacity_refused", lifecycle?.receiptMonotonicMs, "capacity_unavailable");
       return outcome;
     }
@@ -153,17 +156,40 @@ export class FundedAdmissionService {
     }
 
     if (!this.isUsableLease(observation.expiresAt) || !this.hasExactReadyProof(observation, intentReference, receipt)) {
-      return this.compensateReservation(accountId, intentReference, observation.reference);
+      return this.reconcileBeforeCompensation(command, accountId, intentReference, observation);
     }
     try {
       intent = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "available", capacityReference: observation.reference, expiresAt: observation.expiresAt }));
+      if (intent.state !== "available") throw new Error("CAPACITY_INTENT_NOT_AVAILABLE");
       const accepted = await this.options.funding.execute(this.fundingCommand(command, intent.capacityReference!));
       if (accepted.status !== "accepted") throw new Error("FUNDED_ADMISSION_NOT_ACCEPTED");
       this.observeLifecycle(lifecycle, "exact_session_ready", observation.ready?.readyMonotonicMs, "accepted");
       return freeze(structuredClone(accepted));
-    } catch {
-      return this.compensateReservation(accountId, intentReference, observation.reference);
+    } catch (error) {
+      const recovered = await this.reconcileBeforeCompensation(command, accountId, intentReference, observation, error instanceof FundingCommitOutcomeUnknownError);
+      if (recovered.status === "accepted") this.observeLifecycle(lifecycle, "exact_session_ready", observation.ready?.readyMonotonicMs, "accepted");
+      return recovered;
     }
+  }
+
+  private async reconcileBeforeCompensation(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, intentReference: string, observation: CapacityReservation, commitUnknown = false): Promise<FundedAdmissionOutcome> {
+    // The hold may have committed before its acknowledgement was lost. Read
+    // that original before any compensation, never terminate accepted work.
+    let committed: StoredFundingCommand | undefined;
+    try { committed = await this.options.store.findRecordedResult(accountId, command.idempotencyKey); }
+    catch { return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const }); }
+    if (committed) {
+      return this.matchRecordedAdmission(command, accountId, committed, observation.reference);
+    }
+    if (commitUnknown) return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+    return this.compensateReservation(command, accountId, intentReference, observation.reference);
+  }
+
+  private async matchRecordedAdmission(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, recorded: StoredFundingCommand, expectedReference?: string): Promise<FundedAdmission> {
+    if (recorded.result.status !== "accepted" || recorded.result.accountId !== accountId || (expectedReference !== undefined && recorded.result.reference !== expectedReference)) throw new Error("FUNDED_ADMISSION_REPLAY_INVALID");
+    const fingerprint = await fingerprintAccountCommand(this.fundingCommand(command, recorded.result.reference), accountId);
+    if (recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+    return freeze(structuredClone(recorded.result));
   }
 
   async authorizeActionBudget(input: unknown, transaction?: FundingTransaction): Promise<ActionBudgetAuthorization> {
@@ -218,11 +244,19 @@ export class FundedAdmissionService {
     catch { return freeze({ status: "unknown" as const, ...(input.reference ? { reference: input.reference } : {}) }); }
   }
 
-  private async compensateReservation(accountId: string, intentReference: string, reference: string): Promise<FundedAdmissionOutcome> {
-    // The pre-release fence is best effort: a persistence outage must never
-    // suppress compensation of an external reservation. Persist again after the
-    // release attempt so either its confirmed result or its ambiguity is durable.
-    await this.bestEffortCapacityFence(accountId, intentReference, reference);
+  private async compensateReservation(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, intentReference: string, reference: string): Promise<FundedAdmissionOutcome> {
+    let claim: CapacityCompensationClaim;
+    try {
+      claim = await this.options.store.transact(accountId, transaction => {
+        if (!transaction.claimCapacityCompensation) throw new Error("CAPACITY_COMPENSATION_FENCE_REQUIRED");
+        return transaction.claimCapacityCompensation({ idempotencyKey: command.idempotencyKey, intentReference, capacityReference: reference });
+      });
+    } catch { return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const }); }
+    if (claim.status === "accepted") return this.matchRecordedAdmission(command, accountId, claim.command, reference);
+    if (claim.status === "observing") {
+      if (claim.intent.state === "released") return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      return this.observeCompensation(accountId, intentReference, reference);
+    }
     let released = false;
     try { await this.bounded(this.options.capacity.release({ intentReference, reference })); released = true; }
     catch { released = false; }
@@ -231,20 +265,21 @@ export class FundedAdmissionService {
         await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
         return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
       } catch {
-        await this.bestEffortCapacityFence(accountId, intentReference, reference);
         return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
       }
     }
-    await this.bestEffortCapacityFence(accountId, intentReference, reference);
     return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
   }
 
-  private async bestEffortCapacityFence(accountId: string, intentReference: string, reference: string): Promise<void> {
+  private async observeCompensation(accountId: string, intentReference: string, reference: string): Promise<FundedAdmissionOutcome> {
     try {
-      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", capacityReference: reference }));
-    } catch {
-      // The durable dispatch claim remains fail-closed when this write is unavailable.
-    }
+      const observed = await this.bounded(this.options.capacity.observeRelease?.({ intentReference, reference }) ?? Promise.resolve({ status: "unknown" as const }));
+      if (observed.status === "terminated") {
+        await this.options.store.transact(accountId, transaction => transaction.releaseCapacityIntent(intentReference));
+        return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      }
+    } catch { /* No proof grants a repeated release or admission attempt. */ }
+    return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
   }
 
   private async bounded<T>(operation: Promise<T>): Promise<T> {

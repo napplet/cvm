@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
+import { artifactCapabilityText } from "../../src/production/artifact-capability-text";
+
+test("capability observations retain executable authority while excluding inert scaffold labels", async () => {
+  expect(await artifactCapabilityText("index.html", '<span class="meta-key">storage intent</span><button title="storage">Count</button>')).not.toMatch(/storage|intent/u);
+  expect(await artifactCapabilityText("index.html", '<script>window.napplet.storage.get("key")</script>')).toContain("storage.get");
+  expect(await artifactCapabilityText("index.html", '<button onclick="window.napplet.intent.invoke()">Run</button>')).toContain("intent.invoke");
+  expect(await artifactCapabilityText("assets/app.js", "window.napplet.storage.get('key')")).toContain("storage.get");
+});
 
 const accountId = `account:${"a".repeat(64)}`;
 const ownerId = "b".repeat(64);
@@ -43,7 +51,10 @@ describe("production worker ownership resolver", () => {
             if (sql === "SET ROLE napplet_production_real") return { rows: [] };
             if (sql === "SELECT current_user::text AS current_user") return { rows: [{ current_user: "napplet_production_real" }] };
             if (sql.includes("SET search_path TO production_real")) return { rows: [] };
-            if (sql.includes("FROM production_real.metered_actions")) return { rows: [{ account_id: accountId, owner_id: ownerId, intent_reference: intentReference, capacity_reference: capacityReference }] };
+            if (sql.includes("FROM production_real.metered_actions")) {
+              expect(sql).not.toContain("priced_continuation");
+              return { rows: [{ account_id: accountId, owner_id: ownerId, intent_reference: intentReference, capacity_reference: capacityReference }] };
+            }
             if (sql.includes("FROM production_real.release_operation_journal")) return { rows: [{ operation_id: `capacity-intent:${"f".repeat(64)}`, identity_sha256: "f".repeat(64), revision: 1, value_json: { intentReference, reference: capacityReference, workerOperationId, provider: "modal", deadlineEpochMs: Date.now() + 60_000 } }] };
             return { rows: [] };
           },

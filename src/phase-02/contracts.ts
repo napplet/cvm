@@ -31,7 +31,8 @@ export const ActionEnvelopeSchema = SessionActionSchema;
 
 const ProposalDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const ProposalFileSchema = z.object({ path: z.string().regex(/^(?!\/)(?!.*(?:^|\/)\.\.?\/)[A-Za-z0-9._/-]+$/u), content: z.string().min(1).max(64_000) }).strict();
-/** Worker input is immutable charged source. `idea` remains only for legacy deterministic fixtures. */
+/** Worker input is immutable charged source. `idea` also carries the original
+ * bounded coordinator purpose for direct jobs; legacy omissions stay intact. */
 export const WorkerRunRequestSchema = CorrelationSchema.extend({
   idea: z.string().min(1).optional(),
   sourceProposalReference: z.string().regex(/^proposal:sha256:[a-f0-9]{64}$/u).optional(),
@@ -212,6 +213,9 @@ export type CheckpointTerminationResult = z.infer<typeof CheckpointTerminationRe
 
 /** The worker can only produce parsed proposals/results; it owns no state API. */
 export interface WorkerPort {
+  /** Private coordinator preparation; no dispatch or caller-selected profile.
+   * Implementations may bind existing optional purpose to an approved image. */
+  prepareRunRequest?(request: WorkerRunRequest, purpose: string): Promise<WorkerRunRequest>;
   run(request: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult>;
 }
 

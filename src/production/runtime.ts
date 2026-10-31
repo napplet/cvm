@@ -26,6 +26,7 @@ import type { MountedProductionSecretMaterial } from "./secret-material";
 import { MountedProductionSecretMaterial as MountedSecrets } from "./secret-material";
 import { assertProductionCheckpointCoordinator } from "./checkpoint-coordinator";
 import { loadProductionConfig } from "./config";
+import { ProductionDirectArtifactDelivery } from "./direct-artifact-delivery";
 import { createMountedDeploymentExecutionConfig, loadMountedProductionSessionRecord } from "./mounted-session-record";
 
 /**
@@ -159,6 +160,8 @@ export function createMountedProductionHttpRuntime(input: Readonly<{
   certification: PrivateCertificationControl;
   migration: ProductionMigrationControl;
 }>): ProductionRuntime {
+  const delivery = new ProductionDirectArtifactDelivery({ artifacts: input.assembly.generation.dependencies.ownedDirectArtifacts,
+    previewOrigin: input.assembly.generation.config.publicOrigins.preview, artifactOrigin: input.assembly.generation.config.publicOrigins.artifact });
   const authority = sealProductionRuntimeAuthority({
     authority: "production-real",
     funded: input.assembly.generation.funding.core,
@@ -173,6 +176,9 @@ export function createMountedProductionHttpRuntime(input: Readonly<{
   return createProductionRuntime({
     config: input.assembly.generation.config,
     authority,
+    previewHandler: delivery.preview,
+    artifactHandler: delivery.artifact,
+    staticHandler: input.assembly.generation.dependencies.directPreviewAssets.handle,
     operatorIdentity: createGooglePrivateOperatorIdentity({
       serviceAccount: input.assembly.generation.config.operator.serviceAccount,
     }),

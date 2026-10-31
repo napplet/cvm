@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ProductionDirectManifestReceiptSchema } from "../worker-adapters/direct-manifest-receipt";
+import { ProductionDirectManifestReceiptSchema, ProductionDirectManifestTemplateSchema as Template } from "../worker-adapters/direct-manifest-receipt";
 export { ProductionCapabilityDeclarationSchema } from "../worker-adapters/capability-receipt";
 export { ProductionDirectManifestReceiptSchema } from "../worker-adapters/direct-manifest-receipt";
 import { canonicalJson } from "../promotion/schema";
@@ -7,6 +7,7 @@ import { ProductionCapabilityDeclarationSchema, ProductionCapabilityReceiptSchem
 import { ProductionConformanceReceiptSchema, verifyProductionConformanceReceipt } from "../worker-adapters/conformance-receipt";
 import { ProductionArtifactFactsSchema, inventoryProductionArtifactFiles, readVerifiedProductionArtifactFile } from "./artifact-verifier";
 import { verifyDirectArtifactHtml } from "./direct-html-policy";
+import { ProductionDirectToolchainReceiptSchema } from "../worker-adapters/direct-toolchain-receipt";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Facts = ProductionArtifactFactsSchema.extend({
@@ -15,9 +16,9 @@ const Facts = ProductionArtifactFactsSchema.extend({
   capabilityReceipt: ProductionCapabilityReceiptSchema,
   conformanceReceipt: ProductionConformanceReceiptSchema,
   manifestReceipt: ProductionDirectManifestReceiptSchema,
+  toolchainReceipt: ProductionDirectToolchainReceiptSchema.optional(),
 }).strict();
 const Target = z.object({ target: z.literal("named"), kind: z.literal(35129), dTag: z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u) }).passthrough();
-const Template = z.object({ kind: z.literal(35129), created_at: z.number().int().nonnegative(), tags: z.array(z.array(z.string().max(4096)).min(1).max(16)).max(128), content: z.string().min(1).max(4096) }).strict();
 const Sidecar = Template.extend({ artifactHash: Digest }).strict();
 const DryRun = z.object({ dryRun: z.literal(true), signing: z.object({ type: z.literal("none") }).passthrough(), plan: z.object({ items: z.array(Target).length(1) }).passthrough(), manifests: z.array(z.object({ item: Target, format: z.literal("current"), artifactHash: Digest, files: z.array(z.object({ path: z.literal("/index.html"), sha256: Digest }).strict()).length(1), template: Template }).passthrough()).length(1), blossomServers: z.array(z.string().url()).length(1), relays: z.array(z.string().url()).max(32) }).passthrough();
 const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -57,7 +58,7 @@ export class ProductionDirectArtifactVerifier {
     if (manifest.item.dTag !== target.dTag || !same(manifest.template.tags.filter(tag => tag[0] === "d"), [["d", target.dTag]])) throw new Error("PRODUCTION_DIRECT_TARGET_MISMATCH");
     if (dryRun.blossomServers[0] !== facts.publication.server || !same(manifest.template.tags.filter(tag => tag[0] === "server"), [["server", facts.publication.server]])) throw new Error("PRODUCTION_ARTIFACT_PUBLICATION_SERVER_MISMATCH");
     const commands = facts.commandEvidence.map(command => ({ name: command.name, exitCode: command.exitCode, ...(command.stdout ? { stdout: sha(command.stdout) } : {}), ...(command.stderr ? { stderr: sha(command.stderr) } : {}) }));
-    return Object.freeze({ ...facts, files: Object.freeze(files), artifactHash, declaration, manifest: manifest.template, sealedObjectSha256: sha(JSON.stringify(files)), verificationEvidenceSha256: sha(canonicalJson({ artifactContract: facts.artifactContract, commands, files, artifactHash, capabilityReceipt: facts.capabilityReceipt, conformanceReceipt: conformance.receipt, manifestReceipt: facts.manifestReceipt })) });
+    return Object.freeze({ ...facts, files: Object.freeze(files), artifactHash, declaration, manifest: manifest.template, sealedObjectSha256: sha(JSON.stringify(files)), verificationEvidenceSha256: sha(canonicalJson({ artifactContract: facts.artifactContract, commands, files, artifactHash, capabilityReceipt: facts.capabilityReceipt, conformanceReceipt: conformance.receipt, manifestReceipt: facts.manifestReceipt, ...(facts.toolchainReceipt ? { toolchainReceipt: facts.toolchainReceipt } : {}) })) });
   }
 }
 export type VerifiedDirectProductionArtifact = Awaited<ReturnType<ProductionDirectArtifactVerifier["verify"]>>;

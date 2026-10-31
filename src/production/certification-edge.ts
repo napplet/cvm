@@ -1,3 +1,6 @@
+import { ProductionDirectPublicationCertification } from "./direct-publication-certification";
+import { canonicalJson } from "../promotion/schema";
+import { DirectPublicationReferenceSchema, DirectPublicationSourceObservationSchema, DirectPublicationSubmissionSchema } from "../certification/live/direct-publication-contract";
 import { z } from "zod";
 
 import { assertProductionSessionBroker, type ProductionSessionBroker } from "../release/deployment/production-session-runtime";
@@ -10,6 +13,7 @@ const EdgeKindSchema = z.enum([
   "edge.supply.primary", "edge.supply.secondary", "edge.supply.attestation",
   "edge.payment.contextvm", "edge.payment.cep8", "edge.payment.model",
   "edge.publication.source", "edge.publication.submit", "edge.publication.reconcile",
+  "edge.publication.direct.source", "edge.publication.direct.submit", "edge.publication.direct.reconcile",
 ]);
 
 export type CertificationEdgeKind = z.infer<typeof EdgeKindSchema>;
@@ -38,6 +42,9 @@ export const CertificationEdgePayloadSchemas = Object.freeze({
   "edge.payment.contextvm": ContextVmPayloadSchema,
   "edge.payment.cep8": Cep8PayloadSchema,
   "edge.payment.model": ModelPayloadSchema,
+  "edge.publication.direct.source": z.object({ candidateId: DigestSchema, reference: DirectPublicationReferenceSchema }).strict(),
+  "edge.publication.direct.submit": z.object({ candidateId: DigestSchema, source: DirectPublicationSourceObservationSchema }).strict(),
+  "edge.publication.direct.reconcile": z.object({ candidateId: DigestSchema, submitted: DirectPublicationSubmissionSchema }).strict(),
   "edge.publication.source": PublicationSourcePayloadSchema,
   "edge.publication.submit": PublicationSubmitPayloadSchema,
   "edge.publication.reconcile": PublicationReconcilePayloadSchema,
@@ -106,6 +113,9 @@ export class ProductionCertificationEdgeService {
         });
         return this.#verify(command, payload, observed);
       }
+      case "edge.publication.direct.source": return this.#direct(CertificationEdgePayloadSchemas["edge.publication.direct.source"].parse(payload).reference).source();
+      case "edge.publication.direct.submit": { const value = CertificationEdgePayloadSchemas[command.kind].parse(payload); return this.#direct(value.source.original).submit(value.source); }
+      case "edge.publication.direct.reconcile": { const value = CertificationEdgePayloadSchemas[command.kind].parse(payload); return this.#direct(value.submitted.original).reconcile(value.submitted); }
       case "edge.publication.source": return this.#publication.source();
       case "edge.publication.submit": return this.#publication.submit(PublicationSubmitPayloadSchema.parse(payload));
       case "edge.publication.reconcile": return this.#publication.reconcile(PublicationReconcilePayloadSchema.parse(payload));
@@ -121,10 +131,21 @@ export class ProductionCertificationEdgeService {
     const command = z.object({ operationId: OperationIdSchema, kind: EdgeKindSchema, payload: z.unknown() }).strict().parse(raw);
     const payload = CertificationEdgePayloadSchemas[command.kind].parse(command.payload) as Record<string, unknown>;
     if (payload.candidateId !== this.#broker.candidateSha256) throw new Error("CERTIFICATION_EDGE_CANDIDATE_MISMATCH");
+    if (command.kind === "edge.publication.direct.source") return this.#direct(CertificationEdgePayloadSchemas[command.kind].parse(payload).reference).source();
+    if (command.kind === "edge.publication.direct.submit") { const value = CertificationEdgePayloadSchemas[command.kind].parse(payload); return this.#direct(value.source.original).observeSubmit(value.source); }
+    if (command.kind === "edge.publication.direct.reconcile") { const value = CertificationEdgePayloadSchemas[command.kind].parse(payload); return this.#direct(value.submitted.original).reconcile(value.submitted); }
     if (command.kind === "edge.publication.source") return this.#publication.source();
     if (command.kind === "edge.publication.submit") return this.#publication.observeSubmit(PublicationSubmitPayloadSchema.parse(payload));
     if (command.kind === "edge.publication.reconcile") return this.#publication.reconcile(PublicationReconcilePayloadSchema.parse(payload));
     throw new Error("CERTIFICATION_EDGE_ORIGINAL_RECOVERY_UNAVAILABLE");
+  }
+
+  #direct(value: Readonly<{ principal: Readonly<{ pubkey: string }>; idempotencyKey: string }>) {
+    const factory = this.#broker.clients.directPublication, expected = this.#broker.clients.directPublicationReference;
+    if (!factory || !expected) throw new Error("CERTIFICATION_DIRECT_PUBLICATION_MATERIAL_REQUIRED");
+    const parsed = DirectPublicationReferenceSchema.parse({ principal: value.principal, idempotencyKey: value.idempotencyKey });
+    if (canonicalJson(parsed) !== canonicalJson(expected)) throw new Error("CERTIFICATION_DIRECT_PUBLICATION_REFERENCE_REQUIRED");
+    return new ProductionDirectPublicationCertification(factory, expected, this.#broker.candidateSha256, this.#broker.topologySha256);
   }
 
   async #verify(command: Readonly<{ operationId: string; kind: CertificationEdgeKind }>, payload: Record<string, unknown>, observation?: unknown): Promise<unknown> {

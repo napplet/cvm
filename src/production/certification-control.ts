@@ -73,7 +73,7 @@ export class ProductionCertificationControl {
     if ((current.state !== "pending" && current.state !== "unknown") || current.payload === undefined) return this.#public(current);
     let reconciled: unknown;
     if (current.kind in CertificationEdgePayloadSchemas) {
-      if (!this.input.edge || !["edge.publication.source", "edge.publication.submit", "edge.publication.reconcile"].includes(current.kind)) return this.#public(current);
+      if (!this.input.edge || !["edge.publication.source", "edge.publication.submit", "edge.publication.reconcile", "edge.publication.direct.source", "edge.publication.direct.submit", "edge.publication.direct.reconcile"].includes(current.kind)) return this.#public(current);
       try { reconciled = await this.input.edge.reconcile({ operationId: current.operationId, kind: current.kind, payload: current.payload }); }
       catch { return this.#public(current); }
     } else reconciled = await this.input.services.reconcile({ operationId: current.operationId, kind: current.kind as ProductionControlKind, payload: current.payload });

@@ -1,4 +1,6 @@
 import { accountIdForPrincipal } from "../domain/account-command";
+import { FundingCommitOutcomeUnknownError } from "../funding/transaction-outcome";
+import type { CapacityCompensationInput, CapacityCompensationClaim } from "./funding-store";
 import { RetainedGenerationCommandSchema } from "../model/retained-generation-command";
 import { SessionCapApprovalResultSchema, type SessionCapApprovalInput, type SessionCapApprovalResult, type SessionCapTransaction, type SessionCapFundingStore } from "../funding/session-cap";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
@@ -251,19 +253,29 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
   async transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: SessionCapTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction & SessionCapTransaction) => Promise<T> | T): Promise<T> {
+    return this.transactWithSql(accountId, transaction => operation(transaction));
+  }
+
+  /** Trusted SQL coordinators may append their durable identities to the SAME
+   * money transaction. Never expose this client to a request or generated code. */
+  async transactWithSql<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction & SessionCapTransaction, client: PostgresSqlClient) => Promise<T> | T): Promise<T> {
     const deadline = this.#now() + this.#deadlineMs;
     let last: unknown;
     for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
       const raw = await beforeDeadline(this.pool.connect(), deadline, this.#now);
       const client = new DeadlineSqlClient(raw, deadline, this.#now);
+      let commitAttempted = false;
       try {
         await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-        const result = await operation(new PgFundingTransaction(client, accountId));
+        const result = await operation(new PgFundingTransaction(client, accountId), client);
+        commitAttempted = true;
         await client.query("COMMIT");
         return frozen(result);
       } catch (error) {
         await beforeDeadline(raw.query("ROLLBACK"), this.#now() + Math.min(50, this.#deadlineMs), this.#now).catch(() => undefined);
         last = error;
+        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+        if (commitAttempted && code !== "40001" && code !== "40P01") throw new FundingCommitOutcomeUnknownError(error);
         if ((error as { code?: unknown }).code !== "40001" || attempt + 1 === this.#maxAttempts || this.#now() >= deadline) {
           if ((error as { code?: unknown }).code === "40001") throw new SerializationFailure();
           throw error;
@@ -618,9 +630,15 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
   async tombstoneExpiredCheckpoint(input: Readonly<{ checkpointId: string; nowMs: number }>): Promise<ContinuationCheckpoint> {
     const row = first(await this.client.query("SELECT account_id,session_id,pause_generation,checkpoint_id,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state FROM continuation_checkpoints WHERE checkpoint_id=$1 AND account_id=$2 FOR UPDATE", [input.checkpointId, this.accountId]), "CHECKPOINT_NOT_FOUND");
     const checkpoint = checkpointFromRow(row);
-    if (checkpoint.state === "claimed" || checkpoint.state === "expired") return checkpoint;
+    if (checkpoint.state === "expired") return checkpoint;
+    if (checkpoint.state === "claimed") {
+      const pause = (await this.client.query("SELECT state,live_lease_token FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, checkpoint.sessionId, checkpoint.pauseGeneration])).rows[0];
+      // Completion retires the original claim election. An unfinished or
+      // still-leased pause keeps that election even after the retention date.
+      if (!pause || asText(pause.state) !== "completed" || pause.live_lease_token !== null) return checkpoint;
+    }
     if (input.nowMs < checkpoint.retentionDeadlineMs) throw new Error("CHECKPOINT_RETENTION_ACTIVE");
-    await this.client.query("UPDATE continuation_checkpoints SET state='expired' WHERE checkpoint_id=$1 AND state='resume_required'", [input.checkpointId]);
+    await this.client.query("UPDATE continuation_checkpoints SET state='expired' WHERE checkpoint_id=$1 AND account_id=$2 AND state IN ('resume_required','claimed')", [input.checkpointId, this.accountId]);
     await this.client.query("INSERT INTO continuation_tombstones(checkpoint_id,account_id,expired_at_ms) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id) DO NOTHING", [input.checkpointId, this.accountId, input.nowMs]);
     return frozen({ ...checkpoint, state: "expired" as const });
   }
@@ -674,6 +692,10 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
   }
   async acceptFundedAdmission(input: AdmissionInput): Promise<FundedAdmission> {
     this.assertScope(input.accountId); await this.ensureAccount(this.accountId);
+    // A no-op write also invalidates a competing SERIALIZABLE snapshot that
+    // waited on this lock; the durable intent contents remain unchanged.
+    const capacity = (await this.client.query("UPDATE capacity_intents SET state=state WHERE account_id=$1 AND idempotency_key=$2 RETURNING state,capacity_reference", [this.accountId, input.idempotencyKey])).rows[0];
+    if (capacity && (capacity.state !== "available" || capacity.capacity_reference !== input.capacityReference)) throw new Error("CAPACITY_INTENT_NOT_AVAILABLE");
     const balance = first(await this.client.query<{ settled_available: string; held: string }>("INSERT INTO account_balance_projection(account_id, unit, settled_available, held) VALUES ($1,'sat',0,0) ON CONFLICT (account_id) DO UPDATE SET account_id = EXCLUDED.account_id RETURNING settled_available, held", [this.accountId]), "ACCOUNT_BALANCE_NOT_FOUND");
     const available = asBigInt(balance.settled_available) - asBigInt(balance.held); const amount = input.requestedCap < available ? input.requestedCap : available;
     if (amount <= 0n) throw new Error("INSUFFICIENT_SETTLED_BALANCE");
@@ -687,7 +709,24 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
   async findCapacityIntent(idempotencyKey: string): Promise<CapacityIntent | undefined> { const result = await this.client.query("SELECT account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at FROM capacity_intents WHERE account_id=$1 AND idempotency_key=$2", [this.accountId, idempotencyKey]); return result.rows[0] && this.intent(result.rows[0]); }
   async createCapacityIntent(input: CapacityIntentInput): Promise<CapacityIntent> { this.assertScope(input.accountId); const prior = await this.findCapacityIntent(input.idempotencyKey); if (prior) { if (prior.fingerprint !== input.fingerprint || prior.intentReference !== input.intentReference) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return prior; } await this.client.query("INSERT INTO capacity_intents(intent_id,account_id,idempotency_key,fingerprint_sha256,intent_reference,state) VALUES ($1,$2,$3,$4,$5,'created')", [id("capacity", input.intentReference), this.accountId, input.idempotencyKey, input.fingerprint, input.intentReference]); return { ...input, state: "created" }; }
   async claimCapacityDispatch(intentReference: string): Promise<CapacityDispatchClaim> { const updated = await this.client.query("UPDATE capacity_intents SET state='dispatching' WHERE account_id=$1 AND intent_reference=$2 AND state='created' RETURNING account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at", [this.accountId, intentReference]); if (updated.rows[0]) return frozen({ intent: this.intent(updated.rows[0]), claimed: true }); const current = first(await this.client.query("SELECT account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at FROM capacity_intents WHERE account_id=$1 AND intent_reference=$2", [this.accountId, intentReference]), "CAPACITY_INTENT_NOT_FOUND"); return frozen({ intent: this.intent(current), claimed: false }); }
-  async recordCapacityObservation(input: CapacityObservationInput): Promise<CapacityIntent> { const row = first(await this.client.query("UPDATE capacity_intents SET state=$3, capacity_reference=COALESCE($4,capacity_reference), expires_at=COALESCE($5,expires_at) WHERE account_id=$1 AND intent_reference=$2 RETURNING account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at", [this.accountId, input.intentReference, input.state, input.capacityReference ?? null, input.expiresAt ?? null]), "CAPACITY_INTENT_NOT_FOUND"); return this.intent(row); }
+  async recordCapacityObservation(input: CapacityObservationInput): Promise<CapacityIntent> {
+    const current = this.intent(first(await this.client.query("SELECT account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at FROM capacity_intents WHERE account_id=$1 AND intent_reference=$2 FOR UPDATE", [this.accountId, input.intentReference]), "CAPACITY_INTENT_NOT_FOUND"));
+    if (current.capacityReference !== undefined && input.capacityReference !== undefined && current.capacityReference !== input.capacityReference) throw new Error("CAPACITY_REFERENCE_CONFLICT");
+    if (current.state === "refused" || current.state === "released") return current;
+    if (input.state !== "available" && await this.findRecordedResult(current.idempotencyKey)) return current;
+    if (input.state === "available" && (!input.capacityReference || !input.expiresAt)) throw new Error("CAPACITY_OBSERVATION_INVALID");
+    const row = first(await this.client.query("UPDATE capacity_intents SET state=$3, capacity_reference=COALESCE($4,capacity_reference), expires_at=COALESCE($5,expires_at) WHERE account_id=$1 AND intent_reference=$2 RETURNING account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at", [this.accountId, input.intentReference, input.state, input.capacityReference ?? null, input.expiresAt ?? null]), "CAPACITY_INTENT_NOT_FOUND");
+    return this.intent(row);
+  }
+  async claimCapacityCompensation(input: CapacityCompensationInput): Promise<CapacityCompensationClaim> {
+    const current = this.intent(first(await this.client.query("SELECT account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at FROM capacity_intents WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, input.idempotencyKey]), "CAPACITY_INTENT_NOT_FOUND"));
+    if (current.intentReference !== input.intentReference || (current.capacityReference !== undefined && current.capacityReference !== input.capacityReference)) throw new Error("CAPACITY_COMPENSATION_BINDING_REQUIRED");
+    const accepted = await this.findRecordedResult(input.idempotencyKey);
+    if (accepted) return frozen({ status: "accepted", command: accepted });
+    if (current.state === "refused" || current.state === "released") return frozen({ status: "observing", intent: current });
+    const row = first(await this.client.query("UPDATE capacity_intents SET state='refused',capacity_reference=$3 WHERE account_id=$1 AND intent_reference=$2 RETURNING account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at", [this.accountId, input.intentReference, input.capacityReference]), "CAPACITY_INTENT_NOT_FOUND");
+    return frozen({ status: "claimed", intent: this.intent(row) });
+  }
   async releaseCapacityIntent(intentReference: string): Promise<CapacityIntent> { const row = first(await this.client.query("UPDATE capacity_intents SET state='released' WHERE account_id=$1 AND intent_reference=$2 RETURNING account_id,idempotency_key,fingerprint_sha256,intent_reference,state,capacity_reference,expires_at", [this.accountId, intentReference]), "CAPACITY_INTENT_NOT_FOUND"); return this.intent(row); }
   async findActionBudget(idempotencyKey: string): Promise<ActionBudget | undefined> { const result = await this.client.query("SELECT account_id,admission_reference,idempotency_key,fingerprint_sha256,reservation_reference,amount,state FROM action_budget_reservations WHERE account_id=$1 AND idempotency_key=$2", [this.accountId, idempotencyKey]); const row = result.rows[0]; return row && frozen({ accountId: asText(row.account_id), admissionReference: asText(row.admission_reference), idempotencyKey: asText(row.idempotency_key), fingerprint: asText(row.fingerprint_sha256), reference: asText(row.reservation_reference), amount: asBigInt(row.amount), state: asText(row.state) as ActionBudget["state"] }); }
   async reserveActionBudget(input: ActionBudgetInput): Promise<ActionBudget> { this.assertScope(input.accountId); const prior = await this.findActionBudget(input.idempotencyKey); if (prior) { if (prior.fingerprint !== input.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return prior; } const hold = first(await this.client.query("SELECT held_amount FROM session_cap_holds WHERE account_id=$1 AND reference=$2 AND state='active'", [this.accountId, input.admissionReference]), "ACTIVE_ADMISSION_REQUIRED"); const already = first(await this.client.query<{ total: string }>("SELECT COALESCE(SUM(amount),0) AS total FROM action_budget_reservations WHERE account_id=$1 AND admission_reference=$2 AND state='authorized'", [this.accountId, input.admissionReference]), "ACTION_BUDGET_TOTAL_MISSING"); if (input.amount <= 0n || input.amount > asBigInt(hold.held_amount) - asBigInt(already.total)) throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP"); await this.client.query("INSERT INTO action_budget_reservations(reservation_id,account_id,admission_reference,idempotency_key,fingerprint_sha256,reservation_reference,amount,unit,state) VALUES ($1,$2,$3,$4,$5,$6,$7,'sat','authorized')", [id("budget", input.reference), this.accountId, input.admissionReference, input.idempotencyKey, input.fingerprint, input.reference, input.amount.toString()]); await this.lineItem(`action_reservation:${input.reference}`, "action_reservation", input.amount.toString()); return frozen({ ...input, state: "authorized" as const }); }
@@ -727,7 +766,14 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("UPDATE provider_operations SET state='usage_unknown',provider_request_id=$2 WHERE id=$1", [input.operationId, input.providerRequestId]);
     await this.client.query("UPDATE metered_actions SET state='usage_unknown',provider_receipt_reference=$2 WHERE id=$1", [parsed.actionId, input.protectedEvidenceReference]);
     await this.client.query("UPDATE metered_sessions SET state='usage_unknown' WHERE id=$1", [parsed.sessionId]);
-    await this.lineItem(`reconciliation:${input.operationId}`, "reconciliation", "0");
+    // Receipt recovery can make an unknown action active again before a later
+    // settlement failure. Keep one immutable reconciliation line for that
+    // original operation rather than failing its second uncertainty transition.
+    const sourceIdentity = `reconciliation:${input.operationId}`;
+    const priorLine = (await this.client.query("SELECT source_identity,kind,unit,amount_sat FROM billing_line_items WHERE id=$1 AND account_id=$2", [id("line", sourceIdentity), this.accountId])).rows[0];
+    if (priorLine && (asText(priorLine.source_identity) !== sourceIdentity || asText(priorLine.kind) !== "reconciliation"
+      || asText(priorLine.unit) !== "sat" || asBigInt(priorLine.amount_sat) !== 0n)) throw new Error("METERED_RECONCILIATION_LINE_BINDING_DENIED");
+    if (!priorLine) await this.lineItem(sourceIdentity, "reconciliation", "0");
     return frozen({ ...parsed, status: "usage_unknown", providerRequestId: input.providerRequestId, providerReceiptReference: input.protectedEvidenceReference, reconciliationReason: input.reason });
   }
   async claimReconciliation(operationId: string): Promise<ReconciliationClaim> {
@@ -755,7 +801,7 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     const balance = first(await this.client.query("SELECT settled_available,held FROM account_balance_projection WHERE account_id=$1 FOR UPDATE", [this.accountId]), "ACCOUNT_BALANCE_NOT_FOUND"); const hold = first(await this.client.query("SELECT hold_id,held_amount FROM session_cap_holds WHERE account_id=$1 AND reference=$2 AND state='active' FOR UPDATE", [this.accountId, action.admissionReference]), "ACTIVE_ADMISSION_REQUIRED");
     if (charge > asBigInt(balance.settled_available) || charge > asBigInt(hold.held_amount)) return this.billingInvariant(action, input, "METERED_SETTLEMENT_EXCEEDS_HOLD");
     const nextBalance = asBigInt(balance.settled_available) - charge; const nextHeld = asBigInt(balance.held) - charge; const nextCap = asBigInt(hold.held_amount) - charge;
-    await this.client.query("INSERT INTO usage_receipts(id,account_id,action_id,operation_id,provider,model,provider_receipt_id,normalized_receipt,protected_evidence_reference) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (operation_id) DO NOTHING", [id("receipt", input.operationId), this.accountId, action.actionId, input.operationId, action.profileId, action.profileId, input.providerReceiptReference, JSON.stringify({ charge: input.receiptCharge }), input.providerReceiptReference]);
+    await this.client.query("INSERT INTO usage_receipts(id,account_id,action_id,operation_id,provider,model,provider_receipt_id,normalized_receipt,protected_evidence_reference) VALUES ($1,$2,$3,$4,(SELECT provider FROM model_profile_versions WHERE id=$5),(SELECT model FROM model_profile_versions WHERE id=$6),$7,$8,$9) ON CONFLICT (operation_id) DO NOTHING", [id("receipt", input.operationId), this.accountId, action.actionId, input.operationId, action.profileId, action.profileId, input.providerReceiptReference, JSON.stringify({ charge: input.receiptCharge }), input.providerReceiptReference]);
     if (charge > 0n) {
       await this.client.query("INSERT INTO ledger_transactions(transaction_id,reference,unit) VALUES ($1,$2,'sat')", [id("ledger", input.operationId), input.operationId]);
       await this.client.query("INSERT INTO ledger_entries(entry_id,transaction_id,account_id,direction,amount,unit,entry_reference) VALUES ($1,$2,$3,'debit',$4,'sat',$5),($6,$2,'treasury:clearing','credit',$4,'sat',$7)", [id("entry", `${input.operationId}:debit`), id("ledger", input.operationId), this.accountId, input.receiptCharge, id("entry-ref", `${input.operationId}:debit`), id("entry", `${input.operationId}:credit`), id("entry-ref", `${input.operationId}:credit`)]);

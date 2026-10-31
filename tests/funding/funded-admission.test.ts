@@ -292,6 +292,7 @@ describe("FundedAdmissionService", () => {
       reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:release-ambiguous", "2026-08-05T00:00:00.000Z"); },
       observe: async () => { observations += 1; return { status: "unknown" as const, reference: "capacity:release-ambiguous" }; },
       release: async () => { releases += 1; throw new Error("CAPACITY_RELEASE_UNKNOWN"); },
+      observeRelease: async () => { observations += 1; return { status: "unknown" }; },
     };
     const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "release-ambiguous", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
@@ -302,7 +303,7 @@ describe("FundedAdmissionService", () => {
     expect(inner.activeHolds).toHaveLength(0);
   });
 
-  test("FAIL_4 cannot suppress external release after the available-state write fails", async () => {
+  test("FAIL_4 preserves the original worker when the durable compensation fence is unavailable", async () => {
     const inner = new TransactionalMemoryFundingStore();
     await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-fail-4", payload: { settlement: { ...settlement, topUpId: "topup-fail-4", externalReference: "external-fail-4", settlementReference: "settlement-fail-4" } } });
     const store = new FailAvailableAndPreFenceStore(inner);
@@ -310,17 +311,19 @@ describe("FundedAdmissionService", () => {
     const capacity: ReadyCapacityPort = {
       reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:fail-4", "2026-08-05T00:00:00.000Z"); },
       release: async () => { releases += 1; },
-      observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
+      observe: async ({ intentReference }) => { observations += 1; return exactReadyReservation(intentReference, "capacity:fail-4", "2026-08-05T00:00:00.000Z"); },
     };
     const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "fail-4", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
 
     const receipt = await trustedAdmissionReceipt(command);
-    expect(await admission.admit(command, receipt)).toMatchObject({ status: "refused" });
-    expect(await admission.admit(command, receipt)).toMatchObject({ status: "refused" });
-    expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 0 });
-    expect(store.acceptAttempts).toBe(0);
+    expect(await admission.admit(command, receipt)).toMatchObject({ status: "reconciliation_pending" });
     expect(inner.activeHolds).toHaveLength(0);
+    expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 0, observations: 0 });
+    expect(await admission.admit(command, receipt)).toMatchObject({ status: "accepted" });
+    expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 0, observations: 1 });
+    expect(store.acceptAttempts).toBe(1);
+    expect(inner.activeHolds).toHaveLength(1);
   });
 
   test("FAIL_5 fences retry when external release succeeds but released-state persistence fails", async () => {
@@ -332,6 +335,7 @@ describe("FundedAdmissionService", () => {
       reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:fail-5", "2026-08-05T00:00:00.000Z"); },
       release: async () => { releases += 1; },
       observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
+      observeRelease: async () => { observations += 1; return { status: "terminated" }; },
     };
     const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "fail-5", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };

@@ -1,5 +1,6 @@
 import type { CheckpointEnvelopeService } from "./checkpoint-envelope";
 import type { ContinuationFundingStore, ContinuationPause } from "../persistence/funding-store";
+import type { PendingActionIntent } from "./contracts";
 import {
   CheckpointProposalSchema,
   type CheckpointExportRequest,
@@ -33,7 +34,9 @@ export interface DeadlineCandidatePort {
   /** Durable scheduler query; candidates are hints and SQL remains the authority. */
   listRetentionDue?(nowMs: number): Promise<readonly RetentionCandidate[]>;
 }
-type CheckpointSealPort = Pick<CheckpointEnvelopeService, "seal">;
+type CheckpointSealPort = Pick<CheckpointEnvelopeService, "seal"> & Readonly<{
+  retainPendingCommand?: (input: Readonly<{ checkpointId: string; accountId: string; sessionId: string; intent: PendingActionIntent }>) => Promise<void>;
+}>;
 type RetentionDeletionPort = Readonly<{ destroyExpired(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string }>): Promise<void> }>;
 
 /**
@@ -196,6 +199,12 @@ export class ContinuationDeadlineReconciler {
         return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_SEAL_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
       }
 
+    }
+
+    if (!initialPending && continuation.protectedCommand) {
+      if (!this.options.envelope.retainPendingCommand) return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_PENDING_COMMAND_CUSTODY_REQUIRED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+      try { await this.options.envelope.retainPendingCommand({ checkpointId: sealed.manifest.checkpointId, accountId: candidate.accountId, sessionId: candidate.sessionId, intent: continuation }); }
+      catch { return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_PENDING_COMMAND_CUSTODY_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration }); }
     }
 
     try {

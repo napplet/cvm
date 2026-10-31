@@ -111,11 +111,14 @@ export function createProductionReadyCapacity(input: Readonly<{
       : input.workers.fly.create({ operationId: record.workerOperationId, region: flyRegion!, sessionLeaseSha256: leaseSha256, toolchainSha256, providerDeadlineEpochMs: record.deadlineEpochMs });
   };
   const observe = async (record: CapacityRecord, persistAdmissionReadiness = true): Promise<CapacityObservation> => {
-    const original = await originalWorker(record);
-    if (!original?.resourceId) return Object.freeze({ status: "unknown" as const, reference: record.reference });
+    if (!Number.isSafeInteger(record.deadlineEpochMs) || record.deadlineEpochMs <= now() || !await originalWorker(record)) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     const status = provider === "modal"
       ? await input.workers.modal.observe({ operationId: record.workerOperationId })
       : await input.workers.fly.observe({ operationId: record.workerOperationId });
+    // Native observation may have recovered a missing ID. Re-read the same
+    // durable original and reject retirement/expiry during the provider call.
+    const original = await originalWorker(record);
+    if (!original?.resourceId || record.deadlineEpochMs <= now()) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     if (status.status === "missing") return Object.freeze({ status: "refused" as const, reason: "worker_missing" });
     if (status.status !== "completed" || status.resourceId !== original.resourceId || !status.readiness) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     const observed = z.object({ readyMonotonicMs: z.number().int().nonnegative(), readinessProbeDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u) }).safeParse(status.readiness);
@@ -132,6 +135,8 @@ export function createProductionReadyCapacity(input: Readonly<{
       } else readiness = saved.value.readiness;
     }
     if (!readiness) return Object.freeze({ status: "unknown" as const, reference: record.reference });
+    const finalOriginal = await originalWorker(record);
+    if (!finalOriginal || finalOriginal.resourceId !== original.resourceId || record.deadlineEpochMs <= now()) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     return Object.freeze({
       status: "available" as const,
       reference: record.reference,

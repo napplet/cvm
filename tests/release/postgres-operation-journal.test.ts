@@ -11,13 +11,14 @@ import { createPostgresGoogleOperationJournal, createPostgresWorkerOperationJour
 import { ProductionCoreControlClient } from "../../src/release/deployment/production-core-control";
 import { ProductionCertificationControl, type ProductionCertificationServices } from "../../src/production/certification-control";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
-import { ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
+import { ProductionRestoreEvidenceSchema, ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
 import { canonicalJson } from "../../src/promotion/schema";
 import { PostgresReleasePromotion } from "../../src/production/release-promotion";
 import { ProductionWorkerArtifactStore } from "../../src/production/worker-artifact-store";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
 import { WorkerRunResultSchema } from "../../src/phase-02/contracts";
 import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
+import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
 
 const scopeSha256 = "a".repeat(64), identity = "b".repeat(64);
 test("journal construction has no effects and rejects structural/prototype impersonation", async () => {
@@ -99,6 +100,31 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       await expect(requests().persist({ ...request, idea: "replacement source" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
       await requests().persist(request); expect(await requests().read(lookup)).toEqual(request);
       await expect(requests().read({ ...lookup, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      // Restore correlation must not pin the old proposal as the new action's
+      // run request. Fresh instances then persist the actual resumed proposal.
+      const restoreTarget = { ...lookup, actionId: "action:resumed-restore" };
+      await Promise.all(Array.from({ length: 3 }, () => requests().persistRestore(request, restoreTarget)));
+      expect(await requests().readRestore(restoreTarget)).toEqual({ ...request, actionId: restoreTarget.actionId });
+      expect(await requests().read(restoreTarget)).toBeUndefined();
+      await expect(requests().persistRestore({ ...request, idea: "forged source" }, restoreTarget)).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await expect(requests().persistRestore(request, { ...restoreTarget, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await expect(requests().persistRestore(request, { ...restoreTarget, sessionId: "session:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await expect(requests().readRestore({ ...restoreTarget, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      expect(await requests().readRestore({ ...restoreTarget, actionId: "action:other" })).toBeUndefined();
+      const resumedRequest = { ...request, ...restoreTarget, idea: "New focused proposal after explicit resume" };
+      await requests().persist(resumedRequest);
+      expect(await requests().read(restoreTarget)).toEqual(resumedRequest);
+      expect(await requests().readRestore(restoreTarget)).toEqual({ ...request, actionId: restoreTarget.actionId });
+      await expect(requests().persist({ ...resumedRequest, idea: "changed after dispatch" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      expect(await requests().read(lookup)).toEqual(request);
+      const forgedRestore = { ...restoreTarget, actionId: "action:forged-restore" };
+      const forgedRecord = { schemaVersion: "worker-restore-request-v1", sourceActionId: request.actionId, sourceRequestSha256: "c".repeat(64), restoreRequest: { ...request, actionId: forgedRestore.actionId } };
+      await create("worker-requests").claim(`worker-restore-request:${requestDigest({ sessionId: forgedRestore.sessionId, actionId: forgedRestore.actionId, expectedVersion: forgedRestore.expectedVersion })}`, requestDigest(forgedRecord), forgedRecord);
+      await expect(requests().readRestore(forgedRestore)).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      // Previously persisted legacy copies remain protected against changes.
+      const legacyRestore = { ...request, actionId: "action:legacy-restore-copy" };
+      await requests().persist(legacyRestore);
+      await expect(requests().persist({ ...legacyRestore, idea: "replacement proposal" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
       const newRequest = { ...request, actionId: "action:new-index" };
       await Promise.all(Array.from({ length: 3 }, () => requests().persist(newRequest)));
       expect(await requests().read({ ...lookup, actionId: newRequest.actionId })).toEqual(newRequest);
@@ -303,7 +329,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const workerOperationId = "original-build-worker";
     await workerRecords.claim({ operationId: workerOperationId, requestSha256: identity, resourceName: workerOperationId, provider: "fly", appName: "original-app", policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry/worker@sha256:${scopeSha256}`, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
     await workerRecords.update({ operationId: workerOperationId, requestSha256: identity, resourceId: "original-machine", state: "reconciled" });
-    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0;
+    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0, restorePuts = 0, restoreRepairs = 0;
     let restoreReceipt: unknown;
     let completedJobBytes: Buffer | undefined;
     let completedCommands: Array<{ argv: string[]; exitCode: number; stdout: string; stderr: string; elapsedMs: number }> = [];
@@ -323,9 +349,10 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       }
       if (action === "fence") { fences++; throw new Error("fenced original lease; response lost"); }
       if (action === "fence-status") { fenceQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: id, fenceSha256: index }) }; }
-      if (action === "restore-put") return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) };
+      if (action === "restore-put") { restorePuts++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) }; }
       if (action === "restore") { restores++; throw new Error("restored bytes; response lost"); }
       if (action === "restore-status") { restoreQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify(restoreReceipt) }; }
+      if (action === "restore-repair") { restoreRepairs++; throw new Error("UNEXPECTED_LEGACY_RESTORE_REPAIR"); }
       throw new Error("UNEXPECTED_REDISPATCH");
     } } };
     const jobClient = (publication?: { server: string }, artifactContract?: "nip5d-direct-v1") => new ProductionWorkerJobClient({ publication, artifactContract, provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
@@ -333,9 +360,10 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const routerClients = { modal: { config: { image: originalImage, policyVersion: PRODUCTION_WORKER_POLICY.version } }, fly: { ...clients.fly, config: { image: originalImage, policyVersion: PRODUCTION_WORKER_POLICY.version } } };
     let wrongProfileCalls = 0;
     const currentClients = { modal: { config: { image: changedImage, policyVersion: PRODUCTION_WORKER_POLICY.version } }, fly: { config: { image: changedImage, policyVersion: PRODUCTION_WORKER_POLICY.version }, async exec() { wrongProfileCalls++; throw new Error("WRONG_PROFILE_EXECUTED"); } } };
-    const router = (retain = true, flyAppName = "original-app") => new ProductionWorkerJobRouter({ workerJournal, jobJournal, executables: [
+    const router = (retain = true, flyAppName = "original-app", restoreRecoveryVersion: 1 | undefined = 1) => new ProductionWorkerJobRouter({ workerJournal, jobJournal, executables: [
       { image: changedImage, toolchainSha256: identity, modalAppName: "original-app", flyAppName, clients: currentClients as never },
-      ...(retain ? [{ image: originalImage, toolchainSha256: scopeSha256, modalAppName: "original-app", flyAppName, clients: routerClients as never }] : []),
+      ...(retain ? [{ image: originalImage, toolchainSha256: scopeSha256, modalAppName: "original-app", flyAppName, clients: routerClients as never,
+        ...(restoreRecoveryVersion === undefined ? {} : { restoreRecoveryVersion }) }] : []),
     ] });
     const buildRequest = { sessionId: "session", actionId: "action", expectedVersion: 0, policyVersion: "test-policy", capabilityGrant: "grant", workspaceId: "workspace", sourceProposalSha256: identity, sourceProposalReference: `proposal:sha256:${identity}`, sourceProposalFiles: [{ path: "src/main.ts", content: "console.log('bounded test');" }] };
     expect((await jobClient().start(buildRequest)).state).toBe("unknown");
@@ -388,6 +416,66 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
      * it does not upload archive chunks or send another restore command. */
     expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("restored");
     expect(restores).toBe(1); expect(restoreQueries).toBe(2);
+    const correctRestoreReceipt = restoreReceipt;
+    for (const changed of [
+      { toolchainSha256: identity }, { sourceSha256: identity }, { artifactFilesSha256: identity },
+    ]) {
+      restoreReceipt = { state: "restored", archiveSha256: hash(workspace), toolchainSha256: scopeSha256,
+        sourceSha256: hash(canonicalJson(source.files)), artifactFilesSha256: hash(canonicalJson(files)), workspacePath: "/workspace/restored", ...changed };
+      expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    }
+    restoreReceipt = correctRestoreReceipt;
+    const originalRestore = await jobJournal.read("worker-restore:original-restore");
+    const restoreEvidence = await jobJournal.read("worker-restore-evidence:original-restore");
+    if (!originalRestore || !restoreEvidence) throw new Error("EXPECTED_RESTORE_EVIDENCE");
+    expect(restoreEvidence.revision).toBe(1);
+    expect(restoreEvidence.value).toMatchObject({ schemaVersion: "worker-restore-evidence-v1", originalOperationId: originalRestore.operationId,
+      originalIdentitySha256: originalRestore.identitySha256, expected: { archiveSha256: hash(workspace), toolchainSha256: scopeSha256,
+        sourceSha256: hash(canonicalJson(source.files)), artifactFilesSha256: hash(canonicalJson(files)) } });
+    // A row written before v1 recovery has precisely these five fields. Its
+    // canonical identity deliberately has no `chunks`, so retained-profile
+    // observation must preserve that historical shape and remain query-only.
+    const legacyRestoreOperation = "legacy-five-field-restore";
+    const legacyRestoreValue = { workerOperationId, workerResourceId: "original-machine", leaseSha256: identity,
+      archiveSha256: hash(workspace), bindingSha256: identity };
+    const legacyRestoreIdentity = hash(canonicalJson(legacyRestoreValue));
+    const legacyEvidenceValue = { ...ProductionRestoreEvidenceSchema.parse(restoreEvidence.value),
+      originalOperationId: `worker-restore:${legacyRestoreOperation}`, originalIdentitySha256: legacyRestoreIdentity };
+    await jobJournal.claim(`worker-restore:${legacyRestoreOperation}`, legacyRestoreIdentity, legacyRestoreValue);
+    await jobJournal.claim(`worker-restore-evidence:${legacyRestoreOperation}`, hash(canonicalJson(legacyEvidenceValue)), legacyEvidenceValue);
+    const legacyRetained = await router().resolve({ provider: "fly", workerOperationId });
+    const queriesBeforeLegacyRestore = restoreQueries;
+    expect((await legacyRetained.observeRestoreWorkspace({ operationId: legacyRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("restored");
+    expect(restoreQueries).toBe(queriesBeforeLegacyRestore + 1);
+    expect((await legacyRetained.repairRestoreWorkspace({ operationId: legacyRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreRepairs).toBe(0);
+    // A malformed claimed v1 shape is neither queried nor promoted to repair.
+    const malformedRestoreOperation = "malformed-v1-restore";
+    const malformedRestoreValue = { ...legacyRestoreValue, chunks: 0 };
+    await jobJournal.claim(`worker-restore:${malformedRestoreOperation}`, hash(canonicalJson(malformedRestoreValue)), malformedRestoreValue);
+    const queriesBeforeMalformedRestore = restoreQueries;
+    expect((await legacyRetained.observeRestoreWorkspace({ operationId: malformedRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreQueries).toBe(queriesBeforeMalformedRestore); expect(restoreRepairs).toBe(0);
+    const observerOnlyRetained = await router(true, "original-app", undefined).resolve({ provider: "fly", workerOperationId });
+    expect((await observerOnlyRetained.repairRestoreWorkspace({ operationId: legacyRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreRepairs).toBe(0);
+    // Retained pre-companion originals cannot invent metadata-only proof. An
+    // explicit full-archive retry remains query-only and preserves history.
+    await jobJournal.claim("worker-restore:legacy-without-evidence", originalRestore.identitySha256, originalRestore.value);
+    const beforeLegacy = { queries: restoreQueries, uploads: restorePuts, restores };
+    expect((await jobClient().observeRestoreWorkspace({ operationId: "legacy-without-evidence", archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreQueries).toBe(beforeLegacy.queries);
+    expect((await jobClient().restoreWorkspace({ ...restoreInput, operationId: "legacy-without-evidence" })).state).toBe("restored");
+    expect(restoreQueries).toBe(beforeLegacy.queries + 1);
+    expect(restorePuts).toBe(beforeLegacy.uploads); expect(restores).toBe(beforeLegacy.restores);
+    expect(await jobJournal.read("worker-restore-evidence:legacy-without-evidence")).toBeUndefined();
+    expect((await jobJournal.read("worker-restore:legacy-without-evidence"))?.value).toEqual(originalRestore.value);
+    // Even a rewrite with identical content invalidates immutable revision1
+    // evidence and must refuse before a native query or upload.
+    await jobJournal.compareAndSet(restoreEvidence.operationId, restoreEvidence.identitySha256, restoreEvidence.revision, restoreEvidence.value);
+    const queriesBeforeChangedEvidence = restoreQueries;
+    expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreQueries).toBe(queriesBeforeChangedEvidence);
     await expect(jobClient().restoreWorkspace({ ...restoreInput, bindingSha256: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
     expect(restores).toBe(1);
 
@@ -466,6 +554,33 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     completedJobBytes = Buffer.from(canonicalJson(downgraded));
     await expect(jobClient().readArtifact(directRequest)).rejects.toThrow("PRODUCTION_JOB_ARTIFACT_CONTRACT_MISMATCH");
     expect(starts).toBe(3);
+
+    // Real native journal/RPC recovery with the exact metadata identity used
+    // by the new bridge; archive bytes are absent from observer inputs.
+    const restoreMetadata = { accountId: "account:restore", sessionId: "session:restore", actionId: "priced-resume-action:restore", expectedVersion: 0,
+      policyVersion: "policy:restore", capabilityGrant: "phase-05-continuation-grant", workspaceId: "workspace:session:restore",
+      checkpointId: "checkpoint:restore", pauseGeneration: 1, actionVersion: 0, workspaceLineage: "workspace:session:restore",
+      leaseToken: "lease:restore", resumeClaim: "allocation:restore", archiveSha256: hash(workspace) };
+    const pricedRestore = pricedRestoreBinding(restoreMetadata);
+    expect(pricedRestoreBinding(JSON.parse(JSON.stringify(restoreMetadata)))).toEqual(pricedRestore);
+    expect(() => pricedRestoreBinding({ ...restoreMetadata, archive: workspace })).toThrow();
+    expect(() => pricedRestoreBinding({ ...restoreMetadata, bindingSha256: identity })).toThrow();
+    restoreReceipt = correctRestoreReceipt;
+    const restoresBeforePriced = restores;
+    expect((await jobClient().restoreWorkspace({ operationId: pricedRestore.operationId, bindingSha256: pricedRestore.bindingSha256, bytes: workspace })).state).toBe("unknown");
+    const uploadsAfterPriced = restorePuts;
+    const restartedPriced = pricedRestoreBinding(restoreMetadata);
+    expect((await jobClient().observeRestoreWorkspace({ operationId: restartedPriced.operationId, bindingSha256: restartedPriced.bindingSha256, archiveSha256: restartedPriced.metadata.archiveSha256 })).state).toBe("restored");
+    expect(restores).toBe(restoresBeforePriced + 1); expect(restorePuts).toBe(uploadsAfterPriced);
+    const queriesBeforeForeign = restoreQueries;
+    for (const changed of [{ accountId: "account:other" }, { sessionId: "session:other" }, { actionId: "action:other" }, { expectedVersion: 1 },
+      { policyVersion: "policy:other" }, { workspaceId: "workspace:other" }, { checkpointId: "checkpoint:other" }, { pauseGeneration: 2 },
+      { actionVersion: 1 }, { workspaceLineage: "workspace:other" }, { leaseToken: "lease:other" }, { resumeClaim: "allocation:other" }, { archiveSha256: identity }]) {
+      const foreign = pricedRestoreBinding({ ...restoreMetadata, ...changed });
+      expect(foreign.operationId).not.toBe(pricedRestore.operationId);
+      expect((await jobClient().observeRestoreWorkspace({ operationId: foreign.operationId, bindingSha256: foreign.bindingSha256, archiveSha256: foreign.metadata.archiveSha256 })).state).toBe("unknown");
+    }
+    expect(restoreQueries).toBe(queriesBeforeForeign); expect(restores).toBe(restoresBeforePriced + 1);
 
   } finally {
     if (previousEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = previousEffects;

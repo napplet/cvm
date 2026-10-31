@@ -79,7 +79,7 @@ fi
 # tmpfs is unreadable to the generated UID; it never executes caller argv.
 if [ "${1-}" = /usr/local/bin/napplet-cvm-job ]; then
   shift
-  case "${1-}" in put|start|status|artifact|fence|fence-status|restore-put|restore|restore-status) ;; *) exit 126 ;; esac
+  case "${1-}" in put|start|status|artifact|fence|fence-status|restore-plan|restore-put|restore|restore-repair|restore-status) ;; *) exit 126 ;; esac
   exec env -i PATH=/usr/local/bin:/usr/bin:/bin NAPPLET_CVM_POLICY_VERSION="$policy" /usr/local/bin/bun /usr/local/bin/napplet-cvm-job "$@"
 fi
 exec env -i HOME=/home/napplet CI=1 PATH=/toolchain/bin:/toolchain/pnpm:/toolchain/node_modules/.bin:/usr/local/bin:/usr/bin:/bin PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright NAPPLET_CVM_POLICY_VERSION="$policy" setpriv --reuid 65532 --regid 65532 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- "$@"

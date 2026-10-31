@@ -1,3 +1,4 @@
+import type { LiveDirectPublicationObservationPort } from "./direct-publication-contract";
 import type { LiveAdmissionObservationPort } from "./admission";
 import type { LiveChaosFaultPort } from "./chaos";
 import type { LiveContextVmPaymentModelObservationPort } from "./contextvm-payment-model";
@@ -18,7 +19,7 @@ export type ProductionLiveProtectedCertificationPorts = Readonly<{
   "security-host": Real<LiveSecurityHostObservationPort>;
   "supply-chain": Real<LiveSupplyChainObservationPort>;
   "ContextVM-payment-model": Real<LiveContextVmPaymentModelObservationPort>;
-  publication: Real<LivePublicationObservationPort>;
+  publication: Real<LivePublicationObservationPort> | Real<LiveDirectPublicationObservationPort>;
 }>;
 
 export const PRODUCTION_LIVE_PROTECTED_PORT_KEYS = Object.freeze([

@@ -13,6 +13,8 @@ export const PRODUCTION_HTTP_ROUTES = Object.freeze([
   "GET /static/*",
   "GET /preview/*",
   "GET /artifacts/*",
+  "OPTIONS /preview/nip5d-direct-v1/*",
+  "OPTIONS /artifacts/nip5d-direct-v1/*",
   "GET /internal/admission/operations/:operationId",
   "POST /internal/certification/operations",
   "GET /internal/certification/operations/:operationId",
@@ -122,8 +124,8 @@ export function createProductionRuntime(input: Readonly<{
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/healthz") return response(200, { status: "ok", realm: config.realm });
     if (request.method === "GET" && url.pathname.startsWith("/static/")) return input.staticHandler ? input.staticHandler(request) : response(404, { code: "STATIC_NOT_CONFIGURED" });
-    if (request.method === "GET" && url.pathname.startsWith("/preview/")) return input.previewHandler ? input.previewHandler(request) : response(404, { code: "PREVIEW_NOT_CONFIGURED" });
-    if (request.method === "GET" && url.pathname.startsWith("/artifacts/")) return input.artifactHandler ? input.artifactHandler(request) : response(404, { code: "ARTIFACT_NOT_CONFIGURED" });
+    if (["GET", "OPTIONS"].includes(request.method) && url.pathname.startsWith("/preview/")) return input.previewHandler ? input.previewHandler(request) : response(404, { code: "PREVIEW_NOT_CONFIGURED" });
+    if (["GET", "OPTIONS"].includes(request.method) && url.pathname.startsWith("/artifacts/")) return input.artifactHandler ? input.artifactHandler(request) : response(404, { code: "ARTIFACT_NOT_CONFIGURED" });
     const admission = /^\/internal\/admission\/operations\/([a-z][a-z0-9:_-]{2,127})$/u.exec(url.pathname)?.[1];
     if (request.method === "GET" && admission) {
       if (!await authenticate(request)) return response(401, { code: "PRIVATE_OPERATOR_AUTH_REQUIRED" });

@@ -54,7 +54,7 @@ export class ProductionPricedContinuationCleanup {
           AND a.capacity_intent_reference=w.capacity_intent_reference AND p.state='completed' AND p.live_lease_token IS NULL`,
       [claim.claimReference, accountId, claim.checkpointId, claim.actionId, claim.allocationIntentReference])).rows[0];
     } finally { client.release(); }
-    if (!owned) throw new Error("PRICED_CLEANUP_TERMINAL_REQUIRED");
+    if (!owned || owned.session_id !== claim.sessionId) throw new Error("PRICED_CLEANUP_TERMINAL_REQUIRED");
     const key = `priced-worker-cleanup:${hash({ accountId, claimReference: claim.claimReference })}`;
     const terminalKey = `${key}:terminated:v2`;
     const context = {

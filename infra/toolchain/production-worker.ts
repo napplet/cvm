@@ -60,24 +60,43 @@ async function workspaceBounded() {
   try { await writeFile(probe, "x", { flag: "wx" }); await rm(probe, { force: true }); return true; } catch { return false; }
 }
 async function writableSurfaceConfined() {
-  const bounded = await Promise.all([
-    [WORKSPACE, 512 * 1024 * 1024], ["/home/napplet", 64 * 1024 * 1024], ["/tmp", 64 * 1024 * 1024], ["/var/tmp", 64 * 1024 * 1024], ["/work", 64 * 1024 * 1024], ["/run/lock", 16 * 1024 * 1024], ["/dev/shm", 64 * 1024 * 1024],
-  ].map(async ([path, maximum]) => {
-    const fs = await statfs(path as string);
-    return Number(fs.type) === 0x01021994 && Number(fs.bsize) * Number(fs.blocks) > 0 && Number(fs.bsize) * Number(fs.blocks) <= Number(maximum);
-  }));
-  const child = Bun.spawn(["/usr/bin/find", "/", "-xdev", "-type", "d", "-writable", "-print"], { stdout: "pipe", stderr: "pipe", env: { PATH: "/usr/bin:/bin" } });
-  const timer = setTimeout(() => child.kill(), 5_000);
-  try {
-    const [exit, stdout, stderr] = await Promise.all([child.exited, boundedStream(child.stdout, 8 * 1024), boundedStream(child.stderr, 8 * 1024)]);
-    // Permission-denied diagnostics are expected for root-owned image paths.
-    // The positive result is authoritative: every writable root filesystem
-    // directory visible to UID 65532 must be one of the bounded mounts.
-    const writable = stdout.trim() ? stdout.trim().split("\n") : [];
-    const allowed = new Set([WORKSPACE, "/home/napplet", "/tmp", "/var/tmp", "/work", "/run/lock"]);
-    const inaccessibleOnly = stderr.split("\n").filter(Boolean).every((line) => /Permission denied$/u.test(line));
-    return bounded.every(Boolean) && (exit === 0 || (exit === 1 && inaccessibleOnly)) && stderr.length <= 8 * 1024 && writable.every((path) => allowed.has(path));
-  } finally { clearTimeout(timer); child.kill(); }
+  // `find / -xdev` omits every separately-mounted filesystem. Enumerate the
+  // kernel mount table instead, then ask the current (unprivileged) UID which
+  // mount roots it can actually write. A writable mount not in this list is a
+  // refusal, not a best-effort finding.
+  const allowed = new Map<string, number>([[WORKSPACE, 512 * 1024 * 1024], ["/home/napplet", 64 * 1024 * 1024], ["/tmp", 64 * 1024 * 1024], ["/var/tmp", 64 * 1024 * 1024], ["/work", 64 * 1024 * 1024], ["/run/lock", 16 * 1024 * 1024], ["/dev/shm", 64 * 1024 * 1024]]);
+  const unescapeMount = (value: string) => value.replace(/\\040|\\011|\\012|\\134/gu, token => ({ "\\040": " ", "\\011": "\t", "\\012": "\n", "\\134": "\\" })[token]!);
+  const lines = (await readFile("/proc/self/mountinfo", "utf8")).trim().split("\n").filter(Boolean);
+  const mounts = lines.map(line => {
+    const separator = line.indexOf(" - "); const fields = separator < 0 ? [] : line.slice(0, separator).split(" ");
+    if (fields.length < 6 || !fields[4]?.startsWith("/")) throw new Error("WORKER_MOUNTINFO_INVALID");
+    return unescapeMount(fields[4]);
+  });
+  if (new Set(mounts).size !== mounts.length) return false;
+  for (const path of mounts) {
+    const writable = await access(path, constants.W_OK).then(() => true).catch(() => false);
+    if (!writable) continue;
+    const maximum = allowed.get(path); if (maximum === undefined) return false;
+    const fs = await statfs(path);
+    if (Number(fs.type) !== 0x01021994 || Number(fs.bsize) * Number(fs.blocks) <= 0 || Number(fs.bsize) * Number(fs.blocks) > maximum) return false;
+  }
+  return true;
+}
+async function cgroupV2Limits() {
+  const membership = (await readFile("/proc/self/cgroup", "utf8")).trim().split("\n").find(line => line.startsWith("0::"));
+  if (!membership) throw new Error("WORKER_CGROUP_V2_REQUIRED");
+  const relative = membership.slice(3);
+  if (!relative.startsWith("/") || relative.split("/").some(part => part === "..")) throw new Error("WORKER_CGROUP_V2_INVALID");
+  const root = `/sys/fs/cgroup${relative}`;
+  const [controllers, cpu, memory, pids] = await Promise.all([readFile("/sys/fs/cgroup/cgroup.controllers", "utf8"), readFile(`${root}/cpu.max`, "utf8"), readFile(`${root}/memory.max`, "utf8"), readFile(`${root}/pids.max`, "utf8")]);
+  if (!controllers.split(/\s+/u).includes("cpu") || !controllers.split(/\s+/u).includes("memory") || !controllers.split(/\s+/u).includes("pids")) throw new Error("WORKER_CGROUP_V2_REQUIRED");
+  const cpuParts = cpu.trim().split(/\s+/u); const quota = Number(cpuParts[0]), period = Number(cpuParts[1]), memoryMax = Number(memory.trim()), pidsMax = Number(pids.trim());
+  if (cpuParts.length !== 2 || cpuParts[0] === "max" || !Number.isSafeInteger(quota) || !Number.isSafeInteger(period) || quota <= 0 || period <= 0 || quota > period * 2 || !Number.isSafeInteger(memoryMax) || memoryMax <= 0 || memoryMax > 2_048 * 1024 * 1024 || !Number.isSafeInteger(pidsMax) || pidsMax <= 0 || pidsMax > 256) throw new Error("WORKER_CGROUP_LIMIT_REQUIRED");
+  return Object.freeze({ cpuQuotaMicros: quota, cpuPeriodMicros: period, memoryMaxBytes: memoryMax, pidsMax });
+}
+async function noInboundListeners() {
+  const listening = await Promise.all(["/proc/net/tcp", "/proc/net/tcp6"].map(async path => (await readFile(path, "utf8")).split("\n").slice(1).some(line => line.trim().split(/\s+/u)[3] === "0A")));
+  return !listening.some(Boolean);
 }
 async function deniedProbe(probe: string) {
   const child = Bun.spawn(["/toolchain/bin/bun", "/toolchain/bin/denial-probe", `--probe=${probe}`], { stdout: "pipe", stderr: "pipe", env: { PATH: "/toolchain/bin:/usr/bin:/bin" } });
@@ -125,7 +144,7 @@ async function ready() {
   if (!Number.isSafeInteger(deadlineEpochMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("WORKER_PROVIDER_FACTS_INVALID");
   const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
   const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)]);
-  const ports = await readFile("/proc/net/tcp", "utf8").then((text) => !text.split("\n").slice(1).some((line) => line.trim().split(/\s+/u)[3] === "0A")).catch(() => false);
+  const ports = await noInboundListeners().catch(() => false);
   if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("WORKER_ISOLATION_REFUSED");
   console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
 }
@@ -136,18 +155,15 @@ async function ready() {
 async function edgeAudit() {
   const candidateSha256 = digest(arg("--candidate-sha256"), "EDGE_AUDIT_CANDIDATE_REQUIRED");
   const topologySha256 = digest(arg("--topology-sha256"), "EDGE_AUDIT_TOPOLOGY_REQUIRED");
-  const sessionLeaseSha256 = digest(arg("--session-lease-sha256"), "EDGE_AUDIT_LEASE_REQUIRED");
-  const image = arg("--provider-image"); if (!image || !/^.+@sha256:[a-f0-9]{64}$/iu.test(image)) throw new Error("EDGE_AUDIT_IMAGE_REQUIRED");
-  const toolchainSha256 = digest(arg("--toolchain-sha256"), "EDGE_AUDIT_TOOLCHAIN_REQUIRED");
-  const deadlineEpochMs = Number(arg("--provider-deadline-epoch-ms"));
-  const remainingLifetimeMs = deadlineEpochMs - Date.now();
-  if (process.argv.length !== 15 || !Number.isSafeInteger(deadlineEpochMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("EDGE_AUDIT_ARGUMENTS_REQUIRED");
+  if (process.argv.length !== 7 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("EDGE_AUDIT_ARGUMENTS_REQUIRED");
   const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
-  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)]);
-  const ports = await readFile("/proc/net/tcp", "utf8").then((text) => !text.split("\n").slice(1).some((line) => line.trim().split(/\s+/u)[3] === "0A")).catch(() => false);
+  const [boundedWorkspace, writableSurface, network, namespace, kernel, toolchain, limits, ports] = await Promise.all([workspaceBounded(), writableSurfaceConfined(), networkDenied(), namespaceConfined(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true), cgroupV2Limits(), noInboundListeners()]);
   if (!boundedWorkspace || !writableSurface || !network || !namespace || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("EDGE_AUDIT_HARD_STOP_REQUIRED");
-  console.log(JSON.stringify({ version: 1, kind: "edge-native-v1", candidateSha256, topologySha256, image: image.toLowerCase(), sessionLeaseSha256, toolchainSha256, remainingLifetimeMs,
-    hostile: { filesystemDenied: true, networkDenied: true, resourceBounded: true, lifetimeBounded: true, noInboundPorts: true, nonRoot: true, minimalCapabilities: true } }));
+  // Provider image identity and expiry are intentionally absent. They are not
+  // observable inside the sandbox and must come from authenticated
+  // control-plane readback before this output may become an edge certificate.
+  console.log(JSON.stringify({ version: 2, kind: "edge-native-v2", candidateSha256, topologySha256, cgroup: limits,
+    hostile: { filesystemDenied: true, networkDenied: true, noInboundPorts: true, nonRoot: true, minimalCapabilities: true } }));
 }
 async function build() {
   const profile = Bun.file("/toolchain/production-artifact-contract");

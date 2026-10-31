@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { verifyProductionDirectManifestReceipt } from "../../src/worker-adapters/direct-manifest-receipt";
 import { ProductionCapabilityDeclarationSchema } from "../../src/worker-adapters/capability-receipt";
+import { generateCapabilitiesWorkerProfile } from "../../scripts/generate-capabilities-worker-profile";
 
 const hash = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
 const artifactHash = "a".repeat(64);
@@ -26,9 +27,20 @@ test("direct receipt preserves raw identity, purpose and required/optional metad
 });
 
 test("direct profile retains authoritative scaffold scripts and legacy default", async () => {
-  const profile = await Bun.file("toolchains/recipes/capabilities-worker-profile.json").json();
-  expect(profile).toMatchObject({ status: "prepared-profile-not-promoted", artifactContract: "nip5d-direct-v1", sourceVersion: 2, transportBundleVersion: 3, promotion: { selected: false, protectedEvidence: null } });
+  const archived = await Bun.file("toolchains/recipes/capabilities-worker-profile.json").json();
+  // Archived profile bytes remain readable for evidence and resume. New builds
+  // must use an explicitly versioned unpromoted selector instead of rewriting
+  // a profile that may already bind a retained image.
+  expect(archived).toMatchObject({ status: "prepared-profile-not-promoted", artifactContract: "nip5d-direct-v1", sourceVersion: 2, transportBundleVersion: 3, promotion: { selected: false, protectedEvidence: null } });
+  const selected = await Bun.file("toolchains/recipes/capabilities-worker-current.json").json();
+  expect(selected).toMatchObject({ version: 1, status: "unpromoted", profile: "toolchains/recipes/capabilities-worker-profile-v3-unpromoted.json", sourceVersion: 3, promotion: { selected: false, protectedEvidence: null } });
+  const profile = await Bun.file(selected.profile).json();
+  expect(profile).toMatchObject({ status: "prepared-profile-not-promoted", artifactContract: "nip5d-direct-v1", sourceVersion: 3, transportBundleVersion: 4, promotion: { selected: false, protectedEvidence: null } });
+  expect(profile.inputs).toEqual([...profile.inputs].sort((left, right) => left.path.localeCompare(right.path)));
   for (const input of profile.inputs) expect(new Bun.CryptoHasher("sha256").update(await Bun.file(input.path).bytes()).digest("hex")).toBe(input.sha256);
+  const generated = await generateCapabilitiesWorkerProfile();
+  expect(profile).toEqual(generated.profile);
+  expect(selected).toEqual(generated.selector);
   const legacy = await Bun.file("infra/toolchain/Dockerfile").text();
   const direct = await Bun.file("infra/toolchain/capabilities.Dockerfile").text();
   const cli = await Bun.file("toolchains/recipes/napplet-cli-0.13.0-capabilities-source-build.json").json();

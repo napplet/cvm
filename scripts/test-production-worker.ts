@@ -22,7 +22,7 @@ const logPath = reportPath.replace(/\.json$/u, "") + ".log";
 // Local compatibility test needs mount permission for trusted bootstrap.
 // Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
 // This is deliberately not a production provider isolation certificate.
-const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined"];
+const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--pids-limit", "256", "--security-opt", "apparmor=unconfined"];
 const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`, `napplet-cvm-production-worker-legacy-restore-${run}`, `napplet-cvm-production-worker-restore-recovery-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
@@ -147,6 +147,15 @@ try {
   if (readinessJson.policyVersion !== POLICY || readinessJson.sessionLeaseSha256 !== lease || !checks || typeof checks !== "object" || !REQUIRED_READINESS_CHECKS.every((key) => (checks as Record<string, unknown>)[key] === true)) throw new Error("WORKER_READINESS_ATTESTATION_INVALID");
   report.readiness = { argv: readyArgv, attestation: readinessJson };
 
+  // These are real native negative probes, not parser fixtures: a finite
+  // tmpfs does not substitute for a cgroup pids limit, and an extra writable
+  // mount must not be hidden by a same-device filesystem walk.
+  const edgeAuditArgs = ["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "edge-audit", "--candidate-sha256", "d".repeat(64), "--topology-sha256", "e".repeat(64)];
+  const unboundedPids = await docker(["run", "--rm", "--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
+  const writableEscape = await docker(["run", "--rm", ...resourceArgs, "--tmpfs", "/escape:size=65536", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
+  if (unboundedPids.status === 0 || writableEscape.status === 0) throw new Error("WORKER_EDGE_AUDIT_FALSE_POSITIVE");
+  report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableEscape: writableEscape.status };
+
   if (!direct) {
   const buildName = containers[0]!; const buildDeadline = Date.now() + 600_000;
   await requireDocker(["create", "--name", buildName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...buildCommand(buildDeadline)]);
@@ -259,13 +268,19 @@ try {
     for (let offset = 0; offset < Number(edgeResult.artifactBytes); offset += 24_576) parts.push(Buffer.from(String((await jobCommand("artifact", edgeId, String(offset))).bytesBase64), "base64"));
     const edgeArtifact = JSON.parse(Buffer.concat(parts).toString("utf8"));
     const certification = edgeArtifact.edgeCertification;
-    if (edgeArtifact.version !== 4 || !certification || certification.candidateSha256 !== "d".repeat(64) || certification.topologySha256 !== "e".repeat(64)
-      || certification.workerOperationId !== `capacity-${"f".repeat(40)}` || certification.providerImage !== `registry.example/worker@sha256:${imageHash}`
-      || certification.toolchainSha256 !== toolchain || certification.supply?.format !== "pnpm-lock-v1"
+    if (edgeArtifact.version !== 4 || !certification || certification.version !== 2 || certification.candidateSha256 !== "d".repeat(64) || certification.topologySha256 !== "e".repeat(64)
+      || certification.supply?.format !== "installed-package-inventory-v1" || certification.imageToolchain?.format !== "immutable-image-files-v1"
       || certification.supply.primary.aggregateSha256 !== certification.supply.secondary.aggregateSha256
       || certification.supply.primary.lockSha256 !== certification.supply.secondary.lockSha256
+      || certification.supply.primary.installed?.sha256 !== certification.supply.secondary.installed?.sha256
+      || certification.cgroup?.cpuQuotaMicros > certification.cgroup?.cpuPeriodMicros * 2
+      || certification.cgroup?.memoryMaxBytes > 2_048 * 1024 * 1024 || certification.cgroup?.pidsMax > 256
       || !Object.values(certification.hostile ?? {}).every(value => value === true)) throw new Error("WORKER_NATIVE_EDGE_EVIDENCE_INVALID");
-    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, supply: certification.supply };
+    // This hosted Linux job is a native image mechanism proof. It deliberately
+    // does not possess a provider account or control-plane authority, so it
+    // cannot certify expiry/image provider facts; production assembly requires
+    // the separate authenticated readback port before accepting this result.
+    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, cgroup: certification.cgroup, imageToolchain: certification.imageToolchain, supply: certification.supply, providerReadback: "unavailable-in-native-image-harness" };
   }
   report.durableJobs = jobs; report.durableJobManifests = jobManifests;
   const fence = await jobCommand("fence", lastJobId, lease);

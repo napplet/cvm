@@ -66,7 +66,14 @@ export function createPostgresWorkerOperationJournal(journal: PostgresOperationJ
 export function createPostgresBigQueryUsageReportJournal(journal: PostgresOperationJournal): BigQueryUsageReportJournal {
   assertPostgresOperationJournal(journal);
   const operation = (request: string) => `authoritative-usage:${request}`;
-  const identityFor = (value: Pick<BigQueryUsageReportJournalRecord, "reportRequestSha256" | "dryRunJobId" | "queryJobId">) => identity(value);
+  /* `Pick` is erased at runtime: hash an explicit immutable projection rather
+   * than accidentally binding the journal identity to mutable progression
+   * fields such as `state` or the completed envelope. */
+  const identityFor = (value: Pick<BigQueryUsageReportJournalRecord, "reportRequestSha256" | "dryRunJobId" | "queryJobId">) => identity({
+    reportRequestSha256: value.reportRequestSha256,
+    dryRunJobId: value.dryRunJobId,
+    queryJobId: value.queryJobId,
+  });
   const rank = { claimed: 0, dry_run_dispatch_intent: 1, dry_run_complete: 2, query_dispatch_intent: 3, query_submitted: 4, query_complete: 5 } as const;
   const check = (value: BigQueryUsageReportJournalRecord, expected: Pick<BigQueryUsageReportJournalRecord, "reportRequestSha256" | "dryRunJobId" | "queryJobId">) => {
     if (value.reportRequestSha256 !== expected.reportRequestSha256 || value.dryRunJobId !== expected.dryRunJobId || value.queryJobId !== expected.queryJobId || identityFor(value) !== identityFor(expected)) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");

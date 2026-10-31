@@ -2,6 +2,7 @@ import { createMountedReleaseCleanup } from "./release-cleanup";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ReleaseProviderId } from "../release/contracts";
+import type { AuthoritativeUsageRecoveryPort } from "../release/controller";
 import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity, validateAuthorizationRequest } from "../release/authorization";
 import type { ReleaseProviderPort } from "../release/providers";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../release/native-registry";
@@ -694,8 +695,18 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
     accountScopeSha256,
   });
   if (!google.authoritativeUsage) throw new Error("PRODUCTION_USAGE_RECOVERY_REPORTER_REQUIRED");
-  const postgres = await openProductionPostgresPool(input.config, input.secrets);
-  try {
+  /* Preparing the narrowly-scoped capability is deliberately no-effect.  In
+   * particular, a controller must be able to load its already-pinned mounted
+   * material without opening Cloud SQL before it has selected a completed
+   * original operation.  The reporter opens its authority lazily on the one
+   * sealed `recover` operation below; that operation still reads the original
+   * journal before it can obtain ADC or contact BigQuery/GCS. */
+  let postgres: Awaited<ReturnType<typeof openProductionPostgresPool>> | undefined;
+  let reporter: AuthoritativeUsageRecoveryPort | undefined;
+  const recoveryReporter = async () => {
+    if (reporter) return reporter;
+    postgres = await openProductionPostgresPool(input.config, input.secrets);
+    try {
     const tokenSource = createGoogleAdcTokenSource({
       projectId: input.config.projectId,
       quotaProjectId: input.config.projectId,
@@ -722,13 +733,23 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
     /* Do not return the dispatch-capable reporter. This sealed wrapper omits
      * `capture` entirely and fixes recovery mode internally, so no caller that
      * receives this factory result can create a grant or issue jobs.insert. */
-    const reporter: import("../release/controller").AuthoritativeUsageRecoveryPort = Object.freeze({
-      recover: async value => dispatchReporter.capture({ ...value, mode: "recovery" }),
+    reporter = Object.freeze({
+      recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => dispatchReporter.capture({ ...value, mode: "recovery" }),
       readArtifact: dispatchReporter.readArtifact,
     });
-    return Object.freeze({ receipt: mountedReceipt, reporter, close: postgres.close });
-  } catch (error) {
-    await postgres.close().catch(() => undefined);
-    throw error;
-  }
+    return reporter;
+    } catch (error) {
+      await postgres.close().catch(() => undefined);
+      postgres = undefined;
+      throw error;
+    }
+  };
+  return Object.freeze({
+    receipt: mountedReceipt,
+    reporter: Object.freeze({
+      recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => (await recoveryReporter()).recover(value),
+      readArtifact: async (value: Parameters<AuthoritativeUsageRecoveryPort["readArtifact"]>[0]) => (await recoveryReporter()).readArtifact(value),
+    }),
+    close: async () => { await postgres?.close(); },
+  });
 }

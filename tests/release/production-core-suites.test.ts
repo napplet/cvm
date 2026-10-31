@@ -8,6 +8,7 @@ import { runLiveRestoreCertification, type LiveRestorePort } from "../../src/cer
 import { assertMountedFreshWorkspaceSubject } from "../../src/production/mounted-fresh-restore-runtime";
 import { openRetainedSubject, sealRetainedSubject } from "../../src/production/retained-subject-archive";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
+import { createNonGoogleNativeCoreServices } from "../../src/production/non-google-core-services";
 
 const hash = "a".repeat(64);
 const candidate = { id: hash, provider: "modal" as const, image: `registry/worker@sha256:${hash}`, sourceSha256: hash };
@@ -26,6 +27,20 @@ test("tracer: native core construction refuses a wrapper-only control path befor
   };
   expect(() => createNativeProductionCoreSuiteAdapters({ candidate, services: wrapper as never })).toThrow("PRODUCTION_CORE_NATIVE_SERVICES_REQUIRED");
   expect(calls).toBe(0);
+});
+
+test("tracer: private non-Google core factory constructs all four native backends without creating an authority", () => {
+  const core = createNonGoogleNativeCoreServices({
+    candidateSha256: hash,
+    topologySha256: "b".repeat(64),
+    successorAuthority: { state: "held" },
+  });
+  expect(core.provenance).toEqual(expect.objectContaining({
+    telemetry: expect.objectContaining({ module: "src/production/non-google-telemetry-certification.ts" }),
+    chaos: expect.objectContaining({ module: "src/production/non-google-chaos-certification.ts" }),
+    restore: expect.objectContaining({ module: "src/production/non-google-fresh-restore-provisioner.ts" }),
+  }));
+  expect(core.dispatch({ operationId: "core:held:telemetry", kind: "telemetry.emit", payload: { observation: { version: "admission-lifecycle-v1", correlationDigest: `sha256:${hash}`, stage: "generation", monotonicMs: 1 } } })).resolves.toMatchObject({ status: "held" });
 });
 
 test("private cohort and fault controls accept only the locked schedules", () => {

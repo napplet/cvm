@@ -200,12 +200,49 @@ async function modalSandboxSection(document: string): Promise<string> {
     }
   }
 }
-function uniqueModalSandboxRate(textSource: string, resource: "CPU" | "Memory", unit: "core" | "GiB"): bigint {
-  const otherResource = resource === "CPU" ? "Memory" : "CPU";
-  const matcher = new RegExp(`\\b${resource}\\b(?:(?!\\b${otherResource}\\b)[\\s\\S]){0,128}?\\bnon(?:[-\\s]+)preemptible\\b(?:(?!\\b${otherResource}\\b)[\\s\\S]){0,128}?\\$?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(?:[0-9.\\s]{0,128})\\/\\s*${unit}\\s*\\/\\s*sec`, "giu");
-  const matches = [...textSource.matchAll(new RegExp(matcher.source, `${matcher.flags.replace(/g/gu, "")}g`))];
-  if (matches.length !== 1 || !matches[0]?.[1]) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
-  return decimalToNanos(matches[0][1]);
+type ModalSandboxElement = { readonly parent?: ModalSandboxElement; readonly children: ModalSandboxElement[]; readonly text: string[]; readonly inSandbox: boolean; };
+function modalSandboxElementRate(element: ModalSandboxElement, resource: "CPU" | "Memory", unit: "core" | "GiB"): bigint | undefined {
+  const source = renderedText(element.text.join(""));
+  const labels = [...source.matchAll(new RegExp(`\\b${resource}\\b`, "giu"))];
+  const qualifiers = [...source.matchAll(/\bnon(?:[-\s]+)preemptible\b/giu)];
+  const rates = [...source.matchAll(new RegExp(`\\$?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(?:[0-9.\\s]{0,128})\\/\\s*${unit}\\s*\\/\\s*sec`, "giu"))];
+  if (labels.length !== 1 || qualifiers.length !== 1 || rates.length !== 1 || !rates[0]?.[1]) return undefined;
+  return decimalToNanos(rates[0][1]);
+}
+function hasRateDescendant(element: ModalSandboxElement, candidates: readonly ModalSandboxElement[]): boolean {
+  for (const candidate of candidates) for (let parent = candidate.parent; parent; parent = parent.parent) if (parent === element) return true;
+  return false;
+}
+async function modalSandboxRates(document: string): Promise<Readonly<{ cpu: bigint; memory: bigint }>> {
+  const stack: ModalSandboxElement[] = []; let sandboxRoot: ModalSandboxElement | undefined;
+  try {
+    const parsed = new HTMLRewriter().on("*", {
+      element(element) {
+        const parent = stack.at(-1);
+        const inSandbox = parent?.inSandbox === true || (element.tagName.toLowerCase() === "section" && element.getAttribute("id") === "sandboxes");
+        const current: ModalSandboxElement = { ...(parent ? { parent } : {}), children: [], text: [], inSandbox };
+        if (parent) parent.children.push(current);
+        if (inSandbox && !parent?.inSandbox) {
+          if (sandboxRoot) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+          sandboxRoot = current;
+        }
+        stack.push(current);
+        element.onEndTag(() => { if (stack.pop() !== current) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); });
+      },
+      text(chunk) { for (const element of stack) if (element.inSandbox) element.text.push(chunk.text); },
+    }).transform(new Response(document));
+    await parsed.text();
+  } catch { throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); }
+  if (!sandboxRoot || stack.length !== 0) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+  const rate = (resource: "CPU" | "Memory", unit: "core" | "GiB") => {
+    const candidates = [sandboxRoot!].flatMap(function visit(element): ModalSandboxElement[] { return [element, ...element.children.flatMap(visit)]; }).filter(element => element !== sandboxRoot && modalSandboxElementRate(element, resource, unit) !== undefined);
+    const innermost = candidates.filter(element => !hasRateDescendant(element, candidates));
+    if (innermost.length !== 1) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+    const value = modalSandboxElementRate(innermost[0]!, resource, unit);
+    if (value === undefined) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+    return value;
+  };
+  return Object.freeze({ cpu: rate("CPU", "core"), memory: rate("Memory", "GiB") });
 }
 function flyMonthlyMachinePrice(document: string, preset: string, memory: string): bigint {
   const escapedPreset = preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const escapedMemory = memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -291,9 +328,8 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);
         let priceNanos: bigint;
         if (provider === "modal") {
-          const sandbox = officialText(await modalSandboxSection(document));
-          const cpu = uniqueModalSandboxRate(sandbox, "CPU", "core");
-          const memory = uniqueModalSandboxRate(sandbox, "Memory", "GiB");
+          const sandbox = await modalSandboxSection(document);
+          const { cpu, memory } = await modalSandboxRates(sandbox);
           priceNanos = (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n);
         } else {
           priceNanos = flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n);

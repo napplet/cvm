@@ -93,12 +93,177 @@ export const NonGoogleCostFactSchema = z.discriminatedUnion("role", [NativeFactS
 export type NonGoogleCostFact = z.infer<typeof NonGoogleCostFactSchema>;
 export type CostEvidenceArtifactResolver = Readonly<{ read(reference: string): Promise<Readonly<{ sourceUrl: string; bytes: Uint8Array }>> }>;
 
+/** The successor graph deliberately has no relation to the historic sixteen
+ * provider IDs.  These are the only certification suites a later native
+ * factory may satisfy, and Plan 67 represents them as explicit requirements
+ * while their backends remain unavailable. */
+const SuccessorSuiteSchema = z.enum([
+  "admission", "telemetry", "chaos", "restore", "security-host", "supply-chain",
+  "contextvm-payment-model", "publication",
+]);
+const GraphRevisionSchema = z.literal("non-google-v1");
+const RoleIdentifierSchema = z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u);
+const EffectIdentifierSchema = z.string().regex(/^[a-z][a-z0-9.-]{2,127}$/u);
+const ModulePathSchema = z.string().min(1).max(256);
+const ExportNameSchema = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{2,127}$/u);
+const PurposeSchema = z.string().regex(/^[a-z][a-z0-9-]{2,127}$/u);
+const NamespaceSchema = z.string().regex(/^[a-z][a-z0-9-]{1,63}:[a-z][a-z0-9-]{1,63}$/u);
+const LEGACY_SUCCESSOR_ROLE_IDS = new Set<string>([
+  "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "contextvm",
+  "cep8_lightning", "cashu", "model", "compatible_host", "signer", "promoted_cli",
+  "upload", "owner_relay", "attestation_relay",
+]);
+
+const SuccessorRoleSchema = z.object({
+  roleId: RoleIdentifierSchema,
+  effectId: EffectIdentifierSchema,
+  costComponentId: RoleIdentifierSchema,
+  suite: SuccessorSuiteSchema,
+  constructor: z.object({
+    modulePath: ModulePathSchema,
+    exportName: ExportNameSchema,
+    purpose: PurposeSchema,
+    namespace: NamespaceSchema,
+  }).strict(),
+  /** `native` identifies a reviewed concrete constructor seam; it is never a
+   * claim that the constructor was run. `unconstructed` remains an explicit
+   * no-effect hold until plans 68–70 supply and prove it. */
+  construction: z.enum(["native", "unconstructed"]),
+}).strict();
+type SuccessorRole = z.infer<typeof SuccessorRoleSchema>;
+
+export type SuccessorGraphInventory = Readonly<{
+  graphRevision: "non-google-v1";
+  candidateSha256: string;
+  topologySha256: string;
+  roles: readonly (SuccessorRole & Readonly<{ constructorSha256: string }>)[];
+  inventorySha256: string;
+}>;
+
+const SuccessorCostDispositionSchema = z.enum([
+  "authoritative_native_usage",
+  "documented_scoped_zero",
+  "included_parent",
+  "explicit_approved_shared_standing",
+  "unknown_held",
+]);
+const SuccessorRoleCostFactSchema = z.object({
+  roleId: RoleIdentifierSchema,
+  effectId: EffectIdentifierSchema,
+  costComponentId: RoleIdentifierSchema,
+  constructorSha256: DigestSchema,
+  disposition: SuccessorCostDispositionSchema,
+  status: z.enum(["available", "held"]),
+  provider: z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u),
+  holdReason: z.string().min(8).max(1024).optional(),
+  evidence: CostEvidenceSchema,
+}).strict().superRefine((value, context) => {
+  if ((value.status === "held") !== (value.disposition === "unknown_held")) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_STATUS_INVALID" });
+  if (value.status === "held" && value.holdReason === undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_REQUIRED" });
+  if (value.status === "available" && value.holdReason !== undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_INVALID" });
+});
+export type SuccessorRoleCostFact = z.infer<typeof SuccessorRoleCostFactSchema>;
+
+export type SuccessorRoleCostBound = Readonly<{
+  schemaVersion: "non-google-successor-role-cost-v1";
+  graphRevision: "non-google-v1";
+  candidateSha256: string;
+  topologySha256: string;
+  inventorySha256: string;
+  facts: readonly SuccessorRoleCostFact[];
+  heldRoleIds: readonly string[];
+}>;
+
 function freeze<T>(value: T): T { return Object.freeze(value); }
 async function sha256(value: Uint8Array): Promise<string> { return Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer)).toString("hex"); }
 async function hashCanonical(value: unknown): Promise<string> { return sha256(new TextEncoder().encode(canonicalJson(value))); }
 function ceilDiv(numerator: bigint, denominator: bigint): bigint { return (numerator + denominator - 1n) / denominator; }
 function safeMicros(value: bigint): number { if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OPENAI_USAGE_COST_OVERFLOW"); return Number(value); }
 function charge(tokens: number, microsPerMillion: number): number { return safeMicros(ceilDiv(BigInt(tokens) * BigInt(microsPerMillion), 1_000_000n)); }
+
+/** Builds a disjoint, candidate-bound successor inventory.  It accepts only
+ * repository constructor provenance, never configuration-provided provider
+ * labels or transport maps.  The result is a preparation record, not a
+ * factory or an authority to resolve credentials, create clients, or issue a
+ * request. */
+export async function createSuccessorGraphInventory(input: Readonly<{
+  graphRevision: "non-google-v1";
+  candidateSha256: string;
+  topologySha256: string;
+  roles: readonly SuccessorRole[];
+}>): Promise<SuccessorGraphInventory> {
+  if (GraphRevisionSchema.parse(input.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
+  const candidateSha256 = DigestSchema.parse(input.candidateSha256);
+  const topologySha256 = DigestSchema.parse(input.topologySha256);
+  const roles = input.roles.map((candidate) => SuccessorRoleSchema.parse(candidate));
+  if (roles.length === 0 || new Set(roles.map((role) => role.roleId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_ROLE_COVERAGE_REQUIRED");
+  if (new Set(roles.map((role) => role.effectId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_EFFECT_DUPLICATE");
+  if (new Set(roles.map((role) => role.costComponentId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_COST_COMPONENT_DUPLICATE");
+  for (const role of roles) {
+    if (LEGACY_SUCCESSOR_ROLE_IDS.has(role.roleId)) throw new Error("SUCCESSOR_GRAPH_LEGACY_ROLE_REJECTED");
+    if (!/^src\/[a-z0-9_./-]+\.ts$/u.test(role.constructor.modulePath) || role.constructor.modulePath === "src/release/providers.ts" || role.constructor.exportName === "port") throw new Error("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
+  }
+  const boundRoles = await Promise.all(roles.map(async (role) => Object.freeze({
+    ...role,
+    constructorSha256: await hashCanonical({
+      modulePath: role.constructor.modulePath,
+      exportName: role.constructor.exportName,
+      purpose: role.constructor.purpose,
+      namespace: role.constructor.namespace,
+    }),
+  })));
+  const inventorySha256 = await hashCanonical({ graphRevision: "non-google-v1", candidateSha256, topologySha256, roles: boundRoles });
+  return freeze({ graphRevision: "non-google-v1" as const, candidateSha256, topologySha256, roles: freeze(boundRoles), inventorySha256 });
+}
+
+/** Links a concrete successor role/effect to its own source-bound cost fact.
+ * It is intentionally incapable of producing a maximum charge.  A later
+ * native factory must supply all backends and the precise pricing/usage
+ * adapters; until then, every held component blocks preapproval. */
+export function createSuccessorRoleCostBound(input: Readonly<{
+  graph: SuccessorGraphInventory;
+  facts: readonly SuccessorRoleCostFact[];
+}>): SuccessorRoleCostBound {
+  const graph = input.graph;
+  if (GraphRevisionSchema.parse(graph.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
+  const facts = input.facts.map((fact) => SuccessorRoleCostFactSchema.parse(fact));
+  if (facts.length !== graph.roles.length || new Set(facts.map((fact) => fact.roleId)).size !== graph.roles.length) throw new Error("SUCCESSOR_GRAPH_COST_COVERAGE_REQUIRED");
+  const byRole = new Map(graph.roles.map((role) => [role.roleId, role]));
+  for (const fact of facts) {
+    const role = byRole.get(fact.roleId);
+    if (!role || role.effectId !== fact.effectId || role.costComponentId !== fact.costComponentId || role.constructorSha256 !== fact.constructorSha256) throw new Error("SUCCESSOR_GRAPH_COST_BINDING_INVALID");
+    if (fact.evidence.candidateSha256 !== graph.candidateSha256 || fact.evidence.topologySha256 !== graph.topologySha256) throw new Error("SUCCESSOR_GRAPH_COST_SCOPE_INVALID");
+    if (fact.provider === "openai_responses" && role.roleId !== "model.openai-responses") throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+    if (role.roleId === "model.openai-responses" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+  }
+  const heldRoleIds = facts.filter((fact) => fact.status === "held").map((fact) => fact.roleId);
+  return freeze({
+    schemaVersion: "non-google-successor-role-cost-v1" as const,
+    graphRevision: "non-google-v1" as const,
+    candidateSha256: graph.candidateSha256,
+    topologySha256: graph.topologySha256,
+    inventorySha256: graph.inventorySha256,
+    facts: freeze(facts),
+    heldRoleIds: freeze(heldRoleIds),
+  });
+}
+
+/** Plan 67's sole normal-path result. It checks canonical graph bytes and
+ * returns a typed throw before any credential/client/provider boundary. */
+export function assertSuccessorGraphPreapprovalHeld(input: Readonly<{
+  graph: SuccessorGraphInventory;
+  bound: SuccessorRoleCostBound;
+  nowMs: number;
+}>): never {
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("SUCCESSOR_GRAPH_CLOCK_INVALID");
+  if (input.bound.graphRevision !== input.graph.graphRevision || input.bound.candidateSha256 !== input.graph.candidateSha256 || input.bound.topologySha256 !== input.graph.topologySha256 || input.bound.inventorySha256 !== input.graph.inventorySha256) throw new Error("SUCCESSOR_GRAPH_BINDING_INVALID");
+  const missingSuites = SuccessorSuiteSchema.options.filter((suite) => !input.graph.roles.some((role) => role.suite === suite));
+  if (missingSuites.length > 0) throw new Error("SUCCESSOR_GRAPH_SUITE_BACKEND_MISSING");
+  if (input.graph.roles.some((role) => role.construction !== "native")) throw new Error("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
+  if (input.bound.heldRoleIds.length > 0) throw new Error("SUCCESSOR_GRAPH_COST_HELD");
+  if (input.bound.facts.some((fact) => fact.evidence.freshUntilMs <= input.nowMs)) throw new Error("SUCCESSOR_GRAPH_COST_STALE");
+  throw new Error("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
+}
 
 const CapturedPricingDocumentSchema = z.object({
   sourceUrl: z.literal(OPENAI_RESPONSES_PRICING_URL),

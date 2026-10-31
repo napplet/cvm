@@ -57,6 +57,12 @@ integration.each([false, true])("canonical durability inventory preserves restri
     for (const path of migrations) await source.query(await Bun.file(`migrations/${path}`).text());
     const expansion = await Bun.file("migrations/phase-07/014_production_durability_subjects.sql").text();
     await source.query(legacy ? await Bun.file("tests/fixtures/legacy-durability-subjects.sql").text() : expansion);
+    if (legacy) {
+      for (const deletionState of ["tombstoned", "deleted"] as const) {
+        await source.query("INSERT INTO production_real.durability_subjects(checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until,deletion_state) VALUES($1,'checkpoint',$2,$3,1,$4,$4,'owner-legacy','session-legacy','action-legacy','2030-01-01T00:00:00.000Z',$5)",
+          [`legacy-${deletionState}`, `source-legacy-${deletionState}`, `legacy/${deletionState}`, digest, deletionState]);
+      }
+    }
     await source.query(`CREATE ROLE ${role} LOGIN`);
     await source.query(`GRANT napplet_production_real TO ${role}`);
     application = new Pool({ connectionString: connection(role, sourceDatabase), connectionTimeoutMillis: 2_000 });
@@ -66,10 +72,13 @@ integration.each([false, true])("canonical durability inventory preserves restri
       retentionUntil: "2030-01-01T00:00:00.000Z", deletionState: "retained",
     }));
     for (const subject of subjects) await registry.register(subject);
-    const before = (await source.query("SELECT * FROM production_real.durability_subjects ORDER BY kind")).rows;
+    const before = (await source.query("SELECT * FROM production_real.durability_subjects ORDER BY checkpoint_id,kind")).rows;
     await source.query(expansion);
     await source.query(expansion); // a repeated expansion must preserve the rows
-    expect((await source.query("SELECT * FROM production_real.durability_subjects ORDER BY kind")).rows).toEqual(before);
+    expect((await source.query("SELECT * FROM production_real.durability_subjects ORDER BY checkpoint_id,kind")).rows).toEqual(before);
+    if (legacy) expect((await application.query("SELECT checkpoint_id,deletion_state FROM production_real.durability_subjects WHERE checkpoint_id IN ('legacy-tombstoned','legacy-deleted') ORDER BY checkpoint_id")).rows).toEqual([
+      { checkpoint_id: "legacy-deleted", deletion_state: "deleted" }, { checkpoint_id: "legacy-tombstoned", deletion_state: "tombstoned" },
+    ]);
     for (const subject of subjects) await registry.register({ ...subject, retentionUntil: "2030-01-01T00:00:00Z" });
     const observe = (reader: ProductionRestoreCertification) => reader.restore({ operationId: "inventory-original", action: "restore.inventory", payload: {} });
     const inventory = await observe(restoreReader(pool));
@@ -79,6 +88,12 @@ integration.each([false, true])("canonical durability inventory preserves restri
     await expect(observe(restoreReader(pool, { ...scope, checkpointId: "later-checkpoint" }))).rejects.toThrow();
     const original = subjects[0]; if (!original) throw new Error("SUBJECT_REQUIRED");
     await expect(registry.register({ ...original, ownerId: "foreign-owner" })).rejects.toThrow("PRODUCTION_DURABILITY_SUBJECT_CONFLICT");
+    for (const deletionState of ["tombstoned", "deleted"] as const) {
+      await expect(registry.register({ ...original, checkpointId: `registry-${deletionState}`, sourceIdentity: `registry-${deletionState}`,
+        object: { key: `registry/${deletionState}`, generation: 100, checksum: digest }, deletionState })).rejects.toThrow("PRODUCTION_DURABILITY_SUBJECT_INITIAL_RETAINED_REQUIRED");
+      await expect(application.query("INSERT INTO production_real.durability_subjects(checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until,deletion_state) VALUES($1,'checkpoint',$2,$3,100,$4,$4,'owner-direct','session-direct','action-direct','2030-01-01T00:00:00.000Z',$5)",
+        [`direct-${deletionState}`, `source-direct-${deletionState}`, `direct/${deletionState}`, digest, deletionState])).rejects.toThrow("PRODUCTION_DURABILITY_SUBJECT_INVALID");
+    }
     await expect(application.query("UPDATE production_real.durability_subjects SET owner_id='foreign-owner'")).rejects.toThrow();
     await expect(source.query("UPDATE production_real.durability_subjects SET object_generation=object_generation+1")).rejects.toThrow("PRODUCTION_DURABILITY_IDENTITY_IMMUTABLE");
     await expect(source.query("DELETE FROM production_real.durability_subjects")).rejects.toThrow("PRODUCTION_DURABILITY_DELETE_DENIED");
@@ -92,6 +107,13 @@ integration.each([false, true])("canonical durability inventory preserves restri
     await registry.markDeletion({ ...deletion, state: "deleted" });
     expect((await source.query("SELECT updated_at::text FROM production_real.durability_subjects WHERE checkpoint_id=$1 AND kind=$2", [original.checkpointId, original.kind])).rows).toEqual(updated);
     await expect(registry.markDeletion({ ...deletion, state: "tombstoned" })).rejects.toThrow("PRODUCTION_DURABILITY_DELETE_BINDING_REQUIRED");
+    const direct = subjects[1]; if (!direct) throw new Error("DIRECT_SUBJECT_REQUIRED");
+    const directDeletion = { checkpointId: direct.checkpointId, kind: direct.kind, objectGeneration: direct.object.generation, objectChecksum: direct.object.checksum };
+    await registry.markDeletion({ ...directDeletion, state: "deleted" });
+    const directUpdated = (await source.query("SELECT deletion_state,updated_at::text FROM production_real.durability_subjects WHERE checkpoint_id=$1 AND kind=$2", [direct.checkpointId, direct.kind])).rows;
+    expect(directUpdated).toMatchObject([{ deletion_state: "deleted" }]);
+    await registry.markDeletion({ ...directDeletion, state: "deleted" });
+    expect((await source.query("SELECT deletion_state,updated_at::text FROM production_real.durability_subjects WHERE checkpoint_id=$1 AND kind=$2", [direct.checkpointId, direct.kind])).rows).toEqual(directUpdated);
     await expect(application.query("UPDATE production_real.durability_subjects SET deletion_state='retained'")).rejects.toThrow("PRODUCTION_DURABILITY_IDENTITY_IMMUTABLE");
     const expected = await observe(restoreReader(pool));
     expect((await source.query("SELECT count(*)::int AS count FROM production_real.ledger_entries")).rows).toEqual([{ count: 0 }]);

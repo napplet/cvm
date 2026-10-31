@@ -26,6 +26,7 @@ export function createProductionDurabilitySubjectRegistry(pool: PostgresSqlPool)
   return Object.freeze({
     async register(raw) {
       const subject = DurabilitySubjectSchema.parse({ kind: raw.kind, sourceIdentity: raw.sourceIdentity, object: raw.object, payloadSha256: raw.payloadSha256, ownerId: raw.ownerId, retentionUntil: raw.retentionUntil, deletionState: raw.deletionState });
+      if (subject.deletionState !== "retained") throw new Error("PRODUCTION_DURABILITY_SUBJECT_INITIAL_RETAINED_REQUIRED");
       subject.retentionUntil = new Date(subject.retentionUntil).toISOString();
       const checkpointId = Identity.parse(raw.checkpointId); const sessionId = Identity.parse(raw.sessionId); const actionId = Identity.parse(raw.actionId);
       const inserted = await query("INSERT INTO production_real.durability_subjects(checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until,deletion_state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(checkpoint_id,kind) DO NOTHING RETURNING checkpoint_id", [checkpointId, subject.kind, subject.sourceIdentity, subject.object.key, subject.object.generation, subject.object.checksum, subject.payloadSha256, subject.ownerId, sessionId, actionId, subject.retentionUntil, subject.deletionState]);

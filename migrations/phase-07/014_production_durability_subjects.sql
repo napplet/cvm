@@ -34,6 +34,7 @@ BEGIN
        OR NEW.object_generation NOT BETWEEN 1 AND 9007199254740991
        OR NEW.object_checksum::text !~* '^[a-f0-9]{64}$'
        OR NEW.payload_sha256::text !~* '^[a-f0-9]{64}$'
+       OR NEW.deletion_state <> 'retained'
        OR NOT isfinite(NEW.retention_until) THEN
       RAISE EXCEPTION 'PRODUCTION_DURABILITY_SUBJECT_INVALID';
     END IF;

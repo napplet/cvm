@@ -25,6 +25,12 @@ test("durability inventory is keyed by its original checkpoint, not a latest act
     throw new Error(`unexpected query ${text}`);
   });
   const registry = createProductionDurabilitySubjectRegistry(pool);
+  for (const deletionState of ["tombstoned", "deleted"] as const) {
+    await expect(registry.register({ checkpointId: `checkpoint-${deletionState}`, sessionId: "session-original", actionId: "action-original", kind: "checkpoint",
+      sourceIdentity: `source:${deletionState}`, object: { key: `objects/${deletionState}`, generation: 1, checksum: digest }, payloadSha256: digest,
+      ownerId: "owner-original", retentionUntil: "2030-01-01T00:00:00.000Z", deletionState })).rejects.toThrow("PRODUCTION_DURABILITY_SUBJECT_INITIAL_RETAINED_REQUIRED");
+  }
+  expect(subjects).toHaveLength(0);
   for (const [index, kind] of DURABILITY_SUBJECT_KINDS.entries()) await registry.register({ checkpointId: "checkpoint-original", sessionId: "session-original", actionId: "action-original", kind, sourceIdentity: `source:${kind}`, object: { key: `objects/${kind}`, generation: index + 1, checksum: digest }, payloadSha256: digest, ownerId: "owner-original", retentionUntil: "2030-01-01T00:00:00.000Z", deletionState: "retained" });
   expect(await registry.inventory({ checkpointId: "checkpoint-original", sessionId: "session-original", ownerId: "owner-original" })).toHaveLength(7);
   await expect(registry.inventory({ checkpointId: "checkpoint-later", sessionId: "session-original", ownerId: "owner-original" })).rejects.toThrow();

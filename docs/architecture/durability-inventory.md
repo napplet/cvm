@@ -15,8 +15,10 @@ layout without rewriting rows. Restricted controllers receive SELECT, INSERT
 and lifecycle-column UPDATE only. SQL guards preserve identity and permit
 retained-to-tombstoned-to-deleted or retained-to-deleted transitions. Exact
 deletion-marker retries read the existing outcome; they cannot restore a deleted
-record or change its object generation. The restore service consumes the same
-scoped registry through its already realm-bound pool.
+record or change its object generation. Fresh registrations must start retained;
+historical terminal rows remain readable during a non-rewriting expansion. The
+restore service consumes the same scoped registry through its already realm-bound
+pool.
 
 Historical private `008_checkpoint_crypto.sql` and
 `009_continuation_worker_allocations.sql` describe older incompatible layouts.

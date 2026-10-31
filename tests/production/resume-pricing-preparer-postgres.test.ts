@@ -1273,11 +1273,23 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey)).toEqual(claimBeforeCleanup);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
     expect(await nativeWorkerRecords.read(workerOperationId)).toMatchObject({ resourceId: "fixture-workspace-machine", requestSha256: "c".repeat(64), state: "terminated" });
+    const cleanupKey = `priced-worker-cleanup:${hash({ accountId, claimReference: workspaceClaim.claimReference })}`;
+    const terminalProof = await cleanupJournal.read<Record<string, unknown>>(`${cleanupKey}:terminated:v2`);
+    if (!terminalProof) throw new Error("V2_TERMINAL_CLEANUP_PROOF_REQUIRED");
+    const forgedProof = { ...terminalProof.value, leaseToken: "lease:forged" };
+    const forgedCleanupJournal = new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup-forged", scopeSha256: "8".repeat(64) });
+    await forgedCleanupJournal.claim(`${cleanupKey}:terminated:v2`, hash(forgedProof), forgedProof);
+    const getsBeforeForgedTerminalProof = cleanupGets;
+    await expect(new ProductionPricedContinuationCleanup({ ...cleanupInput, journal: forgedCleanupJournal }).cleanup(accountId, workspaceResume.idempotencyKey))
+      .rejects.toThrow("PRICED_CLEANUP_PROOF_BINDING_DENIED");
+    expect(cleanupGets).toBe(getsBeforeForgedTerminalProof);
     expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
     // A fresh public facade instance performs the terminal query/replay only:
     // it traverses the mounted runner but cannot redispatch the original model
     // or worker operation after its exact cleanup has completed.
+    const getsBeforeMountedTerminalReplay = cleanupGets;
     expect(await mountedService.resume(workspaceResume)).toEqual(coreTerminal);
+    expect(cleanupGets).toBe(getsBeforeMountedTerminalReplay);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
     if (directWorker) {
       if (coreTerminal.status !== "completed" || !coreTerminal.artifactId) throw new Error("OWNED_DIRECT_ARTIFACT_REQUIRED");

@@ -123,6 +123,41 @@ async function main(): Promise<void> {
       writeMountedSecret(secrets, "gcs.migrationBackupKeyReference", bytes32(10)),
       writeMountedSecret(secrets, "checkpoint.kekReference", bytes32(11)),
     ]);
+    const incompleteGoogleRecord = materializeMountedProductionSessionRecord({ config, measured: {
+      ...fixture.measured,
+      // JSON-record valid but deliberately incomplete for the typed mounted
+      // Google factory. This reaches the already-opened ContextVM client and
+      // proves normal-startup cleanup closes it on a later construction error.
+      googleControls: { cloudRun: {}, cloudSql: {}, collector: {} },
+    } });
+    await writeMountedSecret(secrets, "certification.sessionMaterialReference", JSON.stringify(incompleteGoogleRecord));
+    let failedHandler: ((message: unknown) => void) | undefined;
+    const failedConstructionEvents: string[] = [];
+    await expect(openMountedProductionSession({
+      config,
+      secrets,
+      now: () => nowMs,
+      postgresConstructionTransport: Object.freeze({
+        async open() {
+          const { Pool } = await import("pg");
+          const pool = new Pool({ connectionString: database, connectionTimeoutMillis: 2_000 });
+          await pool.query("SELECT current_user");
+          return Object.freeze({ pool, close: () => pool.end() });
+        },
+      }),
+      constructionTransport: Object.freeze({
+        onMessage(value) { failedConstructionEvents.push("handler"); failedHandler = value; },
+        async start() { failedConstructionEvents.push("start"); },
+        async send(value) {
+          const message = value as { method?: string; id?: string };
+          failedConstructionEvents.push(message.method ?? "response");
+          if (message.id === "cert:certification_bootstrap:1") failedHandler?.({ jsonrpc: "2.0", id: message.id, result: {} });
+        },
+        async close() { failedConstructionEvents.push("close"); },
+      }),
+    })).rejects.toThrow();
+    expect(failedConstructionEvents).toContain("close");
+    await writeMountedSecret(secrets, "certification.sessionMaterialReference", JSON.stringify(record));
     let handler: ((message: unknown) => void) | undefined;
     const constructionEvents: string[] = [];
     const session = await openMountedProductionSession({

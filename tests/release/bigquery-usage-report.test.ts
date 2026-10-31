@@ -120,3 +120,47 @@ test("GET-only recovery captures the original completed job and reuses its immut
   expect(await createBigQueryUsageReportCollector({ ...options, now: () => 20 }).recover(value)).toEqual(result);
   expect(calls).toEqual(["GET"]);
 });
+
+test("concurrent recovery clocks converge on one persisted capture without submitting a query", async () => {
+  const value = await grant();
+  const queryJobId = `usage_${value.reportRequestSha256.slice(0, 48)}`;
+  const journal = createMemoryBigQueryUsageReportJournal([{
+    reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`,
+    queryJobId, state: "query_submitted", dryRunBytes: "10",
+  }]);
+  const store = artifacts();
+  const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com" });
+  let clock = 10;
+  const calls: string[] = [];
+  const options = {
+    projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", journal, artifacts: store, now: () => clock++,
+    tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } },
+    fetch: async (_url: string, init: RequestInit) => {
+      calls.push(init.method ?? "GET");
+      return new Response(JSON.stringify({ jobComplete: true, jobReference: { jobId: queryJobId, location: "US" }, totalBytesProcessed: "10", rows: [{ f: [{ v: "1.000000" }, { v: "0.000000" }] }] }), { headers: { "content-type": "application/json" } });
+    },
+  };
+  const [first, second] = await Promise.all([createBigQueryUsageReportCollector(options).recover(value), createBigQueryUsageReportCollector(options).recover(value)]);
+  expect(first.envelope).toBeDefined();
+  expect(first).toEqual(second);
+  expect(calls).toEqual(["GET", "GET"]);
+  expect(await createBigQueryUsageReportCollector(options).recover(value)).toEqual(first);
+  expect(calls).toHaveLength(2);
+});
+
+test("a report journal without original query dispatch intent cannot acquire ADC or read a nonexistent job", async () => {
+  const value = await grant();
+  for (const state of ["claimed", "dry_run_dispatch_intent", "dry_run_complete"] as const) {
+    const journal = createMemoryBigQueryUsageReportJournal([{
+      reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`,
+      queryJobId: `usage_${value.reportRequestSha256.slice(0, 48)}`, state,
+    }]);
+    let effects = 0;
+    const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => 10, journal,
+      tokenSource: { async getAccessToken() { effects++; throw new Error("UNEXPECTED_ADC"); } },
+      fetch: async () => { effects++; throw new Error("UNEXPECTED_HTTP"); },
+    });
+    expect((await collector.recover(value)).envelope).toBeUndefined();
+    expect(effects).toBe(0);
+  }
+});

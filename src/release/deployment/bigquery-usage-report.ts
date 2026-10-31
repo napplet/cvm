@@ -12,7 +12,7 @@ const ProjectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
  * statistics, etc.) in normal query responses. Validate the fields that bind
  * this report and retain the raw bytes; rejecting unknown documented fields
  * would turn an otherwise recoverable observation into a false failure. */
-const QueryResultSchema = z.object({ jobComplete: z.boolean().optional(), jobReference: z.object({ jobId: JobIdSchema, location: z.string().min(1).max(32) }).strict(), totalBytesProcessed: BytesSchema.optional(), rows: z.array(z.object({ f: z.array(z.object({ v: z.string().nullable() }).strict()) }).strict()).optional(), pageToken: z.string().min(1).max(1_024).optional() }).passthrough();
+const QueryResultSchema = z.object({ jobComplete: z.boolean().optional(), jobReference: z.object({ projectId: z.string().optional(), jobId: JobIdSchema, location: z.string().min(1).max(32) }).strict(), totalBytesProcessed: BytesSchema.optional(), rows: z.array(z.object({ f: z.array(z.object({ v: z.string().nullable() }).strict()) }).strict()).optional(), pageToken: z.string().min(1).max(1_024).optional() }).passthrough();
 /** jobs.insert returns a Job resource rather than a getQueryResults response.
  * Keep only the identity and dry-run byte fact we can independently bind. */
 const JobInsertSchema = z.object({
@@ -118,6 +118,54 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
       return Object.freeze({ advanced: false, record });
     }
   }
+  async function completedCapture(grant: BillingObservationGrant, record: BigQueryUsageReportJournalRecord): Promise<BigQueryUsageReportCapture> {
+    const unknown = { status: "unknown" as const, providerJobId: record.queryJobId, reportRequestSha256: grant.reportRequestSha256 };
+    const envelope = record.envelope;
+    if (!envelope || !input.artifacts || envelope.grantSha256 !== grant.grantSha256
+      || envelope.reportRequestSha256 !== grant.reportRequestSha256 || envelope.providerJobId !== record.queryJobId) return Object.freeze(unknown);
+    const raw = await input.artifacts.readExact(envelope.rawArtifact);
+    if (!raw) return Object.freeze(unknown);
+    try { await verifyAuthoritativeUsageReportArtifact(envelope, raw); }
+    catch { return Object.freeze(unknown); }
+    return Object.freeze({ ...unknown, grossMeteredMicros: envelope.grossMeteredMicros ?? undefined, creditsMicros: envelope.creditsMicros ?? undefined, envelope });
+  }
+  /** Recording the response to an already dispatched query is observation,
+   * not permission to submit another query. Both entry points use this same
+   * decoder, exact-byte artifact writer and original-job transition. */
+  async function observeQuery(grant: BillingObservationGrant, record: BigQueryUsageReportJournalRecord): Promise<BigQueryUsageReportCapture> {
+    const queryJobId = jobId("usage", grant.reportRequestSha256);
+    const unknown = { status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 };
+    if (record.state === "query_complete") return completedCapture(grant, record);
+    if (record.state !== "query_dispatch_intent" && record.state !== "query_submitted") return Object.freeze(unknown);
+    const observed = await request(`/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}`, "GET", undefined, true);
+    if (!observed) return Object.freeze(unknown);
+    const results = QueryResultSchema.parse(observed.payload);
+    if (results.jobReference.jobId !== queryJobId || results.jobReference.location !== grant.location
+      || (results.jobReference.projectId !== undefined && results.jobReference.projectId !== grant.projectId)) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
+    if (record.state === "query_dispatch_intent") {
+      record = (await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_dispatch_intent", state: "query_submitted" })).record;
+      if (record.state === "query_complete") return completedCapture(grant, record);
+    }
+    if (!results.jobComplete || !results.totalBytesProcessed || BigInt(results.totalBytesProcessed) > BigInt(grant.maximumBytesBilled)) return Object.freeze(unknown);
+    queryCostMicros(results.totalBytesProcessed, grant);
+    // The fixed aggregate query produces exactly one two-column row. Missing,
+    // paginated or NULL aggregates are held, never interpreted as zero.
+    if (results.pageToken || results.rows?.length !== 1) return Object.freeze(unknown);
+    const row = results.rows[0]!.f;
+    if (row.length !== 2 || row[0]!.v === null || row[1]!.v === null) return Object.freeze(unknown);
+    const grossMeteredMicros = decimalUsdToMicros(row[0]!.v);
+    const creditsMicros = decimalUsdToMicros(row[1]!.v);
+    if (!input.artifacts) return Object.freeze({ ...unknown, grossMeteredMicros, creditsMicros });
+    const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(observed.raw))).toString("hex");
+    const artifact = await input.artifacts.createImmutable({ key: `authoritative-usage/${grant.reportRequestSha256}/${queryJobId}.json`, bytes: observed.raw, sha256 });
+    if (artifact.sha256 !== sha256) throw new Error("BIGQUERY_USAGE_REPORT_ARTIFACT_INVALID");
+    const envelope = await createAuthoritativeUsageReportEnvelope({ version: 1, grantSha256: grant.grantSha256, reportRequestSha256: grant.reportRequestSha256, providerJobId: queryJobId, rawArtifact: artifact, coverage: "unknown", currency: "USD", grossMeteredMicros, creditsMicros, adjustmentsMicros: null, netInvoiceMicros: null, observedAtMs: now(), rawReportBytes: observed.raw });
+    const completed = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_submitted", state: "query_complete", envelope });
+    // Concurrent observers can have different capture clocks. The loser
+    // adopts the winner's verified immutable capture, not its own timestamp.
+    if (completed.record.state !== "query_complete") throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+    return completedCapture(grant, completed.record);
+  }
   return Object.freeze({
     async recover(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
       const grant = await verifyBillingObservationGrant(grantInput);
@@ -126,17 +174,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
       const record = await input.journal.read(grant.reportRequestSha256);
       const queryJobId = jobId("usage", grant.reportRequestSha256);
       if (!record || record.queryJobId !== queryJobId || record.dryRunJobId !== jobId("usage_dry", grant.reportRequestSha256)) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-      if (record.state === "query_complete" && record.envelope && input.artifacts) {
-        const raw = await input.artifacts.readExact(record.envelope.rawArtifact);
-        if (raw) {
-          try { await verifyAuthoritativeUsageReportArtifact(record.envelope, raw); return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256, envelope: record.envelope }); }
-          catch { return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 }); }
-        }
-      }
-      // Expired ordinary authorization may only inspect the deterministic job;
-      // it cannot claim, mark dispatch, or create either jobs.insert request.
-      await request(`/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}`, "GET", undefined, true);
-      return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
+      return observeQuery(grant, record);
     },
     async capture(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
       const grant = await verifyBillingObservationGrant(grantInput);
@@ -147,12 +185,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
       const initial = { reportRequestSha256: grant.reportRequestSha256, dryRunJobId, queryJobId, state: "claimed" as const };
       let record = await claimRecord(initial);
       if (record.state === "query_complete") {
-        if (!record.envelope || !input.artifacts) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-        const raw = await input.artifacts.readExact(record.envelope.rawArtifact);
-        if (!raw) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-        try { await verifyAuthoritativeUsageReportArtifact(record.envelope, raw); }
-        catch { return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 }); }
-        return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256, envelope: record.envelope });
+        return completedCapture(grant, record);
       }
       if (record.state === "claimed") {
         const intent = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "claimed", state: "dry_run_dispatch_intent" });
@@ -190,35 +223,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
         }
       }
       record = await claimRecord(initial);
-      const recovered = record.state === "query_dispatch_intent";
-      const observed = await request(`/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}`, "GET", undefined, recovered);
-      if (!observed) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-      if (recovered) record = (await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_dispatch_intent", state: "query_submitted" })).record;
-      const results = QueryResultSchema.parse(observed.payload);
-      if (results.jobReference.jobId !== queryJobId || results.jobReference.location !== grant.location) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
-      if (!results.jobComplete) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-      if (!results.totalBytesProcessed || BigInt(results.totalBytesProcessed) > BigInt(grant.maximumBytesBilled)) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-      queryCostMicros(results.totalBytesProcessed, grant);
-      const row = results.rows?.[0]?.f;
-      if (!row || results.pageToken) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-      // SQL SUM is NULL when the interval has no matching rows. That is not
-      // evidence of a known zero charge, so keep the operation held.
-      if (row.length < 2 || row[0]!.v === null || row[1]!.v === null) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
-      const grossMeteredMicros = decimalUsdToMicros(row[0]!.v);
-      const creditsMicros = decimalUsdToMicros(row[1]!.v);
-      if (!input.artifacts) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256, grossMeteredMicros, creditsMicros });
-      const bytes = observed.raw;
-      const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
-      const sha256 = Buffer.from(digest).toString("hex");
-      const artifact = await input.artifacts.createImmutable({ key: `authoritative-usage/${grant.reportRequestSha256}/${queryJobId}.json`, bytes, sha256 });
-      if (artifact.sha256 !== sha256) throw new Error("BIGQUERY_USAGE_REPORT_ARTIFACT_INVALID");
-      const envelope = await createAuthoritativeUsageReportEnvelope({ version: 1, grantSha256: grant.grantSha256, reportRequestSha256: grant.reportRequestSha256, providerJobId: queryJobId, rawArtifact: artifact, coverage: "unknown", currency: "USD", grossMeteredMicros, creditsMicros, adjustmentsMicros: null, netInvoiceMicros: null, observedAtMs: now(), rawReportBytes: bytes });
-      const completed = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_submitted", state: "query_complete", envelope });
-      if (!completed.advanced) {
-        if (completed.record.state !== "query_complete" || !completed.record.envelope || JSON.stringify(completed.record.envelope) !== JSON.stringify(envelope)) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
-        return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256, grossMeteredMicros, creditsMicros, envelope: completed.record.envelope });
-      }
-      return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256, grossMeteredMicros, creditsMicros, envelope });
+      return observeQuery(grant, record);
     },
   });
 }

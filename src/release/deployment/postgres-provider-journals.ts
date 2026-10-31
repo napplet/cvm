@@ -4,6 +4,7 @@ import type { GoogleOperationJournal, GoogleOperationRecord } from "./google-cli
 import type { WorkerOperationJournal, WorkerOperationRecord } from "./worker-clients";
 import { initialVertexRecoveryState, VertexRecoveryBindingSchema, VertexRecoveryStateSchema, type VertexRecoveryBinding } from "./vertex-recovery-scan";
 import type { VertexOperationJournal } from "./vertex-client";
+import type { BigQueryUsageReportJournal, BigQueryUsageReportJournalRecord } from "./bigquery-usage-report";
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -55,6 +56,48 @@ export function createPostgresWorkerOperationJournal(journal: PostgresOperationJ
       retainFacts(current, input, ["resourceId", "providerCreatedAtMs"]);
       return { ...current, ...clean(input), state: rank[input.state] > rank[current.state] ? input.state : current.state };
     }); },
+  });
+}
+
+/** Durable report-job intent for the BigQuery collector.  This deliberately
+ * lives in the production operation authority rather than controller files:
+ * a restart can recover only the one request/job identity it claimed before
+ * submitting a provider query. */
+export function createPostgresBigQueryUsageReportJournal(journal: PostgresOperationJournal): BigQueryUsageReportJournal {
+  assertPostgresOperationJournal(journal);
+  const operation = (request: string) => `authoritative-usage:${request}`;
+  /* `Pick` is erased at runtime: hash an explicit immutable projection rather
+   * than accidentally binding the journal identity to mutable progression
+   * fields such as `state` or the completed envelope. */
+  const identityFor = (value: Pick<BigQueryUsageReportJournalRecord, "reportRequestSha256" | "dryRunJobId" | "queryJobId">) => identity({
+    reportRequestSha256: value.reportRequestSha256,
+    dryRunJobId: value.dryRunJobId,
+    queryJobId: value.queryJobId,
+  });
+  const rank = { claimed: 0, dry_run_dispatch_intent: 1, dry_run_complete: 2, query_dispatch_intent: 3, query_submitted: 4, query_complete: 5 } as const;
+  const check = (value: BigQueryUsageReportJournalRecord, expected: Pick<BigQueryUsageReportJournalRecord, "reportRequestSha256" | "dryRunJobId" | "queryJobId">) => {
+    if (value.reportRequestSha256 !== expected.reportRequestSha256 || value.dryRunJobId !== expected.dryRunJobId || value.queryJobId !== expected.queryJobId || identityFor(value) !== identityFor(expected)) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+  };
+  return Object.freeze({
+    async claim(input) {
+      const claimed = await journal.claim(operation(input.reportRequestSha256), identityFor(input), clean(input));
+      const record = clean(claimed.record.value) as BigQueryUsageReportJournalRecord;
+      check(record, input);
+      return Object.freeze({ claimed: claimed.claimed, record });
+    },
+    async read(reportRequestSha256) {
+      const saved = await journal.read<BigQueryUsageReportJournalRecord>(operation(reportRequestSha256));
+      return saved ? clean(saved.value) as BigQueryUsageReportJournalRecord : undefined;
+    },
+    async mark(input) {
+      const key = operation(input.reportRequestSha256);
+      return update<BigQueryUsageReportJournalRecord>(journal, key, current => {
+        if (current.reportRequestSha256 !== input.reportRequestSha256 || current.state !== input.expected || rank[input.state] < rank[current.state]) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+        if (input.dryRunBytes !== undefined && current.dryRunBytes !== undefined && current.dryRunBytes !== input.dryRunBytes) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+        if (input.envelope !== undefined && current.envelope !== undefined && canonical(current.envelope) !== canonical(input.envelope)) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+        return clean({ ...current, state: input.state, ...(input.dryRunBytes === undefined ? {} : { dryRunBytes: input.dryRunBytes }), ...(input.envelope === undefined ? {} : { envelope: input.envelope }) });
+      });
+    },
   });
 }
 

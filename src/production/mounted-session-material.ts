@@ -2,7 +2,9 @@ import { createMountedReleaseCleanup } from "./release-cleanup";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ReleaseProviderId } from "../release/contracts";
-import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../release/authorization";
+import type { AuthoritativeUsageRecoveryPort } from "../release/controller";
+import { AuthoritativeUsageReportEnvelopeSchema, verifyBillingObservationGrant } from "../release/authoritative-usage-report";
+import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity, validateAuthorizationRequest } from "../release/authorization";
 import type { ReleaseProviderPort } from "../release/providers";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../release/native-registry";
 import { createNativeCloudRunProvider } from "../release/native/cloud-run";
@@ -51,6 +53,13 @@ import { canonicalJson } from "../promotion/schema";
 import { createMountedProductionSourceBuildVerifier } from "./source-build-verifier";
 import { assertMountedSourceBuildPlan } from "./source-build-plan";
 import { ProductionDirectPublicationFactory } from "./direct-publication-factory";
+import { createGoogleAdcTokenSource } from "../release/deployment/google-auth";
+import { createProductionGcsObjectClient } from "./gcs-object-client";
+import { GcsObjectStoreAdapter } from "../continuity/object-store";
+import { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
+import { createPostgresGoogleOperationJournal } from "../release/deployment/postgres-provider-journals";
+import { createMountedBigQueryUsageReporter } from "./mounted-authoritative-billing";
+import { openProductionPostgresPool } from "./postgres";
 
 /** Immutable JSON-only controller facts. Runtime ports are constructed below
  * from these facts and the already-opened production authorities. */
@@ -321,6 +330,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
   dependencies: ProductionGenerationRuntime["dependencies"];
   providers: ProductionCertificationSessionMaterial["providers"];
   workerLifecycles: Readonly<Record<"modal" | "fly", ProductionWorkerLifecyclePort>>;
+  billingReports?: import("../release/controller").AuthoritativeUsageReportPort;
   now?: () => number;
 }>) {
   const execution = input.resolved.execution;
@@ -381,6 +391,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
       releaseBinding: execution.protected.releaseBinding,
     }),
     protectedVerificationReferences: execution.protected.protectedVerificationReferences,
+    ...(input.billingReports ? { billingReports: input.billingReports } : {}),
     finalization: Object.freeze({
       trust: Object.freeze({ materialized, workspace: execution.materialization.workspace, repositoryRoot: execution.finalization.trust.repositoryRoot, releaseManifest: execution.finalization.trust.releaseManifest, sourceArchive: execution.finalization.trust.sourceArchive, reproducibilityRecord: execution.finalization.trust.reproducibilityRecord, supplyChainRecord: execution.finalization.trust.supplyChainRecord }),
       verificationRecords: execution.finalization.verificationRecords,
@@ -595,7 +606,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
         || requestedReceipt.authorizationReceiptSha256 !== suppliedReceipt.authorizationReceiptSha256) {
         throw new Error("PRODUCTION_MOUNTED_PREPARATION_AUTHORIZATION_REQUIRED");
       }
-      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, now });
+      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, ...(mountedGoogle.billingReports ? { billingReports: mountedGoogle.billingReports } : {}), now });
     },
   });
 }
@@ -637,4 +648,186 @@ export async function createProductionCertificationSessionMaterial(input: Readon
     throw new Error("PRODUCTION_MOUNTED_SESSION_AUTHORIZATION_BINDING_REQUIRED");
   }
   return createMountedProductionSessionMaterial({ config: input.config, deploymentConfig: input.deploymentConfig, generation: input.generation, resolved, secrets: input.secrets });
+}
+
+/**
+ * Build only the report-only recovery capability from immutable mounted facts.
+ * Unlike the normal session materializer this must not open relay, worker,
+ * funding, signer, model, publication, or mutation clients. The normal
+ * receipt's expiry is deliberately irrelevant here: the receipt is verified
+ * for cryptographic integrity while the separately signed billing-observation
+ * interval remains the sole clock-bound permission.
+ */
+export async function createProductionAuthoritativeUsageRecovery(input: Readonly<{
+  config: ProductionConfig;
+  deploymentConfig: ProductionCertificationSessionMaterial["deploymentConfig"];
+  authorizationRequest: unknown;
+  secrets: MountedProductionSecretMaterial;
+}>): Promise<Readonly<{ receipt: unknown; reporter: import("../release/controller").AuthoritativeUsageRecoveryPort; close: () => Promise<void> }>> {
+  const [resolved, suppliedRequest, mountedRequestRaw, mountedReceiptRaw] = await Promise.all([
+    loadMountedProductionSessionRecord({ config: input.config, secrets: input.secrets }),
+    validateAuthorizationRequest(input.authorizationRequest),
+    input.secrets.text("certification.authorizationRequestReference", 1_000_000),
+    input.secrets.text("certification.authorizationReceiptReference", 1_000_000),
+  ]);
+  let mountedRequest: unknown;
+  let mountedReceipt: unknown;
+  try {
+    mountedRequest = JSON.parse(mountedRequestRaw);
+    mountedReceipt = JSON.parse(mountedReceiptRaw);
+  } catch { throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID"); }
+  let integrity: Awaited<ReturnType<typeof validateAuthorizationReceiptIntegrity>>;
+  try { integrity = await validateAuthorizationReceiptIntegrity({ request: mountedRequest, receipt: mountedReceipt }); }
+  catch { throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID"); }
+  if (integrity.request.authorizationRequestSha256 !== suppliedRequest.authorizationRequestSha256
+    || integrity.request.candidateSha256 !== input.config.candidateSha256
+    || integrity.request.topologySha256 !== input.config.topologySha256
+    || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256
+    || !integrity.request.billingObservation
+    || Date.now() >= integrity.request.billingObservation.expiresAtMs) {
+    throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID");
+  }
+  const accountScopeSha256 = resolved.discoveries.cloud_run.accountScopeSha256;
+  if (resolved.discoveries.cloud_sql_postgres.accountScopeSha256 !== accountScopeSha256) {
+    throw new Error("PRODUCTION_USAGE_RECOVERY_ACCOUNT_SCOPE_REQUIRED");
+  }
+  const google: MountedGoogleControlConfiguration = Object.freeze({
+    ...(resolved.googleControls as Omit<MountedGoogleControlConfiguration, "accountScopeSha256">),
+    accountScopeSha256,
+  });
+  if (!google.authoritativeUsage) throw new Error("PRODUCTION_USAGE_RECOVERY_REPORTER_REQUIRED");
+  const observation = integrity.request.billingObservation;
+  const artifactReferences = new Map<string, Readonly<{ uri: string; generation: string; sha256: string }>>();
+  const artifactKey = (value: Readonly<{ uri: string; generation: string; sha256: string }>) => canonicalJson([value.uri, value.generation, value.sha256]);
+  let closed = false;
+  let closePromise: Promise<void> | undefined;
+  const assertActive = () => {
+    if (closed) throw new Error("PRODUCTION_USAGE_RECOVERY_CLOSED");
+    if (Date.now() >= observation.expiresAtMs) throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID");
+  };
+  const ownsOperation = (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => {
+    const scope = integrity.request.providerScopes.find(item => item.provider === value.operation.provider);
+    return value.candidateSha256 === input.config.candidateSha256
+      && value.authorizationRequestSha256 === integrity.request.authorizationRequestSha256
+      && value.authorizationReceiptSha256 === integrity.receipt.authorizationReceiptSha256
+      && value.operation.candidateSha256 === value.candidateSha256
+      && value.operation.authorizationRequestSha256 === value.authorizationRequestSha256
+      && value.accountScopeSha256 === google.accountScopeSha256
+      && scope?.accountScopeSha256 === value.accountScopeSha256
+      && scope.projectScopeSha256 === value.projectScopeSha256
+      && integrity.request.orderedEffects.some(effect => effect.provider === value.operation.provider && effect.id === value.operation.effectId && effect.operation === value.operation.operation);
+  };
+  /* Preparing the narrowly-scoped capability is deliberately no-effect.  In
+   * particular, a controller must be able to load its already-pinned mounted
+   * material without opening Cloud SQL before it has selected a completed
+   * original operation.  The reporter opens its authority lazily on the one
+   * sealed `recover` operation below; that operation still reads the original
+   * journal before it can obtain ADC or contact BigQuery/GCS. */
+  let postgres: Awaited<ReturnType<typeof openProductionPostgresPool>> | undefined;
+  let reporter: AuthoritativeUsageRecoveryPort | undefined;
+  let reporterPromise: Promise<AuthoritativeUsageRecoveryPort> | undefined;
+  const recoveryReporter = () => {
+    assertActive();
+    if (reporter) return reporter;
+    if (reporterPromise) return reporterPromise;
+    reporterPromise = (async () => {
+    postgres = await openProductionPostgresPool(input.config, input.secrets);
+    try {
+    const tokenSource = createGoogleAdcTokenSource({
+      projectId: input.config.projectId,
+      quotaProjectId: input.config.projectId,
+      principal: input.config.operator.serviceAccount,
+      accountScopeSha256: google.accountScopeSha256,
+    });
+    const objects = new GcsObjectStoreAdapter({
+      config: { bucket: input.config.gcs.bucket, projectId: input.config.projectId },
+      client: createProductionGcsObjectClient({ bucket: input.config.gcs.bucket, tokenSource }),
+    });
+    const dispatchReporter = createMountedBigQueryUsageReporter({
+      configuration: google.authoritativeUsage,
+      projectId: input.config.projectId,
+      quotaProjectId: input.config.projectId,
+      principal: input.config.operator.serviceAccount,
+      accountScopeSha256: google.accountScopeSha256,
+      tokenSource,
+      googleJournal: createPostgresGoogleOperationJournal(new PostgresOperationJournal(postgres.pool, { namespace: "production-google-control", scopeSha256: input.config.topologySha256 })),
+      billingJournal: new PostgresOperationJournal(postgres.pool, { namespace: "production-authoritative-usage", scopeSha256: input.config.topologySha256 }),
+      pool: postgres.pool,
+      objects,
+      bucket: input.config.gcs.bucket,
+    });
+    /* Do not return the dispatch-capable reporter. This sealed wrapper omits
+     * `capture` entirely and fixes recovery mode internally, so no caller that
+     * receives this factory result can create a grant or issue jobs.insert. */
+    reporter = Object.freeze({
+      recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => dispatchReporter.capture({ ...value, mode: "recovery" }),
+      readArtifact: dispatchReporter.readArtifact,
+    });
+    return reporter;
+    } catch (error) {
+      await postgres.close().catch(() => undefined);
+      postgres = undefined;
+      reporterPromise = undefined;
+      throw error;
+    }
+    })();
+    return reporterPromise;
+  };
+  return Object.freeze({
+    receipt: mountedReceipt,
+    reporter: Object.freeze({
+      recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => {
+        assertActive();
+        if (!ownsOperation(value)) return Object.freeze({ status: "held" as const });
+        const concrete = await recoveryReporter();
+        assertActive();
+        const recovered = await concrete.recover(value);
+        assertActive();
+        if (recovered.status === "captured") {
+          const grant = await verifyBillingObservationGrant(recovered.grant);
+          const envelope = AuthoritativeUsageReportEnvelopeSchema.parse(recovered.envelope);
+          const expectedJob = `usage_${grant.reportRequestSha256.slice(0, 48)}`;
+          if (grant.originalScope.authorizationRequestSha256 !== value.authorizationRequestSha256
+            || grant.originalScope.authorizationReceiptSha256 !== value.authorizationReceiptSha256
+            || grant.originalScope.candidateSha256 !== value.candidateSha256
+            || grant.originalScope.provider !== value.operation.provider || grant.originalScope.operationId !== value.operation.operationId
+            || grant.originalScope.operationRecordSha256 !== value.operationRecordSha256
+            || grant.originalScope.resourceIdentitySha256 !== value.resourceIdentitySha256
+            || grant.originalScope.accountScopeSha256 !== value.accountScopeSha256 || grant.originalScope.projectScopeSha256 !== value.projectScopeSha256
+            || grant.expiresAtMs !== observation.expiresAtMs
+            || envelope.grantSha256 !== grant.grantSha256 || envelope.reportRequestSha256 !== grant.reportRequestSha256
+            || envelope.providerJobId !== expectedJob
+            || envelope.rawArtifact.uri !== `gs://${input.config.gcs.bucket}/authoritative-usage/${grant.reportRequestSha256}/${expectedJob}.json`) {
+            throw new Error("PRODUCTION_USAGE_RECOVERY_ARTIFACT_NOT_AUTHORIZED");
+          }
+          artifactReferences.set(artifactKey(envelope.rawArtifact), Object.freeze({ ...envelope.rawArtifact }));
+        }
+        return recovered;
+      },
+      readArtifact: async (value: Parameters<AuthoritativeUsageRecoveryPort["readArtifact"]>[0]) => {
+        assertActive();
+        const reference = artifactReferences.get(artifactKey(value));
+        if (!reference) throw new Error("PRODUCTION_USAGE_RECOVERY_ARTIFACT_NOT_AUTHORIZED");
+        const concrete = await recoveryReporter();
+        assertActive();
+        const bytes = await concrete.readArtifact(reference);
+        assertActive();
+        return bytes;
+      },
+    }),
+    close: () => {
+      if (closePromise) return closePromise;
+      closed = true;
+      artifactReferences.clear();
+      closePromise = (async () => {
+        await reporterPromise?.catch(() => undefined);
+        const current = postgres;
+        postgres = undefined;
+        reporter = undefined;
+        reporterPromise = undefined;
+        await current?.close();
+      })();
+      return closePromise;
+    },
+  });
 }

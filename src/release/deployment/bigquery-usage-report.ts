@@ -1,0 +1,277 @@
+import { z } from "zod";
+import { createAuthoritativeUsageReportEnvelope, verifyAuthoritativeUsageReportArtifact, verifyBillingObservationGrant, decimalUsdToMicros, reportOnlyGrantAllows, type AuthoritativeUsageReportEnvelope, type BillingObservationGrant } from "../authoritative-usage-report";
+import { googleAccountScopeSha256, type GoogleTokenSource } from "./google-auth";
+
+export type BigQueryFetch = (url: string, init: RequestInit) => Promise<Response>;
+type BigQueryJsonResponse = Readonly<{ payload: unknown; raw: Uint8Array }>;
+
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("BIGQUERY_USAGE_REPORT_TIMEOUT"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { signal.removeEventListener("abort", abort); reject(new Error("BIGQUERY_USAGE_REPORT_TIMEOUT")); };
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+  });
+}
+
+async function boundedReportBytes(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+  if (!response.body) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let complete = false;
+  try {
+    for (;;) {
+      const part = await untilAborted(reader.read(), signal);
+      if (part.done) { complete = true; break; }
+      size += part.value.byteLength;
+      if (size > 1_000_000) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+      chunks.push(part.value);
+    }
+    if (size === 0) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  } finally {
+    if (!complete) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+const JobIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,1024}$/u);
+const BytesSchema = z.string().regex(/^[0-9]{1,18}$/u);
+const ProjectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
+/** BigQuery includes documented envelope fields (kind, schema, cacheHit,
+ * statistics, etc.) in normal query responses. Validate the fields that bind
+ * this report and retain the raw bytes; rejecting unknown documented fields
+ * would turn an otherwise recoverable observation into a false failure. */
+const QueryResultSchema = z.object({ jobComplete: z.boolean().optional(), jobReference: z.object({ projectId: z.string().optional(), jobId: JobIdSchema, location: z.string().min(1).max(32) }).strict(), totalBytesProcessed: BytesSchema.optional(), rows: z.array(z.object({ f: z.array(z.object({ v: z.string().nullable() }).strict()) }).strict()).optional(), pageToken: z.string().min(1).max(1_024).optional() }).passthrough();
+/** jobs.insert returns a Job resource rather than a getQueryResults response.
+ * Keep only the identity and dry-run byte fact we can independently bind. */
+const JobInsertSchema = z.object({
+  jobReference: z.object({ projectId: ProjectIdSchema.optional(), jobId: JobIdSchema, location: z.string().min(1).max(32) }).strict(),
+  statistics: z.object({ totalBytesProcessed: BytesSchema.optional(), query: z.object({ totalBytesProcessed: BytesSchema.optional() }).passthrough().optional() }).passthrough().optional(),
+}).passthrough();
+
+export type BigQueryUsageReportJournalRecord = Readonly<{
+  reportRequestSha256: string;
+  dryRunJobId: string;
+  queryJobId: string;
+  /** Intent is committed before a request. A restarted coordinator may only
+   * query that deterministic job, never post a second report query. */
+  state: "claimed" | "dry_run_dispatch_intent" | "dry_run_complete" | "query_dispatch_intent" | "query_submitted" | "query_complete";
+  dryRunBytes?: string;
+  envelope?: AuthoritativeUsageReportEnvelope;
+}>;
+export type BigQueryUsageReportJournal = Readonly<{
+  claim(input: BigQueryUsageReportJournalRecord): Promise<Readonly<{ claimed: boolean; record: BigQueryUsageReportJournalRecord }>>;
+  read(reportRequestSha256: string): Promise<BigQueryUsageReportJournalRecord | undefined>;
+  mark(input: Readonly<{ reportRequestSha256: string; expected: BigQueryUsageReportJournalRecord["state"]; state: BigQueryUsageReportJournalRecord["state"]; dryRunBytes?: string; envelope?: AuthoritativeUsageReportEnvelope }>): Promise<BigQueryUsageReportJournalRecord>;
+}>;
+
+/** This is a narrow project-owned immutable object boundary. The controller
+ * never accepts a URI or digest from a provider port or public CLI. */
+export type BigQueryUsageReportArtifactStore = Readonly<{
+  createImmutable(input: Readonly<{ key: string; bytes: Uint8Array; sha256: string }>): Promise<Readonly<{ uri: string; generation: string; sha256: string }>>;
+  readExact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
+}>;
+export type BigQueryUsageReportCapture = Readonly<{
+  status: "unknown";
+  providerJobId: string;
+  reportRequestSha256: string;
+  grossMeteredMicros?: number;
+  creditsMicros?: number;
+  envelope?: AuthoritativeUsageReportEnvelope;
+}>;
+
+export function createMemoryBigQueryUsageReportJournal(seed: readonly BigQueryUsageReportJournalRecord[] = []): BigQueryUsageReportJournal {
+  const records = new Map(seed.map((record) => [record.reportRequestSha256, Object.freeze({ ...record })]));
+  return Object.freeze({
+    async claim(input) { const prior = records.get(input.reportRequestSha256); if (prior) return Object.freeze({ claimed: false, record: prior }); const record = Object.freeze({ ...input }); records.set(record.reportRequestSha256, record); return Object.freeze({ claimed: true, record }); },
+    async read(reportRequestSha256) { return records.get(reportRequestSha256); },
+    async mark(input) { const current = records.get(input.reportRequestSha256); if (!current || current.state !== input.expected) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT"); const next = Object.freeze({ ...current, state: input.state, ...(input.dryRunBytes === undefined ? {} : { dryRunBytes: input.dryRunBytes }), ...(input.envelope === undefined ? {} : { envelope: input.envelope }) }); records.set(next.reportRequestSha256, next); return next; },
+  });
+}
+
+function jobId(prefix: string, digest: string): string { return `${prefix}_${digest.slice(0, 48)}`; }
+function queryText(grant: BillingObservationGrant): string {
+  const [project, dataset, table] = grant.detailedExportTable.split(".");
+  return `SELECT CAST(SUM(cost) AS STRING) AS gross_cost, CAST(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS STRING) AS credits FROM \`${project}.${dataset}.${table}\` WHERE project.id = @project_id AND resource.name = @resource_name AND usage_start_time >= TIMESTAMP_MILLIS(@interval_start_ms) AND usage_end_time <= TIMESTAMP_MILLIS(@interval_end_ms) AND EXISTS (SELECT 1 FROM UNNEST(labels) label WHERE label.key = 'napplet-cvm-operation' AND label.value = @operation_id)`;
+}
+function queryPayload(grant: BillingObservationGrant, id: string, dryRun: boolean): unknown {
+  return { jobReference: { projectId: grant.projectId, location: grant.location, jobId: id }, configuration: { dryRun, query: { query: queryText(grant), useLegacySql: false, parameterMode: "NAMED", maximumBytesBilled: grant.maximumBytesBilled, queryParameters: [
+    { name: "project_id", parameterType: { type: "STRING" }, parameterValue: { value: grant.projectId } },
+    { name: "resource_name", parameterType: { type: "STRING" }, parameterValue: { value: grant.originalScope.resourceName } },
+    { name: "operation_id", parameterType: { type: "STRING" }, parameterValue: { value: grant.originalScope.googleOperationLabel } },
+    { name: "interval_start_ms", parameterType: { type: "INT64" }, parameterValue: { value: String(grant.originalScope.intervalStartMs) } },
+    { name: "interval_end_ms", parameterType: { type: "INT64" }, parameterValue: { value: String(grant.originalScope.intervalEndMs) } },
+  ] } } };
+}
+function queryCostMicros(bytes: string, grant: BillingObservationGrant): number {
+  const cost = (BigInt(bytes) * BigInt(grant.reportQueryMicrosPerByteNumerator) + BigInt(grant.reportQueryMicrosPerByteDenominator) - 1n) / BigInt(grant.reportQueryMicrosPerByteDenominator);
+  if (cost > BigInt(grant.reportQueryMaximumCostMicros)) throw new Error("BIGQUERY_USAGE_REPORT_QUERY_COST_EXCEEDED");
+  return Number(cost);
+}
+
+/** Official BigQuery REST collector. It only submits deterministic reporting
+ * jobs and recovers the original job; it never creates/updates release
+ * resources and deliberately returns unknown coverage until a separately
+ * configured provider finality policy exists. */
+export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: string; quotaProjectId: string; principal: string; tokenSource: GoogleTokenSource; journal: BigQueryUsageReportJournal; artifacts?: BigQueryUsageReportArtifactStore; fetch?: BigQueryFetch; now?: () => number }>) {
+  const projectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u).parse(input.projectId);
+  const quotaProjectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u).parse(input.quotaProjectId);
+  const principal = z.string().regex(/^[A-Za-z0-9@._:/-]{3,255}$/u).parse(input.principal);
+  const fetcher = input.fetch ?? fetch;
+  const now = input.now ?? Date.now;
+  async function request(grant: BillingObservationGrant, path: string, method: "GET" | "POST", payload?: unknown, allowMissing = false): Promise<BigQueryJsonResponse | undefined> {
+    reportOnlyGrantAllows(grant, "observe_usage_report", now());
+    const token = await input.tokenSource.getAccessToken();
+    const scope = await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: token.scopes });
+    if (token.projectId !== projectId || token.quotaProjectId !== quotaProjectId || token.principal !== principal || token.accountScopeSha256 !== scope || token.expiresAtMs - 60_000 <= now()) throw new Error("BIGQUERY_USAGE_REPORT_ADC_SCOPE_INVALID");
+    reportOnlyGrantAllows(grant, "observe_usage_report", now());
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    let response: Response | undefined;
+    let consumed = false;
+    try {
+      response = await untilAborted(fetcher(`https://bigquery.googleapis.com${path}`, { method, redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId, accept: "application/json", ...(payload === undefined ? {} : { "content-type": "application/json" }) }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) }), controller.signal);
+      if (allowMissing && response.status === 404) return undefined;
+      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
+      const bytes = await boundedReportBytes(response, controller.signal);
+      consumed = true;
+      reportOnlyGrantAllows(grant, "observe_usage_report", now());
+      try { return Object.freeze({ payload: JSON.parse(new TextDecoder().decode(bytes)), raw: bytes }); } catch { throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID"); }
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      if (!consumed) void response?.body?.cancel().catch(() => undefined);
+    }
+  }
+  async function claimRecord(inputRecord: BigQueryUsageReportJournalRecord): Promise<BigQueryUsageReportJournalRecord> {
+    const claimed = await input.journal.claim(inputRecord);
+    const record = claimed.record;
+    if (record.dryRunJobId !== inputRecord.dryRunJobId || record.queryJobId !== inputRecord.queryJobId) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+    return record;
+  }
+  /** A lost CAS is normal duplicate delivery. Reload the immutable record and
+   * let only the caller that installed a dispatch intent perform its POST. */
+  async function advance(inputMark: Readonly<{ reportRequestSha256: string; expected: BigQueryUsageReportJournalRecord["state"]; state: BigQueryUsageReportJournalRecord["state"]; dryRunBytes?: string; envelope?: AuthoritativeUsageReportEnvelope }>): Promise<Readonly<{ advanced: boolean; record: BigQueryUsageReportJournalRecord }>> {
+    try { return Object.freeze({ advanced: true, record: await input.journal.mark(inputMark) }); }
+    catch (error) {
+      if (!(error instanceof Error) || error.message !== "BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT") throw error;
+      const record = await input.journal.read(inputMark.reportRequestSha256);
+      if (!record) throw error;
+      return Object.freeze({ advanced: false, record });
+    }
+  }
+  async function completedCapture(grant: BillingObservationGrant, record: BigQueryUsageReportJournalRecord): Promise<BigQueryUsageReportCapture> {
+    const unknown = { status: "unknown" as const, providerJobId: record.queryJobId, reportRequestSha256: grant.reportRequestSha256 };
+    const envelope = record.envelope;
+    if (!envelope || !input.artifacts || envelope.grantSha256 !== grant.grantSha256
+      || envelope.reportRequestSha256 !== grant.reportRequestSha256 || envelope.providerJobId !== record.queryJobId) return Object.freeze(unknown);
+    const raw = await input.artifacts.readExact(envelope.rawArtifact);
+    if (!raw) return Object.freeze(unknown);
+    try { await verifyAuthoritativeUsageReportArtifact(envelope, raw); }
+    catch { return Object.freeze(unknown); }
+    return Object.freeze({ ...unknown, grossMeteredMicros: envelope.grossMeteredMicros ?? undefined, creditsMicros: envelope.creditsMicros ?? undefined, envelope });
+  }
+  /** Recording the response to an already dispatched query is observation,
+   * not permission to submit another query. Both entry points use this same
+   * decoder, exact-byte artifact writer and original-job transition. */
+  async function observeQuery(grant: BillingObservationGrant, record: BigQueryUsageReportJournalRecord): Promise<BigQueryUsageReportCapture> {
+    const queryJobId = jobId("usage", grant.reportRequestSha256);
+    const unknown = { status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 };
+    if (record.state === "query_complete") return completedCapture(grant, record);
+    if (record.state !== "query_dispatch_intent" && record.state !== "query_submitted") return Object.freeze(unknown);
+    const observed = await request(grant, `/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}&timeoutMs=1000`, "GET", undefined, true);
+    if (!observed) return Object.freeze(unknown);
+    const results = QueryResultSchema.parse(observed.payload);
+    if (results.jobReference.jobId !== queryJobId || results.jobReference.location !== grant.location
+      || (results.jobReference.projectId !== undefined && results.jobReference.projectId !== grant.projectId)) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
+    if (record.state === "query_dispatch_intent") {
+      record = (await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_dispatch_intent", state: "query_submitted" })).record;
+      if (record.state === "query_complete") return completedCapture(grant, record);
+    }
+    if (!results.jobComplete || !results.totalBytesProcessed || BigInt(results.totalBytesProcessed) > BigInt(grant.maximumBytesBilled)) return Object.freeze(unknown);
+    queryCostMicros(results.totalBytesProcessed, grant);
+    // The fixed aggregate query produces exactly one two-column row. Missing,
+    // paginated or NULL aggregates are held, never interpreted as zero.
+    if (results.pageToken || results.rows?.length !== 1) return Object.freeze(unknown);
+    const row = results.rows[0]!.f;
+    if (row.length !== 2 || row[0]!.v === null || row[1]!.v === null) return Object.freeze(unknown);
+    const grossMeteredMicros = decimalUsdToMicros(row[0]!.v);
+    const creditsMicros = decimalUsdToMicros(row[1]!.v);
+    if (!input.artifacts) return Object.freeze({ ...unknown, grossMeteredMicros, creditsMicros });
+    const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(observed.raw))).toString("hex");
+    reportOnlyGrantAllows(grant, "observe_usage_report", now());
+    const artifact = await input.artifacts.createImmutable({ key: `authoritative-usage/${grant.reportRequestSha256}/${queryJobId}.json`, bytes: observed.raw, sha256 });
+    if (artifact.sha256 !== sha256) throw new Error("BIGQUERY_USAGE_REPORT_ARTIFACT_INVALID");
+    const envelope = await createAuthoritativeUsageReportEnvelope({ version: 1, grantSha256: grant.grantSha256, reportRequestSha256: grant.reportRequestSha256, providerJobId: queryJobId, rawArtifact: artifact, coverage: "unknown", currency: "USD", grossMeteredMicros, creditsMicros, adjustmentsMicros: null, netInvoiceMicros: null, observedAtMs: now(), rawReportBytes: observed.raw });
+    const completed = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_submitted", state: "query_complete", envelope });
+    // Concurrent observers can have different capture clocks. The loser
+    // adopts the winner's verified immutable capture, not its own timestamp.
+    if (completed.record.state !== "query_complete") throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+    return completedCapture(grant, completed.record);
+  }
+  return Object.freeze({
+    async recover(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
+      const grant = await verifyBillingObservationGrant(grantInput);
+      reportOnlyGrantAllows(grant, "observe_usage_report", now());
+      if (grant.projectId !== projectId || grant.allowedReportOrigin !== "https://bigquery.googleapis.com") throw new Error("BIGQUERY_USAGE_REPORT_SCOPE_INVALID");
+      const record = await input.journal.read(grant.reportRequestSha256);
+      const queryJobId = jobId("usage", grant.reportRequestSha256);
+      if (!record || record.queryJobId !== queryJobId || record.dryRunJobId !== jobId("usage_dry", grant.reportRequestSha256)) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
+      return observeQuery(grant, record);
+    },
+    async capture(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
+      const grant = await verifyBillingObservationGrant(grantInput);
+      reportOnlyGrantAllows(grant, "observe_usage_report", now());
+      if (grant.projectId !== projectId || grant.allowedReportOrigin !== "https://bigquery.googleapis.com") throw new Error("BIGQUERY_USAGE_REPORT_SCOPE_INVALID");
+      const dryRunJobId = jobId("usage_dry", grant.reportRequestSha256);
+      const queryJobId = jobId("usage", grant.reportRequestSha256);
+      const initial = { reportRequestSha256: grant.reportRequestSha256, dryRunJobId, queryJobId, state: "claimed" as const };
+      let record = await claimRecord(initial);
+      if (record.state === "query_complete") {
+        return completedCapture(grant, record);
+      }
+      if (record.state === "claimed") {
+        const intent = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "claimed", state: "dry_run_dispatch_intent" });
+        record = intent.record;
+        if (intent.advanced) {
+        const response = await request(grant, `/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, dryRunJobId, true));
+        if (!response) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
+        const dry = JobInsertSchema.parse(response.payload);
+        if (dry.jobReference.jobId !== dryRunJobId || dry.jobReference.location !== grant.location || (dry.jobReference.projectId !== undefined && dry.jobReference.projectId !== grant.projectId)) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
+        const bytes = dry.statistics?.query?.totalBytesProcessed ?? dry.statistics?.totalBytesProcessed;
+        if (!bytes) return Object.freeze({ status: "unknown" as const, providerJobId: dryRunJobId, reportRequestSha256: grant.reportRequestSha256 });
+        if (BigInt(bytes) > BigInt(grant.maximumBytesBilled)) throw new Error("BIGQUERY_USAGE_REPORT_BYTE_CAP_EXCEEDED");
+        queryCostMicros(bytes, grant);
+        record = (await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "dry_run_dispatch_intent", state: "dry_run_complete", dryRunBytes: bytes })).record;
+        }
+      }
+      record = await claimRecord(initial);
+      if (record.state === "dry_run_dispatch_intent") {
+        // The POST outcome is ambiguous. Do not reissue even a dry run under a
+        // new request; a later authorized recovery may inspect only this ID.
+        return Object.freeze({ status: "unknown" as const, providerJobId: dryRunJobId, reportRequestSha256: grant.reportRequestSha256 });
+      }
+      if (record.state === "dry_run_complete") {
+        const bytes = record.dryRunBytes;
+        if (!bytes || BigInt(bytes) > BigInt(grant.maximumBytesBilled)) throw new Error("BIGQUERY_USAGE_REPORT_BYTE_CAP_EXCEEDED");
+        queryCostMicros(bytes, grant);
+        const intent = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "dry_run_complete", state: "query_dispatch_intent" });
+        record = intent.record;
+        if (intent.advanced) {
+        const submitted = await request(grant, `/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, queryJobId, false));
+        if (!submitted) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
+        const submittedJob = JobInsertSchema.parse(submitted.payload);
+        if (submittedJob.jobReference.jobId !== queryJobId || submittedJob.jobReference.location !== grant.location || (submittedJob.jobReference.projectId !== undefined && submittedJob.jobReference.projectId !== grant.projectId)) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
+        record = (await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "query_dispatch_intent", state: "query_submitted" })).record;
+        }
+      }
+      record = await claimRecord(initial);
+      return observeQuery(grant, record);
+    },
+  });
+}

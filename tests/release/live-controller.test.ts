@@ -45,7 +45,7 @@ const manifest = () => ({
 
 test("authorized tracer keeps every versioned live boundary", () => {
   expect(RELEASE_LIVE_CONTROLLER_STATES).toEqual([
-    "receipt_valid", "bootstrap", "provisioning", "observing", "materializing",
+    "receipt_valid", "bootstrap", "provisioning", "observing", "billing_observing", "materializing",
     "protected_suite_running", "finalizing", "cleaning", "blocked", "completed",
   ]);
 });

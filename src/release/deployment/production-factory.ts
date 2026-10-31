@@ -12,7 +12,7 @@ import {
  * production module as the static readiness inventory. The implementation is
  * intentionally mounted/runtime-owned: preapproval only reads this export and
  * never constructs it. */
-export { createProductionCertificationSessionMaterial } from "../../production/mounted-session-material";
+export { createProductionAuthoritativeUsageRecovery, createProductionCertificationSessionMaterial } from "../../production/mounted-session-material";
 
 /**
  * Names are controller-owned opaque locators, never environment variable names

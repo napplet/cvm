@@ -3,7 +3,7 @@ import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-disc
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
 import { loadFinalizedReleaseVerificationAuthority } from "../src/release/production-execution";
 import { CERTIFIER_CONFIG_SHA256_ENV, loadCertifierConfig } from "../src/certification/config";
-import { loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
+import { loadReleaseAuthoritativeUsageRecoverySession, loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
 import { pendingOperatorFundingReadiness, releaseCertificationFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
 import {
@@ -23,7 +23,7 @@ import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "../src/release/
 import { createDeploymentExecutionConfig } from "../src/release/deployment/config";
 import { loadPreparedCollectorPreapproval, materializePreapproval } from "../src/release/preapproval-materializer";
 import { prepareProductionCollectorImage, type PreparedCollectorImage } from "../src/release/collector-image";
-import { validateAuthorizationReceipt } from "../src/release/authorization";
+import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity } from "../src/release/authorization";
 import { verifyFinalizedRelease } from "../src/release/verify-finalization";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -329,13 +329,36 @@ async function main(): Promise<number> {
       return 1;
     }
     if (!status && !dryRun) {
+      const candidateSha256 = await releaseCandidateSha256(candidatePath!);
       const config = await loadCertifierConfig();
-      const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
-      const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session });
-      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
+      const persisted = await new ReleaseCertificationController({ candidatePath: candidatePath!, workspace, workspaceCapability }).status();
+      const result = persisted?.state.status === "billing_observing"
+        ? await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, recovery: await loadReleaseAuthoritativeUsageRecoverySession({ config, candidateSha256, workspace }) })
+        : await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session: await loadReleaseExecutionSession({ config, candidateSha256, workspace }) });
+      const recovery = "held" in result;
+      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, ...(recovery ? { captures: result.captures, reportOnlyRecovery: true } : { authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }) }));
       return result.state.status === "completed" ? 0 : 1;
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
+    /* Recovery is chosen from the durable controller state, never from a CLI
+     * boolean. `--receipt` remains only a digest-addressed record locator and
+     * is checked against that state before the narrow reader is opened. */
+    if (!status && receipt) {
+      const persisted = await new ReleaseCertificationController({ candidatePath: candidatePath!, workspace, workspaceCapability }).status();
+      if (persisted?.state.status === "billing_observing") {
+        if (persisted.state.candidate.candidateSha256 !== candidateSha256 || persisted.state.authorizationReceiptSha256 !== receipt.toLowerCase()) {
+          throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+        }
+        await validateAuthorizationReceiptIntegrity({ request: persisted.authorizationRequest, receipt: controllerReceipt });
+        const config = await loadCertifierConfig();
+        const live = await runReleaseCertification({
+          candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false,
+          recovery: await loadReleaseAuthoritativeUsageRecoverySession({ config, candidateSha256: candidateSha256!, workspace }),
+        });
+        console.log(JSON.stringify({ progress: live.state.status, candidateSha256: live.state.candidate.candidateSha256, topologySha256: live.state.topologySha256, stateSha256: live.state.stateSha256, authorizationReceiptSha256: receipt.toLowerCase(), reportOnlyRecovery: true, captures: live.captures }));
+        return 1;
+      }
+    }
     // Implementation comes first. An incomplete factory must not ask the
     // operator to fund, log in, or approve a candidate it cannot execute.
     let preparedCatalog: LiveCostCatalogPort | undefined;
@@ -443,6 +466,10 @@ async function main(): Promise<number> {
         authorization: { request: result.authorizationRequest, receipt: resolvedReceipt },
       });
       const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session, collectorImage: preparedCollector! });
+      if ("held" in live) {
+        console.log(JSON.stringify({ progress: live.state.status, candidateSha256: live.state.candidate.candidateSha256, topologySha256: live.state.topologySha256, stateSha256: live.state.stateSha256, authorizationReceiptSha256: receipt.toLowerCase(), reportOnlyRecovery: true, captures: live.captures }));
+        return 1;
+      }
       console.log(JSON.stringify({
         progress: live.state.status,
         candidateSha256: live.state.candidate.candidateSha256,

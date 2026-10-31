@@ -45,6 +45,7 @@ test("mounted production session material constructs the complete native provide
   expect(text).not.toContain("deterministic");
   expect(text).not.toContain("PRODUCTION_FINALIZATION_PREPARATION_UNAVAILABLE");
   expect(text).toContain("PRODUCTION_MOUNTED_PREPARATION_BINDING_REQUIRED");
+  expect(text).toContain("mountedGoogle.billingReports");
 });
 
 test("sealed source-build verifier materializes only a receipt-bound worker result", async () => {
@@ -127,6 +128,8 @@ test("Google-native ports are constructed from scope-bound ADC and durable origi
   expect(text).toContain("createGoogleAdcTokenSource");
   expect(text).toContain("createGoogleDeploymentClients");
   expect(text).toContain("createPostgresGoogleOperationJournal");
+  expect(text).toContain("createMountedBigQueryUsageReporter");
+  expect(text).toContain("authoritativeUsageJournal");
   expect(text).toContain("googleIntentJournal");
   expect(text).toContain("provisionOperationId(value.operationId)");
   expect(text).toContain("if (!await googleJournal.read(operationId)) return Object.freeze({ status: \"missing\" as const })");

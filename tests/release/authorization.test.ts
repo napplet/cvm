@@ -5,6 +5,7 @@ import {
   createAuthorizationReceipt,
   createAuthorizationRequest,
   validateAuthorizationReceipt,
+  validateAuthorizationReceiptIntegrity,
 } from "../../src/release/authorization";
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
@@ -89,6 +90,30 @@ test("rejects stale estimates, unitless costs, and tampered receipt inputs", asy
 
 test("rejects cleanup that outlives the exact authorization expiry", async () => {
   await expect(createAuthorizationRequest(input({ cleanupByMs: 1_501 }))).rejects.toThrow("RELEASE_AUTHORIZATION_CLEANUP_UNBOUNDED");
+});
+
+test("keeps separately approved report-only facts bound after the ordinary receipt expires", async () => {
+  const billingObservation = {
+    version: 1 as const,
+    allowedReportOrigin: "https://bigquery.googleapis.com" as const,
+    detailedExportTable: "project-12345.billing_export.gcp_billing_export_resource_v1",
+    location: "US",
+    maximumBytesBilled: "1000000",
+    reportQueryMaximumCostMicros: 10,
+    reportQueryPriceSourceSha256: digest("1"),
+    reportQueryMicrosPerByteNumerator: "1",
+    reportQueryMicrosPerByteDenominator: "1000000",
+    collectorSha256: digest("2"),
+    maximumIntervalMs: 60_000,
+    expiresAtMs: 2_000,
+  };
+  const request = await createAuthorizationRequest(input({ billingObservation }));
+  const receipt = await createAuthorizationReceipt(request);
+
+  await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_500 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+  await expect(validateAuthorizationReceiptIntegrity({ request, receipt })).resolves.toEqual({ request, receipt });
+  await expect(validateAuthorizationReceiptIntegrity({ request: { ...request, billingObservation: { ...billingObservation, maximumBytesBilled: "1000001" } }, receipt })).rejects.toThrow("RELEASE_AUTHORIZATION_REQUEST_INVALID");
+  await expect(createAuthorizationRequest(input({ billingObservation: { ...billingObservation, expiresAtMs: 1_500 } }))).rejects.toThrow("RELEASE_AUTHORIZATION_BILLING_OBSERVATION_INVALID");
 });
 
 test("accepts Cashu-only operator funding for release certification authorization", async () => {

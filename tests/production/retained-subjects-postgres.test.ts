@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { finalizeEvent, verifyEvent } from "nostr-tools/pure";
+import { finalizeEvent, verifyEvent, type Event } from "nostr-tools/pure";
+import { matchFilters, type Filter } from "nostr-tools/filter";
 import { Pool } from "pg";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { bindAccountingRealmPool, createAccountingRealm } from "../../src/funding/accounting-realm";
@@ -64,8 +65,7 @@ import { createNativeProductionCoreSuiteAdapters } from "../../src/release/deplo
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 import { createNonGoogleInvocationAuthorityVerifier } from "../../src/production/non-google-invocation-authority";
 import { createNonGoogleAuthorizationRequestV3 } from "../../src/release/contracts";
-import { openContextVmCertificationClient } from "../../src/release/deployment/contextvm-client";
-import { createAuthorizationRequest, createAuthorizationReceipt } from "../../src/release/authorization";
+import { openContextVmRelayTransport, openNonGoogleContextVmCertificationClient } from "../../src/release/deployment/contextvm-client";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
 import { validateDurabilityInventory } from "../../src/resilience/fault-harness";
 
@@ -83,6 +83,34 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 async function closePool(pool: Pool | undefined): Promise<void> { if (pool) await pool.end(); }
+type RelayData = { subscriptions: Map<string, Filter[]> };
+async function openNativeContextVmFixture(input: Readonly<{ journal: PostgresOperationJournal; candidateSha256: string; topologySha256: string; roleCostBoundSha256: string; authority: Awaited<ReturnType<ReturnType<typeof createNonGoogleInvocationAuthorityVerifier>["verify"]>>; authorizationRequestSha256: string; now: () => number }>) {
+  const cert = process.env.NAPPLET_DURABILITY_TEST_TLS_CERT, key = process.env.NAPPLET_DURABILITY_TEST_TLS_KEY;
+  if (!cert || !key) throw new Error("NATIVE_RESTORE_CONTEXTVM_TLS_REQUIRED");
+  const events: Event[] = [], sockets = new Set<any>();
+  const relay = Bun.serve<RelayData>({ hostname: "127.0.0.1", port: 0, tls: { cert: Bun.file(cert), key: Bun.file(key) }, fetch(request, server) { return server.upgrade(request, { data: { subscriptions: new Map() } }) ? undefined : new Response("not found", { status: 404 }); }, websocket: {
+    open(socket) { sockets.add(socket); }, close(socket) { sockets.delete(socket); },
+    message(socket, bytes) {
+      const frame = JSON.parse(String(bytes));
+      if (frame[0] === "EVENT") {
+        const event = frame[1] as Event; if (!verifyEvent(event)) throw new Error("NATIVE_RESTORE_CONTEXTVM_EVENT_INVALID"); events.push(event); socket.send(JSON.stringify(["OK", event.id, true, ""]));
+        for (const peer of sockets) for (const [id, filters] of peer.data.subscriptions) if (matchFilters(filters, event)) peer.send(JSON.stringify(["EVENT", id, event]));
+      } else if (frame[0] === "REQ") {
+        const id = String(frame[1]), filters = frame.slice(2) as Filter[]; socket.data.subscriptions.set(id, filters);
+        for (const event of events) if (matchFilters(filters, event)) socket.send(JSON.stringify(["EVENT", id, event])); socket.send(JSON.stringify(["EOSE", id]));
+      } else if (frame[0] === "CLOSE") socket.data.subscriptions.delete(String(frame[1]));
+    },
+  } });
+  const serverSigner = new PrivateKeySigner(), clientSigner = new PrivateKeySigner("1".repeat(64)), relays = [`wss://127.0.0.1:${relay.port}`];
+  let service: Awaited<ReturnType<typeof openContextVmRelayTransport>> | undefined, client: Awaited<ReturnType<typeof openNonGoogleContextVmCertificationClient>> | undefined;
+  try {
+    service = await openContextVmRelayTransport({ serviceKeyReference: "nostr:native-restore-service", relaySetSha256: hex("native-restore-relay"), relays, signerBroker: { async resolveContextVmSigner() { return serverSigner; } }, journal: input.journal });
+    service.transport.onInbound(async envelope => service!.transport.sendResponse(envelope.verifiedClientPubkey, { jsonrpc: "2.0", id: envelope.request.id, result: {} }, envelope.requestEventId));
+    await service.start();
+    client = await openNonGoogleContextVmCertificationClient({ certificationKeyReference: "nostr:native-restore-client", serverPubkey: await serverSigner.getPublicKey(), relays, signerBroker: { async resolveContextVmCertificationSigner() { return clientSigner; } }, journal: input.journal, candidateSha256: input.candidateSha256, topologySha256: input.topologySha256, authority: input.authority, authorizationRequestSha256: input.authorizationRequestSha256, roleCostBoundSha256: input.roleCostBoundSha256, now: input.now, timeoutMs: 1_000 });
+    return Object.freeze({ client, async close() { await client?.close(); await service?.close(); relay.stop(true); } });
+  } catch (error) { await client?.close().catch(() => undefined); await service?.close().catch(() => undefined); relay.stop(true); throw error; }
+}
 const migrations = [
   "phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql",
   "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql",
@@ -845,18 +873,16 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         const nativeScope = { checkpointId: nativeCheckpointId, sessionId, ownerId: fixture.ownerId, sourceAuthorityReference: `source:${nativeCheckpointId}` };
         const drivers = new NonGoogleNativeCoreDriverSet({ candidateSha256, topologySha256, roleCostBoundSha256, journal: nativeJournal, capacity, postgres, objectStore: bytea, coolify, signoz, restore, restoreScope: nativeScope, custodyRoots: roots, restorerCapabilitySha256: hex("native-restorer-capability") });
         const services = createNonGoogleNativeCoreServices({ drivers });
-        const scopes = ["production.core"], effects = ["restore.inventory", "restore.prepare"];
+        const scopes = ["edge.payment", "production.core"], effects = ["edge.payment.contextvm", "restore.inventory", "restore.prepare"];
         const authorityRequest = await createNonGoogleAuthorizationRequestV3({ identity: { candidateSha256, sourceSha256: hex("native-source"), configSha256: hex("native-config"), toolchainSha256, topologySha256, failureDomainSha256: hex("native-domain"), retentionSha256: hex("native-retention"), cleanupSha256: hex("native-cleanup"), controllerStateSha256: hex("native-state") }, binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: hex("native-roles"), roleCostBoundSha256, scopesSha256: hex(canonicalJson(scopes)), effectsSha256: hex(canonicalJson(effects)) } });
         const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]), costBytes = new TextEncoder().encode("native-restore-cost-artifact"), costSha256 = hex("native-cost-artifact");
         const unsigned = { version: "non-google-invocation-envelope-v1" as const, issuerId: "fixture-root-1", issuedAtMs: nativeNow - 1, expiresAtMs: nativeNow + 60_000, request: authorityRequest, receipt: { kind: "release-authorization-receipt-v4" as const, version: 4 as const, requestSha256: authorityRequest.requestSha256, candidateSha256, topologySha256, providerGraphRevision: "non-google-v1" as const, roleInventorySha256: hex("native-roles"), roleCostBoundSha256, receiptSha256: hex("native-receipt") }, scopes, effects, costArtifactSha256: costSha256 };
         const digestCost = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", costBytes)), byte => byte.toString(16).padStart(2, "0")).join("");
         const signed = Buffer.from(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(canonicalJson({ ...unsigned, costArtifactSha256: digestCost })))).buffer).toString("base64url");
         const authority = await createNonGoogleInvocationAuthorityVerifier({ trustedIssuers: [{ issuerId: unsigned.issuerId, publicKeySpkiDer: new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey)) }], allowedScopes: scopes, allowedEffects: effects, costArtifact: { bytes: costBytes, sha256: digestCost }, now: () => nativeNow }).verify({ ...unsigned, costArtifactSha256: digestCost, signature: signed });
-        const contextRequest = await createAuthorizationRequest({ candidateSha256, topologySha256, effectPlanSha256: hex("native-context-effects"), controllerStateSha256: hex("native-context-state"), providerCapabilitiesSha256: hex("native-context-capabilities"), orderedEffects: [{ id: "contextvm-fixture", provider: "contextvm", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "collector-fixture", provider: "collector", operation: "verify_integration", estimatedCostMicros: 1 }], providerScopes: [{ provider: "contextvm", accountScopeSha256: hex("native-context-account"), projectScopeSha256: hex("native-context-project") }, { provider: "collector", accountScopeSha256: hex("native-context-account"), projectScopeSha256: hex("native-context-project") }], estimate: { currency: "USD", maximumMicros: 2, sourceId: "fixture", observedAtMs: nativeNow, freshUntilMs: nativeNow + 61_000 }, maximumRunDurationMs: 1_000, cleanupByMs: nativeNow + 10_000, evidenceRetentionDays: 30, artifactRetentionDays: 30, gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: [] }, expiresAtMs: nativeNow + 60_000 });
-        const contextSigner = new PrivateKeySigner("1".repeat(64));
-        const contextvm = await openContextVmCertificationClient({ certificationKeyReference: "nostr:native-restore-fixture", serverPubkey: "b".repeat(64), relays: ["wss://127.0.0.1:1"], signerBroker: { async resolveContextVmCertificationSigner() { return contextSigner; } }, journal: nativeJournal, candidateSha256, topologySha256, authorizationRequest: contextRequest, authorizationReceipt: await createAuthorizationReceipt(contextRequest), now: () => nativeNow, timeoutMs: 1_000 });
+        const contextvm = await openNativeContextVmFixture({ journal: nativeJournal, candidateSha256, topologySha256, roleCostBoundSha256, authority, authorizationRequestSha256: authorityRequest.requestSha256, now: () => nativeNow });
         try {
-          const adapters = createNativeProductionCoreSuiteAdapters({ candidate: { id: candidateSha256, provider: "fly", image, sourceSha256: hex("native-source") }, services, contextvm, authority, requestSha256: authorityRequest.requestSha256 });
+          const adapters = createNativeProductionCoreSuiteAdapters({ candidate: { id: candidateSha256, provider: "fly", image, sourceSha256: hex("native-source") }, services, contextvm: contextvm.client, authority, requestSha256: authorityRequest.requestSha256 });
           await expect(adapters.durability.inventory()).rejects.toThrow("NATIVE_RESTORE_PREPARE_ACK_LOST");
           const subjects = validateDurabilityInventory(await adapters.durability.inventory());
           expect(subjects).toHaveLength(7); expect(new Set(subjects.map(subject => subject.kind))).toEqual(new Set(["checkpoint", "sealed_artifact", "validation_evidence", "usage_receipt", "promotion_evidence", "owner_event", "attestation"]));

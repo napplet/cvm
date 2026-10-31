@@ -70,7 +70,7 @@ jobs:
       - name: Canonical SQL, receipt-bound retained-subject preparation, fresh recovery and priced continuation preservation
         env:
           NAPPLET_POSTGRES17_CONTAINER: ${{ env.NAPPLET_POSTGRES17_CONTAINER }}
-        run: bun test tests/production/durability-registry.test.ts tests/production/durability-registry-postgres.test.ts tests/production/retained-subjects-postgres.test.ts tests/production/resume-pricing-preparer-postgres.test.ts tests/production/checkpoint-postgres.test.ts tests/production/postgres-bytea-object-store-postgres.test.ts tests/production/object-retention-postgres.test.ts --timeout 120000
+        run: bun scripts/test-production-durability.ts
       - name: Build the unselected control image
         run: docker build -f infra/production/Dockerfile -t cvm-control-proof:ci .
       - name: Exact image packaging and fail-closed boot without authority

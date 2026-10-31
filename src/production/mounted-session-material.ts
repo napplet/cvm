@@ -321,6 +321,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
   dependencies: ProductionGenerationRuntime["dependencies"];
   providers: ProductionCertificationSessionMaterial["providers"];
   workerLifecycles: Readonly<Record<"modal" | "fly", ProductionWorkerLifecyclePort>>;
+  billingReports?: import("../release/controller").AuthoritativeUsageReportPort;
   now?: () => number;
 }>) {
   const execution = input.resolved.execution;
@@ -381,6 +382,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
       releaseBinding: execution.protected.releaseBinding,
     }),
     protectedVerificationReferences: execution.protected.protectedVerificationReferences,
+    ...(input.billingReports ? { billingReports: input.billingReports } : {}),
     finalization: Object.freeze({
       trust: Object.freeze({ materialized, workspace: execution.materialization.workspace, repositoryRoot: execution.finalization.trust.repositoryRoot, releaseManifest: execution.finalization.trust.releaseManifest, sourceArchive: execution.finalization.trust.sourceArchive, reproducibilityRecord: execution.finalization.trust.reproducibilityRecord, supplyChainRecord: execution.finalization.trust.supplyChainRecord }),
       verificationRecords: execution.finalization.verificationRecords,
@@ -595,7 +597,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
         || requestedReceipt.authorizationReceiptSha256 !== suppliedReceipt.authorizationReceiptSha256) {
         throw new Error("PRODUCTION_MOUNTED_PREPARATION_AUTHORIZATION_REQUIRED");
       }
-      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, now });
+      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, ...(mountedGoogle.billingReports ? { billingReports: mountedGoogle.billingReports } : {}), now });
     },
   });
 }

@@ -12,6 +12,8 @@ import type { ProductionConfig } from "./config";
 import type { ProductionGenerationRuntime } from "./generation-runtime";
 import { createProductionGcsObjectClient } from "./gcs-object-client";
 import { probeCloudSqlSerializable } from "./cloud-sql-serializable-probe";
+import { createMountedBigQueryUsageReporter, MountedBigQueryUsageReportConfigurationSchema, type MountedBigQueryUsageReportConfiguration } from "./mounted-authoritative-billing";
+import type { AuthoritativeUsageReportPort } from "../release/controller";
 
 type CloudRunDeployment = Readonly<{
   region: string;
@@ -42,6 +44,9 @@ export type MountedGoogleControlConfiguration = Readonly<{
     endpointReference: string;
     deployment: CloudRunDeployment;
   }>;
+  /** Absent by default. Its presence is sealed preapproval material for the
+   * query-only report route; it does not assert export completeness/finality. */
+  authoritativeUsage?: MountedBigQueryUsageReportConfiguration;
 }>;
 
 export type MountedGoogleControls = Readonly<{
@@ -50,6 +55,7 @@ export type MountedGoogleControls = Readonly<{
   cloudSql: CloudSqlPostgresControlPlanePort;
   gcs: GcsControlPlanePort;
   collector: CollectorControlPlanePort;
+  billingReports?: AuthoritativeUsageReportPort;
 }>;
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
@@ -67,6 +73,7 @@ const Configuration = z.object({
   cloudSql: z.object({ tier: z.string().regex(/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u), privateNetwork: z.string().regex(/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u), storageGb: z.number().int().min(10).max(65_536), authorityInstanceId: z.string().regex(/^[a-z][a-z0-9-]{2,62}$/u) }).strict(),
   gcs: z.object({ encryptionKeyReference: z.string().min(3).max(255) }).strict(),
   collector: z.object({ endpointReference: z.string().regex(/^collector\/[a-z0-9][a-z0-9._/-]{1,250}$/u), deployment: Deployment }).strict(),
+  authoritativeUsage: MountedBigQueryUsageReportConfigurationSchema.optional(),
 }).strict();
 
 /** The mounted collector uses the receipt-bound private control protocol for
@@ -147,6 +154,16 @@ export function createMountedGoogleControls(input: Readonly<{
     journal: googleJournal,
     now: input.now,
   });
+  const billingReports = configuration.authoritativeUsage
+    ? createMountedBigQueryUsageReporter({
+      configuration: configuration.authoritativeUsage,
+      projectId: config.projectId, quotaProjectId: config.projectId, principal: config.operator.serviceAccount,
+      accountScopeSha256: configuration.accountScopeSha256, tokenSource, googleJournal,
+      billingJournal: generation.dependencies.authoritativeUsageJournal,
+      pool: generation.dependencies.pool,
+      objects: generation.dependencies.artifactStore, bucket: config.gcs.bucket, now: input.now,
+    })
+    : undefined;
   const persist = async (kind: string, value: Readonly<{ operationId: string; authorizationRequestSha256: string; authorizationReceiptSha256: string; projectScopeSha256: string }>) => {
     await generation.dependencies.googleIntentJournal.claim(
       `${kind}:${value.operationId}`,
@@ -269,5 +286,5 @@ export function createMountedGoogleControls(input: Readonly<{
     emit: value => input.telemetry.emit(value.observation),
     queryWindow: value => input.telemetry.queryWindow(value.binding),
   });
-  return Object.freeze({ google, cloudRun, cloudSql, gcs, collector });
+  return Object.freeze({ google, cloudRun, cloudSql, gcs, collector, ...(billingReports ? { billingReports } : {}) });
 }

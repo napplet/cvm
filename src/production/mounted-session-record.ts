@@ -6,6 +6,7 @@ import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from 
 import type { ProductionConfig } from "./config";
 import type { MountedProductionSecretMaterial } from "./secret-material";
 import { assertMountedSourceBuildPlan, materializeMountedSourceBuildPlan } from "./source-build-plan";
+import { MountedBigQueryUsageReportConfigurationSchema } from "./mounted-authoritative-billing";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const Reference = z.string().regex(/^[a-z][a-z0-9:._/-]{2,255}$/iu);
@@ -123,7 +124,7 @@ const RecordSchema = z.object({
     contextvm: Json, cep8_lightning: Json, cashu: Json, model: Json, upload: Json,
     owner_relay: Json, attestation_relay: Json,
   }).strict(),
-  googleControls: z.object({ cloudRun: Json, cloudSql: Json, collector: Json }).strict(),
+  googleControls: z.object({ cloudRun: Json, cloudSql: Json, collector: Json, authoritativeUsage: MountedBigQueryUsageReportConfigurationSchema.optional() }).strict(),
   edge: z.object({
     compatibleHost: z.object({ hostUrl: Url, hostSha256: Digest, chromiumExecutable: z.string().startsWith("/").max(4_096) }).strict(),
     directPublicationReference: DirectPublicationReferenceSchema.optional(),

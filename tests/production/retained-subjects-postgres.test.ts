@@ -60,7 +60,7 @@ const migrations = [
   "development/013_publication_tracking.sql", "development/014_request_cost_history.sql", "development/015_revision_restore.sql",
   "development/016_usage_evidence.sql",
 ] as const;
-const retainedSubjectMigrations = ["phase-07/014_production_durability_subjects.sql", "phase-07/015_production_publication_signed_events.sql"] as const;
+const retainedSubjectMigrations = ["phase-07/014_production_durability_subjects.sql", "phase-07/015_production_publication_signed_events.sql", "phase-07/016_production_authoritative_usage_reports.sql"] as const;
 
 function sqlPool(native: Pool): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
@@ -160,6 +160,10 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await expect(assertProductionRetainedSubjectSchema(pool)).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_SCHEMA_REQUIRED");
     await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[1]}`).text());
     await assertProductionRetainedSubjectSchema(pool);
+    await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[2]}`).text());
+    const reportRequest = "a".repeat(64), reportGrant = "b".repeat(64), reportOperation = "c".repeat(64), reportRaw = "d".repeat(64);
+    await runtime.query("INSERT INTO production_real.authoritative_usage_report_capture(report_request_sha256,grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)", [reportRequest, reportGrant, reportOperation, "usage_original", "gs://fixture-bucket/authoritative-usage/original.json", 1, reportRaw, JSON.stringify({ grantSha256: reportGrant, rawReportSha256: reportRaw })]);
+    await expect(runtime.query("UPDATE production_real.authoritative_usage_report_capture SET envelope_json=envelope_json WHERE report_request_sha256=$1", [reportRequest])).rejects.toThrow("AUTHORITATIVE_USAGE_REPORT_CAPTURE_IMMUTABLE");
     let now = Date.parse("2029-01-01T00:00:00.000Z");
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
     expect(verifyEvent(wire(fixture.ownerEvent))).toBe(true);

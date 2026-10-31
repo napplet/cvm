@@ -126,12 +126,13 @@ export type AuthoritativeUsageReportPort = Readonly<{
   capture(input: Readonly<{
     operation: ReleaseProviderOperation;
     operationRecordSha256: string;
+    resourceIdentitySha256: string;
     candidateSha256: string;
     authorizationRequestSha256: string;
     authorizationReceiptSha256: string;
     accountScopeSha256: string;
     projectScopeSha256: string;
-  }>): Promise<Readonly<{ grant: unknown; envelope?: unknown }>>;
+  }>): Promise<Readonly<{ status: "held" } | { status: "captured"; grant: unknown; envelope: unknown }>>;
   readArtifact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
 }>;
 
@@ -963,13 +964,14 @@ export class ReleaseCertificationController {
       const captured = await input.reporter.capture({
         operation: record.operation,
         operationRecordSha256: recordSha256,
+        resourceIdentitySha256: record.resourceIdentitySha256,
         candidateSha256: current.state.candidate.candidateSha256,
         authorizationRequestSha256: request.authorizationRequestSha256,
         authorizationReceiptSha256: receipt.authorizationReceiptSha256,
         accountScopeSha256: record.accountScopeSha256,
         projectScopeSha256: record.projectScopeSha256,
       });
-      if (captured.envelope === undefined) continue;
+      if (captured.status === "held") continue;
       let grant;
       let envelope;
       try {

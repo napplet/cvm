@@ -30,6 +30,14 @@ export type BigQueryUsageReportArtifactStore = Readonly<{
   createImmutable(input: Readonly<{ key: string; bytes: Uint8Array; sha256: string }>): Promise<Readonly<{ uri: string; generation: string; sha256: string }>>;
   readExact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
 }>;
+export type BigQueryUsageReportCapture = Readonly<{
+  status: "unknown";
+  providerJobId: string;
+  reportRequestSha256: string;
+  grossMeteredMicros?: number;
+  creditsMicros?: number;
+  envelope?: AuthoritativeUsageReportEnvelope;
+}>;
 
 export function createMemoryBigQueryUsageReportJournal(seed: readonly BigQueryUsageReportJournalRecord[] = []): BigQueryUsageReportJournal {
   const records = new Map(seed.map((record) => [record.reportRequestSha256, Object.freeze({ ...record })]));
@@ -81,7 +89,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
     try { return Object.freeze({ payload: JSON.parse(new TextDecoder().decode(bytes)), raw: bytes }); } catch { throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID"); }
   }
   return Object.freeze({
-    async capture(grantInput: unknown) {
+    async capture(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
       const grant = await verifyBillingObservationGrant(grantInput);
       reportOnlyGrantAllows(grant, "observe_usage_report", now());
       if (grant.projectId !== projectId || grant.allowedReportOrigin !== "https://bigquery.googleapis.com") throw new Error("BIGQUERY_USAGE_REPORT_SCOPE_INVALID");

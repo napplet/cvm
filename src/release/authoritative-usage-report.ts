@@ -38,7 +38,7 @@ export const BillingObservationGrantSchema = z.object({
   originalScope: OriginalUsageScopeSchema,
   allowedReportOrigin: z.literal("https://bigquery.googleapis.com"),
   projectId: z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u),
-  detailedExportTable: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,1023}\.[A-Za-z_][A-Za-z0-9_]{0,1023}\.[A-Za-z_][A-Za-z0-9_]{0,1023}$/u),
+  detailedExportTable: z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]\.[A-Za-z_][A-Za-z0-9_]{0,1023}\.[A-Za-z_][A-Za-z0-9_]{0,1023}$/u),
   location: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/u),
   maximumBytesBilled: z.string().regex(/^[1-9][0-9]{0,18}$/u),
   reportQueryMaximumCostMicros: MicrosSchema,

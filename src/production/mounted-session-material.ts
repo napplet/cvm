@@ -2,7 +2,7 @@ import { createMountedReleaseCleanup } from "./release-cleanup";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ReleaseProviderId } from "../release/contracts";
-import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../release/authorization";
+import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity, validateAuthorizationRequest } from "../release/authorization";
 import type { ReleaseProviderPort } from "../release/providers";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../release/native-registry";
 import { createNativeCloudRunProvider } from "../release/native/cloud-run";
@@ -51,6 +51,13 @@ import { canonicalJson } from "../promotion/schema";
 import { createMountedProductionSourceBuildVerifier } from "./source-build-verifier";
 import { assertMountedSourceBuildPlan } from "./source-build-plan";
 import { ProductionDirectPublicationFactory } from "./direct-publication-factory";
+import { createGoogleAdcTokenSource } from "../release/deployment/google-auth";
+import { createProductionGcsObjectClient } from "./gcs-object-client";
+import { GcsObjectStoreAdapter } from "../continuity/object-store";
+import { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
+import { createPostgresGoogleOperationJournal } from "../release/deployment/postgres-provider-journals";
+import { createMountedBigQueryUsageReporter } from "./mounted-authoritative-billing";
+import { openProductionPostgresPool } from "./postgres";
 
 /** Immutable JSON-only controller facts. Runtime ports are constructed below
  * from these facts and the already-opened production authorities. */
@@ -639,4 +646,82 @@ export async function createProductionCertificationSessionMaterial(input: Readon
     throw new Error("PRODUCTION_MOUNTED_SESSION_AUTHORIZATION_BINDING_REQUIRED");
   }
   return createMountedProductionSessionMaterial({ config: input.config, deploymentConfig: input.deploymentConfig, generation: input.generation, resolved, secrets: input.secrets });
+}
+
+/**
+ * Build only the report-only recovery capability from immutable mounted facts.
+ * Unlike the normal session materializer this must not open relay, worker,
+ * funding, signer, model, publication, or mutation clients. The normal
+ * receipt's expiry is deliberately irrelevant here: the receipt is verified
+ * for cryptographic integrity while the separately signed billing-observation
+ * interval remains the sole clock-bound permission.
+ */
+export async function createProductionAuthoritativeUsageRecovery(input: Readonly<{
+  config: ProductionConfig;
+  deploymentConfig: ProductionCertificationSessionMaterial["deploymentConfig"];
+  authorizationRequest: unknown;
+  secrets: MountedProductionSecretMaterial;
+}>): Promise<Readonly<{ receipt: unknown; reporter: import("../release/controller").AuthoritativeUsageReportPort; close: () => Promise<void> }>> {
+  const [resolved, suppliedRequest, mountedRequestRaw, mountedReceiptRaw] = await Promise.all([
+    loadMountedProductionSessionRecord({ config: input.config, secrets: input.secrets }),
+    validateAuthorizationRequest(input.authorizationRequest),
+    input.secrets.text("certification.authorizationRequestReference", 1_000_000),
+    input.secrets.text("certification.authorizationReceiptReference", 1_000_000),
+  ]);
+  let mountedRequest: unknown;
+  let mountedReceipt: unknown;
+  try {
+    mountedRequest = JSON.parse(mountedRequestRaw);
+    mountedReceipt = JSON.parse(mountedReceiptRaw);
+  } catch { throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID"); }
+  let integrity: Awaited<ReturnType<typeof validateAuthorizationReceiptIntegrity>>;
+  try { integrity = await validateAuthorizationReceiptIntegrity({ request: mountedRequest, receipt: mountedReceipt }); }
+  catch { throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID"); }
+  if (integrity.request.authorizationRequestSha256 !== suppliedRequest.authorizationRequestSha256
+    || integrity.request.candidateSha256 !== input.config.candidateSha256
+    || integrity.request.topologySha256 !== input.config.topologySha256
+    || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256
+    || !integrity.request.billingObservation
+    || Date.now() >= integrity.request.billingObservation.expiresAtMs) {
+    throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID");
+  }
+  const accountScopeSha256 = resolved.discoveries.cloud_run.accountScopeSha256;
+  if (resolved.discoveries.cloud_sql_postgres.accountScopeSha256 !== accountScopeSha256) {
+    throw new Error("PRODUCTION_USAGE_RECOVERY_ACCOUNT_SCOPE_REQUIRED");
+  }
+  const google: MountedGoogleControlConfiguration = Object.freeze({
+    ...(resolved.googleControls as Omit<MountedGoogleControlConfiguration, "accountScopeSha256">),
+    accountScopeSha256,
+  });
+  if (!google.authoritativeUsage) throw new Error("PRODUCTION_USAGE_RECOVERY_REPORTER_REQUIRED");
+  const postgres = await openProductionPostgresPool(input.config, input.secrets);
+  try {
+    const tokenSource = createGoogleAdcTokenSource({
+      projectId: input.config.projectId,
+      quotaProjectId: input.config.projectId,
+      principal: input.config.operator.serviceAccount,
+      accountScopeSha256: google.accountScopeSha256,
+    });
+    const objects = new GcsObjectStoreAdapter({
+      config: { bucket: input.config.gcs.bucket, projectId: input.config.projectId },
+      client: createProductionGcsObjectClient({ bucket: input.config.gcs.bucket, tokenSource }),
+    });
+    const reporter = createMountedBigQueryUsageReporter({
+      configuration: google.authoritativeUsage,
+      projectId: input.config.projectId,
+      quotaProjectId: input.config.projectId,
+      principal: input.config.operator.serviceAccount,
+      accountScopeSha256: google.accountScopeSha256,
+      tokenSource,
+      googleJournal: createPostgresGoogleOperationJournal(new PostgresOperationJournal(postgres.pool, { namespace: "production-google-control", scopeSha256: input.config.topologySha256 })),
+      billingJournal: new PostgresOperationJournal(postgres.pool, { namespace: "production-authoritative-usage", scopeSha256: input.config.topologySha256 }),
+      pool: postgres.pool,
+      objects,
+      bucket: input.config.gcs.bucket,
+    });
+    return Object.freeze({ receipt: mountedReceipt, reporter, close: postgres.close });
+  } catch (error) {
+    await postgres.close().catch(() => undefined);
+    throw error;
+  }
 }

@@ -122,7 +122,13 @@ export type ReleaseExecutionSession = Readonly<{
   prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
   /** Narrow mounted resume seam. It may expose only the report observer and
    * historically bound receipt, never native mutation or finalization ports. */
-  prepareAuthoritativeUsageRecovery?(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort }>>;
+  prepareAuthoritativeUsageRecovery?(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort; close?: () => Promise<void> }>>;
+}>;
+
+/** Narrow, read-only recovery authority. It deliberately has no registry,
+ * worker, signer, payment, or mutation capability. */
+export type AuthoritativeUsageRecoverySession = Readonly<{
+  prepareAuthoritativeUsageRecovery(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort; close?: () => Promise<void> }>>;
 }>;
 
 export type AuthoritativeUsageReportPort = Readonly<{
@@ -1411,37 +1417,49 @@ export class ReleaseCertificationController {
 
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: true }>): Promise<ReleaseCertificationResult>;
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; session: ReleaseExecutionSession }>): Promise<AuthorizedLiveExecutionResult | Awaited<ReturnType<ReleaseCertificationController["reconcileAuthoritativeUsage"]>>>;
-export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; session?: ReleaseExecutionSession }>): Promise<ReleaseCertificationResult | AuthorizedLiveExecutionResult | Awaited<ReturnType<ReleaseCertificationController["reconcileAuthoritativeUsage"]>>> {
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; recovery: AuthoritativeUsageRecoverySession }>): Promise<Awaited<ReturnType<ReleaseCertificationController["reconcileAuthoritativeUsage"]>>>;
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; session?: ReleaseExecutionSession; recovery?: AuthoritativeUsageRecoverySession }>): Promise<ReleaseCertificationResult | AuthorizedLiveExecutionResult | Awaited<ReturnType<ReleaseCertificationController["reconcileAuthoritativeUsage"]>>> {
   if (!options.dryRun) {
-    if (!options.session) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+    if (!options.session && !options.recovery) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+    if (options.session && options.recovery) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_INVALID");
+    if (options.recovery) {
+      const controller = new ReleaseCertificationController(options);
+      const existing = await controller.status();
+      if (!existing || existing.state.status !== "billing_observing") throw new Error("RELEASE_AUTHORITATIVE_USAGE_RECOVERY_UNAVAILABLE");
+      const recovery = await options.recovery.prepareAuthoritativeUsageRecovery({ authorizationRequest: existing.authorizationRequest });
+      try { return await controller.reconcileAuthoritativeUsage({ receipt: recovery.receipt, reporter: recovery.reporter }); }
+      finally { await recovery.close?.(); }
+    }
+    const session = options.session!;
     const preapprovalCollector = options.collectorImage;
     const controller = new ReleaseCertificationController({
       candidatePath: options.candidatePath,
       workspace: options.workspace,
-      providers: createReleaseControllerProviderRegistry(options.session.registry),
+      providers: createReleaseControllerProviderRegistry(session.registry),
       ...(options.collectorImage ? { collectorImage: options.collectorImage } : {}),
       ...(options.workspaceCapability ? { workspaceCapability: options.workspaceCapability } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
     const existing = await controller.status();
     if (existing?.state.status === "billing_observing") {
-      if (!options.session.prepareAuthoritativeUsageRecovery) throw new Error("RELEASE_AUTHORITATIVE_USAGE_RECOVERY_UNAVAILABLE");
-      const recovery = await options.session.prepareAuthoritativeUsageRecovery({ authorizationRequest: existing.authorizationRequest });
-      return controller.reconcileAuthoritativeUsage({ receipt: recovery.receipt, reporter: recovery.reporter });
+      if (!session.prepareAuthoritativeUsageRecovery) throw new Error("RELEASE_AUTHORITATIVE_USAGE_RECOVERY_UNAVAILABLE");
+      const recovery = await session.prepareAuthoritativeUsageRecovery({ authorizationRequest: existing.authorizationRequest });
+      try { return await controller.reconcileAuthoritativeUsage({ receipt: recovery.receipt, reporter: recovery.reporter }); }
+      finally { await recovery.close?.(); }
     }
     const pending = await controller.dryRun();
     const collectorImage = preapprovalCollector && !isObservedCollectorRegistryImage(preapprovalCollector)
-      ? await options.session.collectorImage?.uploadAndObserve({ authorizationRequest: pending.authorizationRequest, collector: preapprovalCollector })
+      ? await session.collectorImage?.uploadAndObserve({ authorizationRequest: pending.authorizationRequest, collector: preapprovalCollector })
       : preapprovalCollector;
     if (!isObservedCollectorRegistryImage(collectorImage)) throw new Error("COLLECTOR_REGISTRY_OBSERVATION_REQUIRED");
     const observedController = new ReleaseCertificationController({
       candidatePath: options.candidatePath, workspace: options.workspace,
-      providers: createReleaseControllerProviderRegistry(options.session.registry), collectorImage,
+      providers: createReleaseControllerProviderRegistry(session.registry), collectorImage,
       ...(options.workspaceCapability ? { workspaceCapability: options.workspaceCapability } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
-    const execution = await options.session.prepareAuthorizedExecution({ authorizationRequest: pending.authorizationRequest });
-    return observedController.executeAuthorized({ ...execution, registry: options.session.registry });
+    const execution = await session.prepareAuthorizedExecution({ authorizationRequest: pending.authorizationRequest });
+    return observedController.executeAuthorized({ ...execution, registry: session.registry });
   }
   const progress = await new ReleaseCertificationController(options).certify();
   return progress;

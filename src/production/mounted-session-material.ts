@@ -703,8 +703,11 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
    * journal before it can obtain ADC or contact BigQuery/GCS. */
   let postgres: Awaited<ReturnType<typeof openProductionPostgresPool>> | undefined;
   let reporter: AuthoritativeUsageRecoveryPort | undefined;
-  const recoveryReporter = async () => {
+  let reporterPromise: Promise<AuthoritativeUsageRecoveryPort> | undefined;
+  const recoveryReporter = () => {
     if (reporter) return reporter;
+    if (reporterPromise) return reporterPromise;
+    reporterPromise = (async () => {
     postgres = await openProductionPostgresPool(input.config, input.secrets);
     try {
     const tokenSource = createGoogleAdcTokenSource({
@@ -741,8 +744,11 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
     } catch (error) {
       await postgres.close().catch(() => undefined);
       postgres = undefined;
+      reporterPromise = undefined;
       throw error;
     }
+    })();
+    return reporterPromise;
   };
   return Object.freeze({
     receipt: mountedReceipt,
@@ -750,6 +756,11 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
       recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => (await recoveryReporter()).recover(value),
       readArtifact: async (value: Parameters<AuthoritativeUsageRecoveryPort["readArtifact"]>[0]) => (await recoveryReporter()).readArtifact(value),
     }),
-    close: async () => { await postgres?.close(); },
+    close: async () => {
+      const current = postgres;
+      postgres = undefined;
+      reporter = undefined;
+      await current?.close();
+    },
   });
 }

@@ -25,6 +25,19 @@ export class NonGoogleFreshRestoreProvisioner {
   #prepare() { return `${this.#base()}:prepare`; }
   #fresh() { return `${this.#base()}:fresh`; }
   async prepare(): Promise<Readonly<{ status: "prepared" }>> {
+    /* The final preparation record fences the dump, custody seal, immutable
+     * archive, and pull job. A lost response after that durable claim must be
+     * reconciled before opening PostgreSQL or invoking pg_dump again. */
+    const prior = await this.input.journal.read<Prepared>(this.#prepare());
+    if (prior?.value.state === "prepared") {
+      const prepared = prior.value;
+      if (prepared.version !== 2 || prepared.binding.candidateSha256 !== this.input.binding.candidateSha256 || prepared.binding.topologySha256 !== this.input.binding.topologySha256
+        || prepared.scope.checkpointId !== this.input.scope.checkpointId || prepared.scope.sessionId !== this.input.scope.sessionId
+        || prepared.scope.ownerId !== this.input.scope.ownerId || prepared.scope.sourceAuthorityReference !== this.input.scope.sourceAuthorityReference) {
+        throw new Error("NON_GOOGLE_RESTORE_PREPARATION_CONFLICT");
+      }
+      return Object.freeze({ status: "prepared" as const });
+    }
     const pool = await this.input.postgres.open();
     try {
       const client = await pool.connect();
@@ -65,9 +78,20 @@ export class NonGoogleFreshRestoreProvisioner {
     await this.input.journal.claim(this.#fresh(), hash(value), value);
     return CoreFreshInstanceSchema.parse({ freshInstanceId: value.databaseUuid, sourceInstanceId: prepared.value.sourceInstanceId, databaseInstanceId: value.databaseUuid, applicationInstanceId: value.applicationUuid, restoredBackupSha256: value.backupSha256 });
   }
+  async inventory() {
+    const pool = await this.input.postgres.open();
+    try {
+      const prior = await this.input.journal.read<Prepared>(this.#prepare());
+      if (!prior || prior.value.state !== "prepared") throw new Error("NON_GOOGLE_RESTORE_PREPARATION_REQUIRED");
+      const scope = prior.value.scope;
+      if (scope.checkpointId !== this.input.scope.checkpointId || scope.sessionId !== this.input.scope.sessionId || scope.ownerId !== this.input.scope.ownerId || scope.sourceAuthorityReference !== this.input.scope.sourceAuthorityReference) throw new Error("NON_GOOGLE_RESTORE_PREPARATION_CONFLICT");
+      return createProductionDurabilitySubjectRegistry(pool).inventory(scope);
+    } finally { await pool.end(); }
+  }
   async restore(input: Readonly<{ action: string; payload: unknown }>): Promise<unknown> {
     switch (input.action) {
       case "restore.prepare": CoreControlPayloadSchemas["restore.prepare"].parse(input.payload); return this.prepare();
+      case "restore.inventory": CoreControlPayloadSchemas["restore.inventory"].parse(input.payload); return this.inventory();
       case "restore.create": CoreControlPayloadSchemas["restore.create"].parse(input.payload); return this.create();
       default: throw new Error("NON_GOOGLE_RESTORE_NATIVE_OPERATION_UNAVAILABLE");
     }

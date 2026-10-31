@@ -8,6 +8,10 @@ import { FileObjectKeyCustody, ObjectProducerBudgets, PerObjectFileCheckpointCry
 import { ProductionCheckpointCoordinator } from "../../src/production/checkpoint-coordinator";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
+import { NonGoogleCoolifyDriver } from "../../src/production/non-google-coolify-driver";
+import { NonGoogleFreshRestoreDriver, type NativeCommandRunner } from "../../src/production/non-google-fresh-restore-driver";
+import { NonGoogleCoreJournal } from "../../src/production/non-google-native-runtime";
+import { PostgresRestorerPullStore } from "../../src/production/non-google-restorer-pull-protocol";
 
 const connectionString = process.env.NAPPLET_TEST_POSTGRES_URL;
 const integration = connectionString ? test : test.skip;
@@ -164,6 +168,75 @@ test("new write budgets are producer-specific while ordinary checkpoints stay un
   expect(() => assertProducerWriteBudget({ budget: ObjectProducerBudgets.retained_subject, plaintextBytes: 16 * 1024 * 1024 + 1 })).toThrow("OBJECT_PRODUCER_BUDGET_EXCEEDED");
   expect(() => assertProducerWriteBudget({ budget: ObjectProducerBudgets.migration_archive, plaintextBytes: 384 * 1024 * 512 + 1 })).toThrow("OBJECT_PRODUCER_BUDGET_EXCEEDED");
 });
+
+integration("trusted PostgreSQL 17 custom dumps are independently encrypted, generation-pinned, and replayed without treating checkpoint ciphertext as the backup", async () => {
+  const container = postgres17Container; if (!container) throw new Error("POSTGRES17_CLIENT_REQUIRED");
+  const admin = new Pool({ connectionString });
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+  const role = `restore_object_${suffix}`;
+  const roots = [await mkdtemp(join(tmpdir(), "cvm-restore-live-")), await mkdtemp(join(tmpdir(), "cvm-restore-key-copy-"))];
+  const priorImage = process.env.NAPPLET_TRUSTED_RESTORER_IMAGE;
+  try {
+    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
+    await admin.query(`CREATE ROLE ${role} LOGIN`); await admin.query(`GRANT napplet_production_real TO ${role}`); await admin.query(`GRANT napplet_production_object TO ${role}`);
+    const runtime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${role}@`) });
+    try {
+      const pool = sqlPool(runtime);
+      const now = Date.parse("2030-01-01T00:00:00.000Z");
+      const objects = new PostgresByteaObjectStoreAdapter({ pool, now: () => now, retentionUntil: () => new Date(now + THIRTY_DAY_RETENTION_MS).toISOString(), producerBudget: ObjectProducerBudgets.migration_archive });
+      const custody = new FileObjectKeyCustody({ roots });
+      const cryptoPort = new PerObjectFileCheckpointCrypto({ pool, custody, now: () => now });
+      const image = `sha256:${"a".repeat(64)}`;
+      process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = image;
+      let dumps = 0;
+      const runner: NativeCommandRunner = Object.freeze({ async run(command) {
+        const argv = [...command];
+        if (argv[0] === "pg_dump") {
+          dumps++;
+          const file = argv.indexOf("--file"); if (file < 0 || !argv[file + 1]) throw new Error("FIXTURE_DUMP_FILE_REQUIRED");
+          const hostPath = argv[file + 1]!;
+          const containerPath = `/tmp/napplet-${suffix}.dump`;
+          argv[file + 1] = containerPath;
+          const stdout = await run(postgres17Command("pg_dump", ...argv.slice(1)));
+          await run(["docker", "cp", `${container}:${containerPath}`, hostPath]);
+          await run(["docker", "exec", "-i", container, "rm", "-f", containerPath]);
+          return Object.freeze({ exitCode: 0, stdout: new TextEncoder().encode(stdout), stderr: new Uint8Array() });
+        }
+        if (argv[0] !== "psql") throw new Error("FIXTURE_TRUSTED_COMMAND_REQUIRED");
+        const stdout = await run(postgres17Command("psql", ...argv.slice(1)));
+        return Object.freeze({ exitCode: 0, stdout: new TextEncoder().encode(stdout), stderr: new Uint8Array() });
+      } });
+      const coolify = new NonGoogleCoolifyDriver({ baseOrigin: "https://coolify.fixture.invalid", serverUuid: "00000000-0000-4000-8000-000000000001", projectUuid: "00000000-0000-4000-8000-000000000002", environmentUuid: "00000000-0000-4000-8000-000000000003", postgres17Image: image, restorerImage: image, namePrefix: "restore-fixture", tokenPath: "/fixture/coolify-token" });
+      const driver = new NonGoogleFreshRestoreDriver(coolify, { sourceDatabaseUrlPath: "/fixture/source-url", freshDatabaseUrlPath: "/fixture/fresh-url", archiveRoot: "/fixture/archive", trustedRestorerName: "trusted-restorer", expectedPostgresMajor: 17 }, runner, async path => {
+        if (path !== "/fixture/source-url") throw new Error("FIXTURE_UNEXPECTED_SECRET");
+        return connectionString!;
+      });
+      const backup = await driver.captureCustomBackup();
+      expect(dumps).toBe(1); expect(new TextDecoder().decode(backup.slice(0, 5))).toBe("PGDMP");
+      const scope = { checkpointId: `checkpoint:${suffix}`, sessionId: `session:${suffix}`, ownerId: "b".repeat(64), sourceAuthorityReference: `source:${suffix}` };
+      const binding = { candidateSha256: "c".repeat(64), topologySha256: "d".repeat(64) };
+      const checkpointId = `restore-backup:${suffix}`;
+      const aad = new TextEncoder().encode(JSON.stringify({ scope, binding }));
+      const sealed = await cryptoPort.seal({ checkpointId, plaintext: backup, additionalData: aad, binding: { accountId: "restore", sessionId: scope.sessionId, actionId: scope.checkpointId, operationId: `restore:${suffix}`, retentionUntil: new Date(now + THIRTY_DAY_RETENTION_MS).toISOString() } });
+      const stored = await cryptoPort.readSealed(checkpointId); if (!stored) throw new Error("FIXTURE_BACKUP_CUSTODY_REQUIRED");
+      expect(Buffer.from(stored.ciphertext).subarray(0, 5).toString()).not.toBe("PGDMP");
+      const archive = await objects.createImmutable({ key: `restore-backups/${checkpointId}/${stored.ciphertextSha256}`, bytes: stored.ciphertext, originalOperationIdentity: "e".repeat(64) });
+      const journal = new PostgresOperationJournal(pool, { namespace: `restore-fixture-${suffix}`, scopeSha256: "f".repeat(64) });
+      const pull = new PostgresRestorerPullStore(NonGoogleCoreJournal.fromPostgres(journal), objects);
+      const job = { originalId: `restore:${suffix}`, candidateSha256: binding.candidateSha256, topologySha256: binding.topologySha256, roleCostBoundSha256: "1".repeat(64), capabilitySha256: "2".repeat(64), archive: { ...archive, byteCount: stored.ciphertext.byteLength }, expiresAtMs: now + THIRTY_DAY_RETENTION_MS };
+      await pull.claimJob(job); await pull.claimJob(job); // Lost ACK reconciliation reads the original job only.
+      expect(await pull.readJob(job.originalId)).toEqual(job);
+      const ciphertext = await pull.readArchive({ ...archive, start: 0, end: stored.ciphertext.byteLength - 1 });
+      expect(ciphertext).toEqual(stored.ciphertext);
+      expect(await cryptoPort.open({ keyReference: sealed.keyReference, nonce: sealed.nonce, ciphertext: ciphertext!, additionalData: aad })).toEqual(backup);
+      backup.fill(0); ciphertext?.fill(0);
+    } finally { await runtime.end(); }
+  } finally {
+    if (priorImage === undefined) delete process.env.NAPPLET_TRUSTED_RESTORER_IMAGE; else process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = priorImage;
+    await admin.query(`REVOKE napplet_production_real FROM ${role}`).catch(() => undefined); await admin.query(`REVOKE napplet_production_object FROM ${role}`).catch(() => undefined); await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
+    await admin.end(); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
+  }
+}, 60_000);
 
 test("hosted PostgreSQL 17 is mandatory in CI for retention custody proof", () => { if (process.env.CI && (!connectionString || !postgres17Container)) throw new Error("NAPPLET_POSTGRES17_CLIENT_REQUIRED"); });
 

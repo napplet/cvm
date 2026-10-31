@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "src/**"
+      - "src/production/non-google-fresh-restore-provisioner.ts"
+      - "src/production/non-google-fresh-restore-driver.ts"
+      - "src/production/non-google-restorer-pull-protocol.ts"
       - "migrations/**"
       - "vendor/**"
       - "patches/**"
@@ -18,7 +21,7 @@ on:
       - "tests/production/durability-registry*.test.ts"
       - "tests/production/checkpoint-postgres.test.ts"
       - "tests/production/postgres-bytea-object-store-postgres.test.ts"
-      - "tests/production/object-retention-postgres.test.ts"
+      - "tests/production/object-retention-postgres.test.ts" # Hosted PG17 trusted-restorer/restore.prepare fixture.
       - "tests/production/retained-subjects-postgres.test.ts"
       - "tests/production/resume-pricing-preparer-postgres.test.ts"
       - "tests/dev-ui/package.json"

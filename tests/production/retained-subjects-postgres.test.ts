@@ -6,6 +6,7 @@ import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding
 import { bindAccountingRealmPool, createAccountingRealm } from "../../src/funding/accounting-realm";
 import { FundingService } from "../../src/funding/funding-service";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresSqlFundingStore } from "../../src/persistence/postgres-sql-funding-store";
 import { ContinuationService } from "../../src/continuity/continuation-service";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { ProductionCheckpointCoordinator } from "../../src/production/checkpoint-coordinator";
@@ -32,7 +33,15 @@ import { createWorkerDeploymentClients, PRODUCTION_WORKER_POLICY } from "../../s
 import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
 import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
 import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
+import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
 import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
+import { registerProductionPricing } from "../../src/production/pricing-catalog";
+import { ProductionResumePricingQuotes } from "../../src/production/resume-pricing-quotes";
+import { ProductionResumePricingPreparer } from "../../src/production/resume-pricing-preparer";
+import { ProductionResumeAcceptance } from "../../src/production/resume-acceptance";
+import { ProductionPricedContinuationWorkers } from "../../src/production/priced-continuation-workers";
+import { resumePricingMaterial } from "../fixtures/resume-pricing";
+import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
 
 /* This is deliberately an opt-in local integration test.  The source records,
  * funding account, provider receipt, and signed events below are explicit
@@ -171,18 +180,18 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     const funding = new FundingService(fundingDatabase.funding);
     const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: "10", externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
     const accountId = credited.accountId, sessionId = "session:retained", actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
-    // Explicit zero-funded producer fixtures. They are records consumed by the
-    // real preparer, not asserted as a release proof or external provider call.
-    await source.query("INSERT INTO production_real.model_profile_versions VALUES('retained-profile',$1,'fixture','fixture','{}')", [hex("profile")]);
-    await source.query("INSERT INTO production_real.price_card_versions(id,card_hash,profile_id,unit,normalized_card) VALUES('retained-price',$1,'retained-profile','sat','{}')", [hex("price")]);
-    await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,'fixture:admission','retained-profile','retained-price',0,'prepared')", [sessionId, accountId]);
+    // Isolated pricing source records are registered through the same catalog
+    // used by V2 preparation. They are not a quote, provider, or release claim.
+    const originalPricing = await resumePricingMaterial(now, "retained-profile");
+    await registerProductionPricing({ pool, ...originalPricing });
+    await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,'fixture:admission',$3,$4,0,'prepared')", [sessionId, accountId, originalPricing.profile.id, originalPricing.card.id]);
     await source.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:retained',$1,'fixture:admission',10,10,'active')", [accountId]);
     await source.query("INSERT INTO production_real.admissions(admission_id,account_id,reference,capacity_reference,state) VALUES('admission:retained',$1,'fixture:admission','capacity:fixture','accepted')", [accountId]);
     await source.query("INSERT INTO production_real.action_budget_reservations(reservation_id,account_id,admission_reference,idempotency_key,fingerprint_sha256,reservation_reference,amount,unit,state) VALUES('reservation:retained',$1,'fixture:admission','retained-action',$2,'budget:retained',1,'sat','authorized')", [accountId, hex("action-fingerprint")]);
     const actionSeed = await source.connect();
     try {
       await actionSeed.query("BEGIN; SET CONSTRAINTS ALL DEFERRED");
-      await actionSeed.query("INSERT INTO production_real.metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,terminal_result,evidence_reference,settled_at,admission_reference,receipt_charge,provider_receipt_reference,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,validation_report_reference) VALUES($1,$2,$3,'retained-action',$4,0,'budget:retained',1,'provider:retained','retained-profile','retained-price','verified',$5,'evidence:action',clock_timestamp(),'fixture:admission',1,'receipt-original',0,1,9,9,$6,$7,'checkpoint:retained','snapshot:retained',('verification:' || $6),NULL)", [actionId, accountId, sessionId, hex("action-fingerprint"), { status: "verified", releaseEvidence: false }, artifactId, `workspace:${sessionId}`]);
+      await actionSeed.query("INSERT INTO production_real.metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,terminal_result,evidence_reference,settled_at,admission_reference,receipt_charge,provider_receipt_reference,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,validation_report_reference) VALUES($1,$2,$3,'retained-action',$4,0,'budget:retained',1,'provider:retained',$5,$6,'verified',$7,'evidence:action',clock_timestamp(),'fixture:admission',1,'receipt-original',0,1,9,9,$8,$9,'checkpoint:retained','snapshot:retained',('verification:' || $8),NULL)", [actionId, accountId, sessionId, hex("action-fingerprint"), originalPricing.profile.id, originalPricing.card.id, { status: "verified", releaseEvidence: false }, artifactId, `workspace:${sessionId}`]);
       await actionSeed.query("INSERT INTO production_real.provider_operations(id,account_id,action_id,provider,model,provider_request_id,sub_reservation_sat,state) VALUES('provider:retained',$1,$2,'fixture-provider','fixture-model','request-original',1,'verified')", [accountId, actionId]);
       await actionSeed.query("COMMIT");
     } catch (error) { await actionSeed.query("ROLLBACK").catch(() => undefined); throw error; }
@@ -203,37 +212,67 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     const workspaceArtifact = { version: 1 as const, jobId: workspaceJobId, proposalSha256: sourceProposalSha256, toolchainSha256: config.worker.toolchainSha256, files: [{ path: "index.html", bytesBase64: Buffer.from(workspaceFile).toString("base64"), sha256: digest(workspaceFile), size: workspaceFile.byteLength }], commandEvidence };
     const archive = new TextEncoder().encode(canonicalJson({ version: 1, source: workspaceSource, artifact: workspaceArtifact, toolchainSha256: config.worker.toolchainSha256 }));
     const archiveSha256 = digest(archive);
-    const manifest = { checkpointId, accountId, sessionId, pauseGeneration: 1, sessionVersion: 0, actionVersion: 0, artifactVersion: 1, workspaceVersion: 0, workspaceLineage: `workspace:${sessionId}`, action: { actionId, operationId: "provider:retained", ledgerReference: "fixture:admission", pendingActionReference: "pending:retained", idempotencyKey: "retained-action" }, archiveSha256, inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"], evidenceSha256: hex("checkpoint-evidence"), compatibility: { policyVersion: "fixture-policy", modelIdentity: "retained-profile", nappletSdkIdentity: "retained-price", toolchainIdentity: config.worker.toolchainSha256 }, retentionUntil: new Date(now + retentionMs).toISOString() };
+    const manifest = { checkpointId, accountId, sessionId, pauseGeneration: 1, sessionVersion: 0, actionVersion: 0, artifactVersion: 1, workspaceVersion: 0, workspaceLineage: `workspace:${sessionId}`, action: { actionId, operationId: "provider:retained", ledgerReference: "fixture:admission", pendingActionReference: "pending:retained", idempotencyKey: "retained-action" }, archiveSha256, inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"], evidenceSha256: hex("checkpoint-evidence"), compatibility: { policyVersion: "fixture-policy", modelIdentity: originalPricing.profile.id, nappletSdkIdentity: originalPricing.card.id, toolchainIdentity: config.worker.toolchainSha256 }, retentionUntil: new Date(now + retentionMs).toISOString() };
     const journal = new PostgresOperationJournal(pool, { namespace: "retained-subjects-postgres", scopeSha256: hex("scope") });
     const artifactRequest = { sessionId, actionId, expectedVersion: 0, policyVersion: "fixture", capabilityGrant: "phase-04-coordinator-grant", workspaceId: "workspace:retained", idea: "Build one focused retained-subject fixture." };
     const artifactResult = { status: "completed" as const, code: "WORKER_PROPOSALS_VALIDATED" as const, events: [{ kind: "progress" as const, turn: 1, detail: "fixture artifact verified" }], artifact: { sessionId, actionId, expectedVersion: 0, policyVersion: "fixture", capabilityGrant: "phase-04-coordinator-grant", workspaceId: "workspace:retained", artifactId, purpose: { kind: "focused" as const, statements: ["one retained-subject fixture"] }, surface: { hasBackend: false as const, hasSecondPurpose: false as const, serviceWorker: false as const, dynamicAuthority: false as const }, dependencies: { appOwnedSignerOrRelay: false as const, privateNappletImport: false as const }, capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass" as const, checkId: "upstream:fixture-scanner" }, conformance: { verdict: "pass" as const, checkId: "upstream:fixture-conformance" } } } };
     const persistedArtifact = await new ProductionWorkerArtifactStore({ journal, objects, toolchainSha256: hex("toolchain") }).persist({ request: artifactRequest, accountId, ownerId: fixture.ownerId, bytes: fixture.artifact, scannerReportSha256: hex("scanner"), conformanceReportSha256: hex("conformance"), result: artifactResult });
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
-    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: hex("retained-idea"), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture", priceCardId: "retained-price", profileId: "retained-profile", toolchainId: "fixture-toolchain", actionMaximum: "11", admissionReference: "fixture:admission" };
+    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: hex("retained-idea"), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "3", admissionReference: "fixture:admission" };
     const pause = await new ContinuationService({ store: fundingDatabase.continuationFunding, includeAdmissionHold: true, clock: { nowMs: () => now } }).pauseForFunding({ intent: pauseIntent });
     if (!pause) throw new Error("RETAINED_SUBJECT_PAUSE_REQUIRED");
     const paused = await fundingDatabase.continuationFunding.findContinuationPause(accountId, sessionId, 1);
     if (!paused?.liveLeaseToken) throw new Error("RETAINED_SUBJECT_LIVE_LEASE_REQUIRED");
     await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.beginDeadlineCheckpoint({ sessionId, pauseGeneration: 1, liveLeaseToken: paused.liveLeaseToken! }));
     const sealedCheckpoint = await checkpoint.seal({ ...manifest, archive } satisfies CheckpointSealRequest);
-    await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.commitDeadlineCheckpoint({ accountId, sessionId, pauseGeneration: 1, checkpointId, expectedSessionVersion: 0, expectedArtifactVersion: 1, manifestReference: `manifest:${sealedCheckpoint.envelope.manifestSha256}`, objectKey: sealedCheckpoint.envelope.object.key, objectGeneration: String(sealedCheckpoint.envelope.object.generation), objectChecksum: sealedCheckpoint.envelope.object.checksum, keyReference: sealedCheckpoint.envelope.crypto.keyReference, compatibilityIdentity: "fixture-toolchain", checkpointCommittedAtMs: now }));
-    await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.claimResume({ accountId, sessionId, checkpointId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach-claim"), pendingFingerprint: pauseIntent.fingerprint, expectedCheckpointVersion: 1, expectedSessionVersion: 0, nowMs: now, newLeaseToken: "lease:retained:reattach", allocationIntentReference: "allocation:retained", actionId, operationId: "operation:retained-reattach", actionBudgetReference: "budget:retained" }));
-    // Seed the original, zero-effect worker ownership through canonical SQL
-    // records before cloning. The mounted bridge must resolve this tuple; it
-    // receives no callback authority from the test.
-    const capacityIntent = `capacity-intent:${hex("retained-capacity-intent")}`, capacityReference = `capacity:${hex("retained-capacity")}`, workerOperationId = `capacity-${hex("retained-worker").slice(0, 40)}`, workerDeadline = Date.now() + 1_200_000;
-    await source.query("INSERT INTO production_real.capacity_intents(intent_id,account_id,idempotency_key,fingerprint_sha256,intent_reference,capacity_reference,expires_at,state) VALUES('capacity:retained',$1,'retained-capacity',$2,$3,$4,to_timestamp($5 / 1000.0),'available')", [accountId, hex("retained-capacity-fingerprint"), capacityIntent, capacityReference, workerDeadline]);
-    await source.query("INSERT INTO production_real.continuation_worker_allocations(checkpoint_id,account_id,session_id,action_id,allocation_intent_reference,capacity_intent_reference,capacity_reference,state) VALUES($1,$2,$3,$4,'allocation:retained',$5,$6,'available')", [checkpointId, accountId, sessionId, actionId, capacityIntent, capacityReference]);
+    await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.commitDeadlineCheckpoint({ accountId, sessionId, pauseGeneration: 1, checkpointId, expectedSessionVersion: 0, expectedArtifactVersion: 1, manifestReference: `manifest:${sealedCheckpoint.envelope.manifestSha256}`, objectKey: sealedCheckpoint.envelope.object.key, objectGeneration: String(sealedCheckpoint.envelope.object.generation), objectChecksum: sealedCheckpoint.envelope.object.checksum, keyReference: sealedCheckpoint.envelope.crypto.keyReference, compatibilityIdentity: digest(canonicalJson(manifest.compatibility)), checkpointCommittedAtMs: now }));
+    const fundingStore = new PostgresSqlFundingStore(pool);
+    const resumeQuotes = new ProductionResumePricingQuotes(pool);
+    const vertexJournal = new PostgresOperationJournal(pool, { namespace: "retained-subjects-vertex", scopeSha256: hex("vertex-scope") });
+    const originalOperationId = `operation:${digest(canonicalJson({ accountId, key: pauseIntent.idempotencyKey, profile: pauseIntent.profileId })).slice(0, 24)}`;
+    await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), {
+      accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: "220",
+    });
+    const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
+      compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
+    const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });
+    const preparedV2 = await v2Preparer.prepare({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
+    if (preparedV2.status !== "quoted") throw new Error(`RETAINED_V2_QUOTE_REQUIRED:${preparedV2.code}`);
+    const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
+      capApprovalReference: pauseIntent.admissionReference, pendingAction: preparedV2.pendingAction,
+      pricingApproval: { quoteReference: preparedV2.quoteReference, quoteSha256: preparedV2.quoteSha256, maximumSat: preparedV2.pricing.maximumSat } };
+    const v2Claim = (await v2Acceptance.claim(v2Resume)).claim;
+    // The V2 worker allocation is a normal producer transition. The fixture
+    // supplies only a zero-effect provider readiness observation.
+    const readyCapacity = new Map<string, CapacityReservation>();
+    const v2Capacity: ReadyCapacityPort = {
+      async reserveNow(value) {
+        const reference = `capacity:${digest(canonicalJson(value))}`, expiresAt = new Date(now + 1_200_000).toISOString();
+        const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true,
+          ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest,
+            imageDigest: `sha256:${config.worker.image.split("@sha256:")[1]!}`, readinessProbeDigest: `sha256:${hex("retained-ready")}`, readyMonotonicMs: 1 } };
+        readyCapacity.set(value.intentReference, ready); return ready;
+      },
+      async observe(value) { return readyCapacity.get(value.intentReference) ?? { status: "unknown" }; },
+      async release() { throw new Error("RETAINED_V2_RELEASE_NOT_EXPECTED"); },
+    };
+    const v2Workers = new ProductionPricedContinuationWorkers({ pool, acceptance: v2Acceptance, capacity: v2Capacity, now: () => now });
+    const allocation = await v2Workers.allocate(accountId, v2Resume.idempotencyKey);
+    if (allocation.status !== "available") throw new Error("RETAINED_V2_CAPACITY_REQUIRED");
+    const workerIntent = (await v2Acceptance.claimWorker(accountId, v2Resume.idempotencyKey)).workerIntent;
+    const capacityIntent = workerIntent.capacityIntentReference, capacityReference = allocation.allocation.capacityReference,
+      workerOperationId = `capacity-${digest(`${capacityIntent}:${workerIntent.sessionBindingDigest}`).slice(0, 40)}`, workerDeadline = Date.parse(allocation.allocation.expiresAt);
     const serviceJournals = await openProductionServiceJournals({ pool, servicePubkey: config.certification.serverPubkey, initialTopologySha256: config.topologySha256 });
     const workerRecords = createPostgresWorkerOperationJournal(serviceJournals.worker);
-    await workerRecords.claim({ operationId: workerOperationId, requestSha256: hex("retained-worker-request"), resourceName: workerOperationId, provider: "fly", appName: "retained-workers", policyVersion: PRODUCTION_WORKER_POLICY.version, image: config.worker.image, sessionLeaseSha256: hex("retained-worker-lease"), toolchainSha256: config.worker.toolchainSha256, providerDeadlineEpochMs: workerDeadline, createdAtMs: Date.now() });
-    await workerRecords.update({ operationId: workerOperationId, requestSha256: hex("retained-worker-request"), resourceId: "retained-worker-machine", state: "reconciled", providerCreatedAtMs: Date.now() });
-    await serviceJournals.capacity.claim(`capacity-intent:${digest(capacityIntent)}`, hex("retained-capacity-journal"), { intentReference: capacityIntent, reference: capacityReference, workerOperationId, provider: "fly", deadlineEpochMs: workerDeadline });
-    const workerRequest = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, sourceProposalReference: `proposal:sha256:${sourceProposalSha256}`, sourceProposalSha256, sourceProposalFiles: workspaceFiles });
+    const workerRequestSha256 = hex("retained-worker-request");
+    await workerRecords.claim({ operationId: workerOperationId, requestSha256: workerRequestSha256, resourceName: workerOperationId, provider: "fly", appName: "retained-workers", policyVersion: PRODUCTION_WORKER_POLICY.version, image: config.worker.image, sessionLeaseSha256: workerIntent.sessionBindingDigest.slice("sha256:".length), toolchainSha256: config.worker.toolchainSha256, providerDeadlineEpochMs: workerDeadline, createdAtMs: Date.now() });
+    await workerRecords.update({ operationId: workerOperationId, requestSha256: workerRequestSha256, resourceId: "retained-worker-machine", state: "reconciled", providerCreatedAtMs: Date.now() });
+    await serviceJournals.capacity.claim(`capacity-intent:${digest(capacityIntent)}`, digest(canonicalJson({ capacityIntent, capacityReference, workerOperationId })), { intentReference: capacityIntent, reference: capacityReference, workerOperationId, provider: "fly", deadlineEpochMs: workerDeadline });
+    const workerRequest = WorkerRunRequestSchema.parse({ sessionId, actionId: v2Claim.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, sourceProposalReference: `proposal:sha256:${sourceProposalSha256}`, sourceProposalSha256, sourceProposalFiles: workspaceFiles });
     await new ProductionWorkerRequestStore(serviceJournals.request).persist(workerRequest);
-    const jobKey = `worker-build:${digest(canonicalJson({ sessionId, actionId, expectedVersion: 0 }))}`;
-    await serviceJournals.job.claim(jobKey, digest(canonicalJson(workerRequest)), { workerOperationId, workerResourceId: "retained-worker-machine", leaseSha256: hex("retained-worker-lease"), jobId: workspaceJobId, requestBody: canonicalJson(workspaceSource), deadlineEpochMs: workspaceSource.deadlineEpochMs });
+    const jobKey = `worker-build:${digest(canonicalJson({ sessionId, actionId: v2Claim.actionId, expectedVersion: 0 }))}`;
+    await serviceJournals.job.claim(jobKey, digest(canonicalJson(workerRequest)), { workerOperationId, workerResourceId: "retained-worker-machine", leaseSha256: workerIntent.sessionBindingDigest.slice("sha256:".length), jobId: workspaceJobId, requestBody: canonicalJson(workspaceSource), deadlineEpochMs: workspaceSource.deadlineEpochMs });
     await source.query("INSERT INTO production_real.usage_receipts(id,account_id,action_id,operation_id,provider,model,provider_receipt_id,normalized_receipt,protected_evidence_reference) VALUES('receipt:retained',$1,$2,'provider:retained','fixture-provider','fixture-model','receipt-original',$3,'evidence:receipt')", [accountId, actionId, fixture.normalizedReceipt]);
     await source.query("INSERT INTO production_real.session_artifacts(id,account_id,session_id,action_id,version,lineage,validation_evidence_reference,verified) VALUES($1,$2,$3,$4,1,$5,('verification:' || $1),true)", [artifactId, accountId, sessionId, actionId, { lineage: "original", releaseEvidence: false }]);
     const artifact = { accountId, sessionId, artifactId, artifactVersion: 1, aggregateSha256: artifactReference.checksum, manifestSha256: hex("manifest"), verificationEvidenceSha256: hex("scanner"), sealedObjectGeneration: String(artifactReference.generation), sealedObjectSha256: artifactReference.checksum, sealedFiles: [{ path: "/index.html", mimeType: "text/html", sha256: artifactReference.checksum, size: fixture.artifact.byteLength }], entrypoint: "/index.html", normalizedDTag: "retained-fixture", requiredCapabilities: [], optionalCapabilities: [], policyIdentity: "fixture-policy", toolchainIdentity: "fixture-toolchain", runtimeCompatibilityIdentity: "fixture-runtime" };
@@ -508,9 +547,13 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     // reattach capability. It cannot restart ordinary model/tool generation.
     expect(await ordinaryBridge.run(workerRequest, new AbortController().signal)).toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     expect(mountedFences).toBe(0); expect(mountedRestores).toBe(0); expect(mountedObservations).toBe(0);
+    const v2Restore = pricedRestoreBinding({ accountId, sessionId, actionId: v2Claim.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion,
+      capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0,
+      workspaceLineage: `workspace:${sessionId}`, leaseToken: v2Claim.leaseToken, resumeClaim: v2Claim.allocationIntentReference, archiveSha256 });
     try {
-      expect(await checkpointResolver.resolveCheckpointWorker({ accountId, sessionId, actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0, workspaceLineage: `workspace:${sessionId}`, leaseToken: "lease:retained:reattach" }, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
-    } catch (error) { throw new Error(`MOUNTED_CHECKPOINT_RESOLUTION:${error instanceof Error ? error.message : "UNKNOWN"}`); }
+      expect(await checkpointResolver.resolvePricedRestore(v2Restore.metadata, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
+      await expect(checkpointResolver.resolvePricedRestore({ ...v2Restore.metadata, leaseToken: "priced-resume-lease:foreign" }, workerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
+    } catch (error) { throw new Error(`MOUNTED_PRICED_CHECKPOINT_RESOLUTION:${error instanceof Error ? error.message : "UNKNOWN"}`); }
     const mountedInstance = {
       freshInstanceId: "fresh-retained", sourceInstanceId: "source-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore",
       pool: mounted.pool, migrationTargetPool: mounted.migrationTargetPool, objectStore: mounted.objectStore,

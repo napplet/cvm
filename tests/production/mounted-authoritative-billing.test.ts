@@ -26,14 +26,17 @@ test("mounted billing configuration rejects arbitrary report transport facts", (
 
 test("mounted reporter holds before any provider query when no original completed native resource exists", async () => {
   let connected = 0;
+  const objects = new DeterministicObjectStore();
+  const unrelated = await objects.createImmutable({ key: "checkpoints/another-session", bytes: new TextEncoder().encode("private checkpoint") });
   const reporter = createMountedBigQueryUsageReporter({
     configuration, projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", accountScopeSha256: digest("c"),
     tokenSource: { async getAccessToken() { throw new Error("must not request ADC before original journal proof"); } },
     googleJournal: createMemoryGoogleOperationJournal(),
     billingJournal: new PostgresOperationJournal({ async connect() { connected++; throw new Error("must not write report journal"); } }, { namespace: "mounted-billing-test", scopeSha256: digest("d") }),
     pool: { async connect() { connected++; throw new Error("must not write capture table"); } },
-    objects: new DeterministicObjectStore(), bucket: "napplet-cvm-test-bucket", now: () => 10_000,
+    objects, bucket: "napplet-cvm-test-bucket", now: () => 10_000,
   });
+  expect(await reporter.readArtifact({ uri: `gs://napplet-cvm-test-bucket/${unrelated.key}`, generation: String(unrelated.generation), sha256: unrelated.checksum })).toBeUndefined();
   await expect(reporter.capture({ operation: { provider: "cloud_run", operationId: "op-cloud-run-1" }, operationRecordSha256: digest("e"), resourceIdentitySha256: digest("f"), candidateSha256: digest("1"), authorizationRequestSha256: digest("2"), authorizationReceiptSha256: digest("3"), accountScopeSha256: digest("4"), projectScopeSha256: digest("5") })).resolves.toEqual({ status: "held" });
   expect(connected).toBe(0);
 });

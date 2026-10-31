@@ -5,7 +5,7 @@ import { z } from "zod";
 const repositoryRoot = resolve(import.meta.dir, "../..");
 const childPath = resolve(repositoryRoot, "tests/fixtures/billing-recovery-bootstrap.ts");
 const Result = z.object({
-  scenario: z.string(), cliExitCode: z.number(), captureFiles: z.number(), captureRows: z.number(), artifactDenials: z.number(),
+  scenario: z.string(), cliExitCode: z.number(), captureFiles: z.number(), captureRows: z.number(), artifactDenials: z.number(), scopeDenials: z.number(),
   effects: z.object({ pools: z.number(), closes: z.number(), adc: z.number(), queryGets: z.number(), queryPosts: z.number(), objectReads: z.number(), objectWrites: z.number(), journalWrites: z.number(), captures: z.number(), secretReads: z.array(z.string()) }),
 });
 
@@ -34,6 +34,7 @@ for (const scenario of ["completed", "missing-grant", "missing-job", "expired-gr
       expect(stdout).toContain('"status":"billing_observing"');
       expect(result.effects.pools).toBe(2);
       expect(result.artifactDenials).toBe(5);
+      expect(result.scopeDenials).toBe(5);
       expect(result.effects.queryGets).toBe(1);
       expect(result.effects.objectWrites).toBe(1);
       expect(result.effects.captures).toBe(1);

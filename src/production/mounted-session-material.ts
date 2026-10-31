@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ReleaseProviderId } from "../release/contracts";
 import type { AuthoritativeUsageRecoveryPort } from "../release/controller";
+import { AuthoritativeUsageReportEnvelopeSchema, verifyBillingObservationGrant } from "../release/authoritative-usage-report";
 import { validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity, validateAuthorizationRequest } from "../release/authorization";
 import type { ReleaseProviderPort } from "../release/providers";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../release/native-registry";
@@ -695,6 +696,27 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
     accountScopeSha256,
   });
   if (!google.authoritativeUsage) throw new Error("PRODUCTION_USAGE_RECOVERY_REPORTER_REQUIRED");
+  const observation = integrity.request.billingObservation;
+  const artifactReferences = new Map<string, Readonly<{ uri: string; generation: string; sha256: string }>>();
+  const artifactKey = (value: Readonly<{ uri: string; generation: string; sha256: string }>) => canonicalJson([value.uri, value.generation, value.sha256]);
+  let closed = false;
+  let closePromise: Promise<void> | undefined;
+  const assertActive = () => {
+    if (closed) throw new Error("PRODUCTION_USAGE_RECOVERY_CLOSED");
+    if (Date.now() >= observation.expiresAtMs) throw new Error("PRODUCTION_USAGE_RECOVERY_AUTHORIZATION_INVALID");
+  };
+  const ownsOperation = (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => {
+    const scope = integrity.request.providerScopes.find(item => item.provider === value.operation.provider);
+    return value.candidateSha256 === input.config.candidateSha256
+      && value.authorizationRequestSha256 === integrity.request.authorizationRequestSha256
+      && value.authorizationReceiptSha256 === integrity.receipt.authorizationReceiptSha256
+      && value.operation.candidateSha256 === value.candidateSha256
+      && value.operation.authorizationRequestSha256 === value.authorizationRequestSha256
+      && value.accountScopeSha256 === google.accountScopeSha256
+      && scope?.accountScopeSha256 === value.accountScopeSha256
+      && scope.projectScopeSha256 === value.projectScopeSha256
+      && integrity.request.orderedEffects.some(effect => effect.provider === value.operation.provider && effect.id === value.operation.effectId && effect.operation === value.operation.operation);
+  };
   /* Preparing the narrowly-scoped capability is deliberately no-effect.  In
    * particular, a controller must be able to load its already-pinned mounted
    * material without opening Cloud SQL before it has selected a completed
@@ -705,6 +727,7 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
   let reporter: AuthoritativeUsageRecoveryPort | undefined;
   let reporterPromise: Promise<AuthoritativeUsageRecoveryPort> | undefined;
   const recoveryReporter = () => {
+    assertActive();
     if (reporter) return reporter;
     if (reporterPromise) return reporterPromise;
     reporterPromise = (async () => {
@@ -753,14 +776,58 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
   return Object.freeze({
     receipt: mountedReceipt,
     reporter: Object.freeze({
-      recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => (await recoveryReporter()).recover(value),
-      readArtifact: async (value: Parameters<AuthoritativeUsageRecoveryPort["readArtifact"]>[0]) => (await recoveryReporter()).readArtifact(value),
+      recover: async (value: Parameters<AuthoritativeUsageRecoveryPort["recover"]>[0]) => {
+        assertActive();
+        if (!ownsOperation(value)) return Object.freeze({ status: "held" as const });
+        const concrete = await recoveryReporter();
+        assertActive();
+        const recovered = await concrete.recover(value);
+        assertActive();
+        if (recovered.status === "captured") {
+          const grant = await verifyBillingObservationGrant(recovered.grant);
+          const envelope = AuthoritativeUsageReportEnvelopeSchema.parse(recovered.envelope);
+          const expectedJob = `usage_${grant.reportRequestSha256.slice(0, 48)}`;
+          if (grant.originalScope.authorizationRequestSha256 !== value.authorizationRequestSha256
+            || grant.originalScope.authorizationReceiptSha256 !== value.authorizationReceiptSha256
+            || grant.originalScope.candidateSha256 !== value.candidateSha256
+            || grant.originalScope.provider !== value.operation.provider || grant.originalScope.operationId !== value.operation.operationId
+            || grant.originalScope.operationRecordSha256 !== value.operationRecordSha256
+            || grant.originalScope.resourceIdentitySha256 !== value.resourceIdentitySha256
+            || grant.originalScope.accountScopeSha256 !== value.accountScopeSha256 || grant.originalScope.projectScopeSha256 !== value.projectScopeSha256
+            || grant.expiresAtMs !== observation.expiresAtMs
+            || envelope.grantSha256 !== grant.grantSha256 || envelope.reportRequestSha256 !== grant.reportRequestSha256
+            || envelope.providerJobId !== expectedJob
+            || envelope.rawArtifact.uri !== `gs://${input.config.gcs.bucket}/authoritative-usage/${grant.reportRequestSha256}/${expectedJob}.json`) {
+            throw new Error("PRODUCTION_USAGE_RECOVERY_ARTIFACT_NOT_AUTHORIZED");
+          }
+          artifactReferences.set(artifactKey(envelope.rawArtifact), Object.freeze({ ...envelope.rawArtifact }));
+        }
+        return recovered;
+      },
+      readArtifact: async (value: Parameters<AuthoritativeUsageRecoveryPort["readArtifact"]>[0]) => {
+        assertActive();
+        const reference = artifactReferences.get(artifactKey(value));
+        if (!reference) throw new Error("PRODUCTION_USAGE_RECOVERY_ARTIFACT_NOT_AUTHORIZED");
+        const concrete = await recoveryReporter();
+        assertActive();
+        const bytes = await concrete.readArtifact(reference);
+        assertActive();
+        return bytes;
+      },
     }),
-    close: async () => {
-      const current = postgres;
-      postgres = undefined;
-      reporter = undefined;
-      await current?.close();
+    close: () => {
+      if (closePromise) return closePromise;
+      closed = true;
+      artifactReferences.clear();
+      closePromise = (async () => {
+        await reporterPromise?.catch(() => undefined);
+        const current = postgres;
+        postgres = undefined;
+        reporter = undefined;
+        reporterPromise = undefined;
+        await current?.close();
+      })();
+      return closePromise;
     },
   });
 }

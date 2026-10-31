@@ -25,6 +25,7 @@ const principal = "release-runner@napplet-cvm-01.iam.gserviceaccount.com";
 const key = (values: readonly unknown[]) => JSON.stringify(values.slice(0, 3));
 const journalKeys = z.tuple([z.string(), z.string(), z.string()]);
 let artifactDenials = 0;
+let scopeDenials = 0;
 const artifactIo = () => JSON.stringify([effects.pools, effects.adc, effects.queryGets, effects.queryPosts, effects.objectReads, effects.objectWrites, effects.journalWrites, effects.secretReads.length]);
 async function denyArtifact(port: AuthoritativeUsageRecoveryPort, reference: Readonly<{ uri: string; generation: string; sha256: string }>, code = "PRODUCTION_USAGE_RECOVERY_ARTIFACT_NOT_AUTHORIZED") {
   const before = artifactIo();
@@ -226,7 +227,17 @@ try {
       const malicious = { ...captureInput, mode: "dispatch" };
       if ((await prepared.reporter.recover(malicious)).status !== "held") throw new Error("RECOVERY_MODE_ESCALATED");
     }
-    if (scenario === "completed") await denyArtifact(prepared.reporter, { uri: `gs://${fixture.config.gcs.bucket}/checkpoints/another-session`, generation: "1", sha256: digest(unrelated) });
+    if (scenario === "completed") {
+      await denyArtifact(prepared.reporter, { uri: `gs://${fixture.config.gcs.bucket}/checkpoints/another-session`, generation: "1", sha256: digest(unrelated) });
+      for (const patch of [
+        { authorizationRequestSha256: digest("other-request") }, { authorizationReceiptSha256: digest("other-receipt") },
+        { candidateSha256: digest("other-candidate") }, { accountScopeSha256: digest("other-account") }, { projectScopeSha256: digest("other-project") },
+      ]) {
+        const before = artifactIo();
+        if ((await prepared.reporter.recover({ ...captureInput, ...patch })).status !== "held" || artifactIo() !== before) throw new Error("RECOVERY_SCOPE_ESCALATED");
+        scopeDenials++;
+      }
+    }
     await prepared.close?.();
   }
   process.argv = [process.execPath, join(repositoryRoot, "scripts/certify-release.ts"), "--candidate", fixture.candidatePath];
@@ -247,7 +258,7 @@ try {
     await denyArtifact(prepared.reporter, envelope.rawArtifact, "PRODUCTION_USAGE_RECOVERY_CLOSED");
   }
   const storedCaptures = await files.readdir(join(workspace, "billing-report-captures")).catch(() => []);
-  console.log(`BOOTSTRAP_PROOF_RESULT=${JSON.stringify({ scenario, cliExitCode, effects, artifactDenials, captureFiles: storedCaptures.length, captureRows: captures.size })}`);
+  console.log(`BOOTSTRAP_PROOF_RESULT=${JSON.stringify({ scenario, cliExitCode, effects, artifactDenials, scopeDenials, captureFiles: storedCaptures.length, captureRows: captures.size })}`);
   process.exitCode = 0;
 } finally {
   globalThis.fetch = originalFetch;

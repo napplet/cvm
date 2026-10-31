@@ -164,6 +164,13 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
     journal: createPostgresBigQueryUsageReportJournal(input.billingJournal),
     artifacts: artifacts({ bucket: input.bucket, objects: input.objects }), ...(input.fetch ? { fetch: input.fetch } : {}), now,
   });
+  const readableArtifacts = new Map<string, Readonly<{ reference: Parameters<BigQueryUsageReportArtifactStore["readExact"]>[0]; expiresAtMs: number }>>();
+  const rememberArtifact = (grant: BillingObservationGrant, envelope: NonNullable<Awaited<ReturnType<typeof collector.capture>>["envelope"]>) => {
+    const job = `usage_${grant.reportRequestSha256.slice(0, 48)}`;
+    if (envelope.grantSha256 !== grant.grantSha256 || envelope.reportRequestSha256 !== grant.reportRequestSha256 || envelope.providerJobId !== job
+      || envelope.rawArtifact.uri !== `gs://${input.bucket}/authoritative-usage/${grant.reportRequestSha256}/${job}.json`) throw new Error("MOUNTED_BIGQUERY_ARTIFACT_SCOPE_INVALID");
+    readableArtifacts.set(canonicalJson(envelope.rawArtifact), { reference: Object.freeze({ ...envelope.rawArtifact }), expiresAtMs: grant.expiresAtMs });
+  };
   return Object.freeze({
     async capture(value: CaptureInput) {
       if (value.operation.provider !== "cloud_run" && value.operation.provider !== "cloud_sql_postgres") return Object.freeze({ status: "held" as const });
@@ -196,11 +203,14 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
           || grant.originalScope.authorizationReceiptSha256 !== Digest.parse(value.authorizationReceiptSha256)
           || grant.originalScope.candidateSha256 !== Digest.parse(value.candidateSha256)
           || grant.originalScope.resourceName !== resourceName.data
+          || grant.originalScope.resourceIdentitySha256 !== Digest.parse(value.resourceIdentitySha256)
           || grant.originalScope.accountScopeSha256 !== accountScopeSha256
+          || grant.originalScope.projectScopeSha256 !== Digest.parse(value.projectScopeSha256)
           || grant.expiresAtMs !== approval.data.expiresAtMs) return Object.freeze({ status: "held" as const });
         const recovered = await collector.recover(grant);
         if (!recovered.envelope) return Object.freeze({ status: "held" as const });
         await persistCapture({ pool: input.pool, grant, envelope: recovered.envelope });
+        rememberArtifact(grant, recovered.envelope);
         return Object.freeze({ status: "captured" as const, grant, envelope: recovered.envelope });
       }
       const expectedGrant = await createBillingObservationGrant({
@@ -226,10 +236,13 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
       const captured = await collector.capture(grant);
       if (!captured.envelope) return Object.freeze({ status: "held" as const });
       await persistCapture({ pool: input.pool, grant, envelope: captured.envelope });
+      rememberArtifact(grant, captured.envelope);
       return Object.freeze({ status: "captured" as const, grant, envelope: captured.envelope });
     },
     async readArtifact(value: Readonly<{ uri: string; generation: string; sha256: string }>) {
-      return artifacts({ bucket: input.bucket, objects: input.objects }).readExact(value);
+      const allowed = readableArtifacts.get(canonicalJson(value));
+      if (!allowed || now() >= allowed.expiresAtMs) return undefined;
+      return artifacts({ bucket: input.bucket, objects: input.objects }).readExact(allowed.reference);
     },
     accountScopeSha256,
   });

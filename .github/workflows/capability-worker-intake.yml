@@ -18,6 +18,7 @@ on:
       - "src/release/deployment/**"
       - "scripts/test-production-worker.ts"
       - "scripts/test-direct-publication.ts"
+      - "scripts/audit-direct-preview-dependencies.ts"
       - "tests/fixtures/direct-worker-notes/**"
       - "tests/fixtures/local-production-worker.ts"
       - "tests/fixtures/direct-*.ts"
@@ -25,6 +26,7 @@ on:
       - "tests/production/fresh-generation-postgres.test.ts"
       - "tests/production/resume-pricing-preparer-postgres.test.ts"
       - "tests/release/direct-worker-protocol.test.ts"
+      - "tests/release/direct-preview-dependency-audit.test.ts"
       - "tests/release/postgres-operation-journal.test.ts"
       - ".github/workflows/capability-worker-intake.yml"
 permissions:
@@ -47,7 +49,7 @@ jobs:
       - name: Strict supervisor and validation-harness types with the pinned compiler
         run: bunx --package typescript@5.9.3 tsc --noEmit --skipLibCheck --strict --target ES2022 --module ESNext --moduleResolution bundler --types bun infra/toolchain/production-job.ts infra/toolchain/production-worker.ts scripts/test-production-worker.ts
       - name: Direct metadata contracts and original operation recovery
-        run: bun test tests/release/direct-worker-protocol.test.ts tests/release/postgres-operation-journal.test.ts tests/production/direct-artifact-verifier.test.ts --timeout 120000
+        run: bun test tests/release/direct-worker-protocol.test.ts tests/release/direct-preview-dependency-audit.test.ts tests/release/postgres-operation-journal.test.ts tests/production/direct-artifact-verifier.test.ts --timeout 120000
       - name: Build the distinct unselected direct profile on native AMD64
         run: |
           mkdir -p intake

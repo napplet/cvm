@@ -217,6 +217,24 @@ The runner's overall watchdog covers the combined cases; each test retains its
 120-second limit. Neither that limit nor local success measures the live
 five-second admission SLO or relaxes any release gate.
 
+Dependency renewal review is reproducible with
+`bun scripts/audit-direct-preview-dependencies.ts`. The fixed-scope command
+compares the manifest and Bun lock against PR93's mainline revision. It requires
+exactly four added direct preview packages and two new transitive packages, with
+all preexisting dependencies and lock entries preserved. For each new package it
+reads bounded npm metadata/tarball bytes, verifies the lockfile SHA-512 integrity,
+MIT metadata, repository claims and absence of install lifecycle scripts, then
+compares every installed package file against the tarball and rejects extra
+files, links, changed bytes and malformed archives. Package code is never run.
+
+The immutable report records source URLs, metadata/archive/installed-tree hashes,
+the audit script and root input hashes, and status `measured_not_approved`.
+Registry signatures and source provenance remain unverified. This report and
+the separately generated OTel renewal-review artifact are inputs to the pending
+dependency decision; they grant no approval and leave the historical exact-root
+guards intact. A valid decision and matching pin checks remain required before
+the affected CI checks and merge can pass.
+
 ### Direct owner relay and service attestation
 
 `ProductionDirectCertificationRelays` reads the concrete original upload

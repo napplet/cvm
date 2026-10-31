@@ -30,6 +30,18 @@ function operationFromRow(row: Record<string, unknown>): UncertainRailOperation 
 
 const RETRYABLE_SERIALIZATION_CODES = new Set(["40001", "40P01", "23505"]);
 const PRODUCTION_SERIALIZABLE_ATTEMPTS = 3;
+const CASHU_PROOF_CLAIM_ATTEMPTS = 5;
+const ADVISORY_LOCK_BUSY = "55P03";
+const CASHU_PROOF_LOCK_SEED = "20261031";
+
+type ProductionTransactionOptions = Readonly<{
+  advisoryLockKeys?: readonly string[];
+  attempts?: number;
+}>;
+
+const waitForProductionRetry = (attempt: number): Promise<void> => new Promise((resolve) => {
+  setTimeout(resolve, 25 * (attempt + 1));
+});
 
 /**
  * Rails must retain their original operation identity across a transaction
@@ -39,11 +51,27 @@ const PRODUCTION_SERIALIZABLE_ATTEMPTS = 3;
 async function serializableProductionTransaction<T>(
   pool: PostgresSqlPool,
   operation: (client: PostgresSqlClient) => Promise<T>,
+  options: ProductionTransactionOptions = {},
 ): Promise<T> {
+  const advisoryLockKeys = [...new Set(options.advisoryLockKeys ?? [])].sort();
+  const attempts = options.attempts ?? PRODUCTION_SERIALIZABLE_ATTEMPTS;
   let lastError: unknown;
-  for (let attempt = 0; attempt < PRODUCTION_SERIALIZABLE_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const client = await pool.connect();
+    const heldLocks: string[] = [];
     try {
+      // Cashu claims use the semantic proof identity as their durable
+      // contention key. Acquire it before BEGIN so a waiter starts its
+      // SERIALIZABLE snapshot only after the winner has committed. The lock
+      // never represents ownership; table uniqueness remains authoritative.
+      for (const key of advisoryLockKeys) {
+        const lock = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtextextended($1::text,$2::bigint)) AS locked", [key, CASHU_PROOF_LOCK_SEED]);
+        if (lock.rows[0]?.locked !== true) {
+          const error = Object.assign(new Error("PRODUCTION_ADVISORY_LOCK_BUSY"), { code: ADVISORY_LOCK_BUSY });
+          throw error;
+        }
+        heldLocks.push(key);
+      }
       await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await client.query("SET LOCAL lock_timeout = '1000ms'");
       await client.query("SET LOCAL statement_timeout = '5000ms'");
@@ -54,10 +82,15 @@ async function serializableProductionTransaction<T>(
       await client.query("ROLLBACK").catch(() => undefined);
       lastError = error;
       const code = String((error as { code?: unknown }).code ?? "");
-      if (!RETRYABLE_SERIALIZATION_CODES.has(code) || attempt + 1 === PRODUCTION_SERIALIZABLE_ATTEMPTS) throw error;
+      const retryable = RETRYABLE_SERIALIZATION_CODES.has(code) || (code === ADVISORY_LOCK_BUSY && advisoryLockKeys.length > 0);
+      if (!retryable || attempt + 1 === attempts) throw error;
     } finally {
+      for (const key of heldLocks.reverse()) {
+        await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]).catch(() => undefined);
+      }
       client.release();
     }
+    if (advisoryLockKeys.length) await waitForProductionRetry(attempt);
   }
   throw lastError ?? new Error("PRODUCTION_SERIALIZATION_RETRY_EXHAUSTED");
 }
@@ -170,7 +203,7 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
       await client.query("INSERT INTO cashu_top_up_state(top_up_id,account_id,proof_commitment,state_json) VALUES ($1,$2,$3,$4)", [input.result.topUpId, input.accountId, input.result.commitment, JSON.stringify(input)]);
       for (const proofIdentity of input.semanticProofIdentities) await client.query("INSERT INTO cashu_top_up_proof_identities(proof_identity,top_up_id,account_id) VALUES($1,$2,$3)", [proofIdentity, input.result.topUpId, input.accountId]);
       return frozen({ claimed: true, record: input });
-    });
+    }, { advisoryLockKeys: input.semanticProofIdentities, attempts: CASHU_PROOF_CLAIM_ATTEMPTS });
   }
 
   async find(topUpId: string): Promise<CashuTopUpRecord | undefined> {

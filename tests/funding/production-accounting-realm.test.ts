@@ -109,12 +109,15 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
       policy: { version: "cashu-policy", mints: [] } as never, protectedId: `protected:${topUpId}`,
       semanticProofIdentities: ["9".repeat(64)], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
     });
-    const [cashuOne, cashuTwo] = await Promise.all([
+    const cashuClaims = await Promise.all([
       database.cashu.claim(cashuRecord("cashu:one", "1".repeat(64))),
       database.cashu.claim(cashuRecord("cashu:two", "2".repeat(64))),
+      database.cashu.claim(cashuRecord("cashu:three", "3".repeat(64))),
+      database.cashu.claim(cashuRecord("cashu:four", "4".repeat(64))),
     ]);
-    expect([cashuOne, cashuTwo].filter((claim) => claim.claimed)).toHaveLength(1);
-    const cashuWinner = cashuOne.claimed ? cashuOne.record : cashuTwo.record;
+    expect(cashuClaims.filter((claim) => claim.claimed)).toHaveLength(1);
+    const cashuWinner = cashuClaims.find((claim) => claim.claimed)!.record;
+    expect(new Set(cashuClaims.map((claim) => claim.record.result.topUpId))).toEqual(new Set([cashuWinner.result.topUpId]));
     await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data", outputDataDigest: "4".repeat(64) });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);

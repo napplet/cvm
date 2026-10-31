@@ -45,20 +45,22 @@ type ProductionTransactionOptions = Readonly<{
   attempts?: number;
 }>;
 
-async function acquireSessionAdvisoryLocks(client: PostgresSqlClient, keys: readonly string[], timeoutMs: number, heldLocks: string[]): Promise<void> {
+type AdvisorySessionState = { uncertain: boolean };
+
+async function acquireSessionAdvisoryLocks(client: PostgresSqlClient, keys: readonly string[], timeoutMs: number, heldLocks: string[], sessionState: AdvisorySessionState): Promise<void> {
   if (!keys.length) return;
   // This is deliberately session-scoped and happens before BEGIN. A waiter
   // therefore creates its SERIALIZABLE snapshot only after the prior claimant
-  // commits. Reset the setting before returning this pooled connection.
+  // commits. Any acknowledgement loss leaves session state unknowable, so the
+  // outer transaction evicts this client rather than returning it to the pool.
+  sessionState.uncertain = true;
   await client.query("SELECT set_config('lock_timeout',$1,false)", [`${timeoutMs}ms`]);
-  try {
-    for (const key of keys) {
-      await client.query("SELECT pg_advisory_lock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]);
-      heldLocks.push(key);
-    }
-  } finally {
-    await client.query("RESET lock_timeout");
+  for (const key of keys) {
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]);
+    heldLocks.push(key);
   }
+  await client.query("RESET lock_timeout");
+  sessionState.uncertain = false;
 }
 
 /**
@@ -77,6 +79,7 @@ async function serializableProductionTransaction<T>(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const client = await pool.connect();
     const heldLocks: string[] = [];
+    const advisorySessionState: AdvisorySessionState = { uncertain: false };
     let committed: Readonly<{ result: T }> | undefined;
     let transactionError: unknown;
     let cleanupError: Error | undefined;
@@ -85,7 +88,7 @@ async function serializableProductionTransaction<T>(
       // contention key. Acquire it before BEGIN so a waiter starts its
       // SERIALIZABLE snapshot only after the winner has committed. The lock
       // never represents ownership; table uniqueness remains authoritative.
-      await acquireSessionAdvisoryLocks(client, advisoryLockKeys, options.advisoryLockTimeoutMs ?? CASHU_PROOF_LOCK_TIMEOUT_MS, heldLocks);
+      await acquireSessionAdvisoryLocks(client, advisoryLockKeys, options.advisoryLockTimeoutMs ?? CASHU_PROOF_LOCK_TIMEOUT_MS, heldLocks, advisorySessionState);
       await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await client.query("SET LOCAL lock_timeout = '1000ms'");
       await client.query("SET LOCAL statement_timeout = '5000ms'");
@@ -106,8 +109,9 @@ async function serializableProductionTransaction<T>(
           cleanupError ??= error instanceof Error ? error : new Error("PRODUCTION_ADVISORY_LOCK_RELEASE_FAILED");
         }
       }
-      if (cleanupError) {
-        client.release(cleanupError);
+      const poolReleaseError = cleanupError ?? (advisorySessionState.uncertain ? new Error("PRODUCTION_ADVISORY_SESSION_STATE_UNKNOWN") : undefined);
+      if (poolReleaseError) {
+        client.release(poolReleaseError);
       } else {
         client.release();
       }
@@ -116,13 +120,13 @@ async function serializableProductionTransaction<T>(
     // lock-holding session. An acknowledged commit remains authoritative even
     // when the unlock acknowledgement was lost.
     if (committed) return committed.result;
-    if (cleanupError) throw cleanupError;
     if (transactionError) {
       lastError = transactionError;
       const code = sqlState(transactionError);
       const retryable = RETRYABLE_SERIALIZATION_CODES.has(code);
       if (!retryable || attempt + 1 === attempts) throw transactionError;
     }
+    if (cleanupError) throw cleanupError;
   }
   throw lastError ?? new Error("PRODUCTION_SERIALIZATION_RETRY_EXHAUSTED");
 }

@@ -27,6 +27,7 @@ export class NonGoogleNativeCoreDriverSet {
     restore: NonGoogleFreshRestoreDriver;
     restoreScope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>;
     custodyRoots: readonly string[];
+    restorerCapabilitySha256: string;
   }>) {
     assertPostgresOperationJournal(input.journal);
     assertProductionReadyCapacity(input.capacity);
@@ -37,6 +38,7 @@ export class NonGoogleNativeCoreDriverSet {
     this.roleCostBoundSha256 = Digest.parse(input.roleCostBoundSha256);
     this.restoreScope = Object.freeze({ checkpointId: z.string().min(1).parse(input.restoreScope.checkpointId), sessionId: z.string().min(1).parse(input.restoreScope.sessionId), ownerId: Digest.parse(input.restoreScope.ownerId), sourceAuthorityReference: z.string().min(1).max(256).parse(input.restoreScope.sourceAuthorityReference) });
     this.custodyRoots = Object.freeze([...input.custodyRoots]);
+    this.restorerCapabilitySha256 = Digest.parse(input.restorerCapabilitySha256);
     if (this.custodyRoots.length === 0) throw new Error("NON_GOOGLE_NATIVE_CUSTODY_ROOT_REQUIRED");
     this.journal = input.journal; this.capacity = input.capacity; this.postgres = input.postgres; this.coolify = input.coolify; this.signoz = input.signoz; this.restore = input.restore;
     Object.freeze(this);
@@ -49,6 +51,7 @@ export class NonGoogleNativeCoreDriverSet {
   readonly restore: NonGoogleFreshRestoreDriver;
   readonly restoreScope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>;
   readonly custodyRoots: readonly string[];
+  readonly restorerCapabilitySha256: string;
 }
 export function assertNonGoogleNativeCoreDriverSet(value: unknown): asserts value is NonGoogleNativeCoreDriverSet {
   if (!(value instanceof NonGoogleNativeCoreDriverSet)) throw new Error("NON_GOOGLE_NATIVE_DRIVER_SET_REQUIRED");

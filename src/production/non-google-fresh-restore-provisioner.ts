@@ -9,6 +9,8 @@ import { PostgresByteaObjectStoreAdapter } from "../continuity/postgres-bytea-ob
 import { FileObjectKeyCustody, PerObjectFileCheckpointCrypto } from "./object-retention-policy";
 import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
+import { createProductionDurabilitySubjectRegistry } from "./durability-registry";
+import { PostgresRestorerPullStore } from "./non-google-restorer-pull-protocol";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Prepared = Readonly<{ version: 2; sourceInstanceId: string; binding: NonGoogleCoreBinding; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; state: "prepared" }>;
@@ -18,7 +20,7 @@ type Fresh = Readonly<{ version: 2; databaseUuid: string; applicationUuid: strin
  * subject, reattach, cleanup, or resource callback. Seven-subject recovery is
  * permitted only when the restricted original-record query below is complete. */
 export class NonGoogleFreshRestoreProvisioner {
-  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; custodyRoots: readonly string[] }>) { Object.freeze(this); }
+  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; custodyRoots: readonly string[]; restorerCapabilitySha256: string; roleCostBoundSha256: string }>) { Object.freeze(this); }
   #base() { return `restore:${this.input.binding.candidateSha256}:${this.input.binding.topologySha256}`; }
   #prepare() { return `${this.#base()}:prepare`; }
   #fresh() { return `${this.#base()}:fresh`; }
@@ -31,6 +33,16 @@ export class NonGoogleFreshRestoreProvisioner {
         const crypto = new PerObjectFileCheckpointCrypto({ pool, custody: new FileObjectKeyCustody({ roots: this.input.custodyRoots }) });
         const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore, journal: this.input.postgresJournal, kekPath: "/non-google-unused-legacy-kek", crypto });
         await preparer.prepare(this.input.scope);
+        const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(this.input.scope);
+        const checkpoint = subjects.find(subject => subject.kind === "checkpoint");
+        if (!checkpoint) throw new Error("NON_GOOGLE_RESTORE_CHECKPOINT_SUBJECT_REQUIRED");
+        const archiveBytes = await objectStore.readExact(checkpoint.object);
+        if (!archiveBytes) throw new Error("NON_GOOGLE_RESTORE_CHECKPOINT_ARCHIVE_REQUIRED");
+        await new PostgresRestorerPullStore(this.input.journal, objectStore).claimJob({
+          originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256,
+          roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256),
+          archive: { ...checkpoint.object, byteCount: archiveBytes.byteLength }, expiresAtMs: Date.parse(checkpoint.retentionUntil),
+        });
         const original = await client.query<Record<string, unknown>>("SELECT system_identifier::text AS source_instance_id FROM pg_control_system()", []);
         if (original.rows.length !== 1) throw new Error("NON_GOOGLE_RESTORE_SOURCE_ORIGINAL_REQUIRED");
         const sourceInstanceId = z.string().min(1).max(256).parse(original.rows[0]!.source_instance_id);

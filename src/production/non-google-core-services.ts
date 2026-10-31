@@ -32,7 +32,7 @@ export class NonGoogleNativeCoreServices {
     this.#admission = new NonGoogleAdmissionCertification({ binding: this.binding, journal, capacity: NonGoogleNativeCapacity.fromProduction(drivers.capacity) });
     this.#telemetry = new NonGoogleTelemetryCertification({ binding: this.binding, journal, collector: drivers.signoz });
     this.#chaos = new NonGoogleChaosCertification({ binding: this.binding, journal, coolify: drivers.coolify });
-    this.#restore = new NonGoogleFreshRestoreProvisioner({ binding: this.binding, journal, postgresJournal: drivers.journal, driver: drivers.restore, postgres: drivers.postgres, scope: drivers.restoreScope, custodyRoots: drivers.custodyRoots });
+    this.#restore = new NonGoogleFreshRestoreProvisioner({ binding: this.binding, journal, postgresJournal: drivers.journal, driver: drivers.restore, postgres: drivers.postgres, scope: drivers.restoreScope, custodyRoots: drivers.custodyRoots, restorerCapabilitySha256: drivers.restorerCapabilitySha256, roleCostBoundSha256: drivers.roleCostBoundSha256 });
     Object.freeze(this);
   }
   readonly binding: NonGoogleCoreBinding;

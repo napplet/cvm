@@ -13,6 +13,7 @@ import {
 import type { ProductionSessionRuntime } from "./production-session";
 import type { WorkerCandidate } from "../../certification/contracts";
 import { assertProductionCheckpointCoordinator, type ProductionCheckpointCoordinator } from "../../production/checkpoint-coordinator";
+import { assertMountedProductionSessionMaterial } from "../../production/mounted-session-material";
 
 /**
  * The only hand-off shape between the mounted production runtime and the
@@ -67,6 +68,7 @@ export async function sealProductionSessionMaterial(input: Readonly<{
   if (!input.material || input.material.realm !== "production-real") {
     throw new Error("PRODUCTION_SESSION_MATERIAL_REQUIRED");
   }
+  assertMountedProductionSessionMaterial(input.material);
   try { assertProductionCheckpointCoordinator(input.material.checkpointCoordinator); }
   catch { throw new Error("PRODUCTION_SESSION_MATERIAL_CHECKPOINT_REQUIRED"); }
   let request: Awaited<ReturnType<typeof validateAuthorizationRequest>>;

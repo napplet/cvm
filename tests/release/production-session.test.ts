@@ -9,7 +9,7 @@ import {
   composeProductionProtectedPorts,
   productionSessionReadiness,
 } from "../../src/release/deployment/production-session";
-import { installSealedProductionSessionMaterial } from "../../src/release/deployment/production-session-material";
+import { installSealedProductionSessionMaterial, sealProductionSessionMaterial } from "../../src/release/deployment/production-session-material";
 
 test("production session exposes the exact controller-owned sixteen-provider/eight-suite shape", () => {
   expect(productionSessionReadiness.providerFamilies).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
@@ -60,4 +60,12 @@ test("normal session factory rejects before broker construction when no controll
 
 test("only sealed complete production material can register the process broker", () => {
   expect(() => installSealedProductionSessionMaterial({})).toThrow("PRODUCTION_SESSION_MATERIAL_REQUIRED");
+});
+
+test("sealer rejects a structural or prototype-forged material graph before receipt or provider handling", async () => {
+  const forged = Object.create({ realm: "production-real" });
+  await expect(sealProductionSessionMaterial({
+    authorization: { request: {}, receipt: {} },
+    material: forged,
+  })).rejects.toThrow("PRODUCTION_MOUNTED_SESSION_PROVENANCE_REQUIRED");
 });

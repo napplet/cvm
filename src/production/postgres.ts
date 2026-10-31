@@ -5,6 +5,19 @@ import { MountedProductionSecretMaterial } from "./secret-material";
 
 type RestrictedCloudSqlCredential = Readonly<{ host: string; port: number; user: string; password: string; servername: string }>;
 
+/**
+ * A construction-only database boundary for the hosted deny-effects tracer.
+ * It is deliberately not a ProductionConfig field: normal startup always
+ * constructs the private-IP TLS pool below.  The tracer still consumes and
+ * validates the mounted role credential before receiving a real SQL pool.
+ */
+export type ProductionPostgresConstructionTransport = Readonly<{
+  open(input: Readonly<{
+    config: ProductionConfig;
+    credential: Readonly<RestrictedCloudSqlCredential>;
+  }>): Promise<Readonly<{ pool: PostgresSqlPool; close(): Promise<void> }>>;
+}>;
+
 function credential(value: string, hostOverride?: string): RestrictedCloudSqlCredential {
   let parsed: unknown;
   try { parsed = JSON.parse(value); } catch { throw new Error("PRODUCTION_CLOUD_SQL_CREDENTIAL_INVALID"); }
@@ -32,7 +45,18 @@ async function openRestrictedPool(config: ProductionConfig, secrets: MountedProd
 
 /** Actual private-IP Cloud SQL pool. Credentials enter the driver only; no
  * connection string, password, or environment fallback is ever exposed. */
-export async function openProductionPostgresPool(config: ProductionConfig, secrets = new MountedProductionSecretMaterial(config)): Promise<Readonly<{ pool: PostgresSqlPool; close(): Promise<void> }>> {
+export async function openProductionPostgresPool(
+  config: ProductionConfig,
+  secrets = new MountedProductionSecretMaterial(config),
+  constructionTransport?: ProductionPostgresConstructionTransport,
+): Promise<Readonly<{ pool: PostgresSqlPool; close(): Promise<void> }>> {
+  if (constructionTransport && process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS !== "deny") {
+    throw new Error("PRODUCTION_POSTGRES_CONSTRUCTION_TRANSPORT_DENIED");
+  }
+  if (constructionTransport) {
+    const input = credential(await secrets.text("cloudSql.roleCredentialReference"));
+    return constructionTransport.open(Object.freeze({ config, credential: input }));
+  }
   return openRestrictedPool(config, secrets, "cloudSql.roleCredentialReference");
 }
 

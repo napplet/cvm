@@ -15,6 +15,12 @@ const FLY_PRICING_URL = "https://docs.fly.io/about/pricing";
  * digest and may never substitute a stale/cached value. */
 export const BTC_USD_TICKER_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker";
 export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/model-garden/pricing";
+/** D-141 successor source. Capturing this public document does not verify an
+ * API account, project, contract discount, or a model's availability. */
+/** The model snapshot is a fixed, public, no-auth document.  Unlike the
+ * catalogue page it names the exact pinned model and carries its token-price
+ * cards in the retained HTML itself. */
+export const OPENAI_RESPONSES_PRICING_URL = "https://developers.openai.com/api/docs/models/gpt-4.1" as const;
 /** Only infrastructure is discoverable through Cloud Billing. Payment rails
  * are funding capital (and separately contracted fees); model prices come
  * from the Vertex model source, never an invented Cloud SKU selector. */
@@ -78,6 +84,7 @@ export type VertexGeminiPriceObservation = Readonly<{
   sourceUrl: typeof VERTEX_GEMINI_PRICING_URL; bytes: Uint8Array; observedAtMs: number; freshUntilMs: number; currency: "USD"; location: "global"; model: "gemini-4-argon";
   effectiveFrom: "2026-10-13"; effectiveUntil: "2026-11-30"; inputMicrosPerMillion: 4_000_000; cachedInputMicrosPerMillion: 200_000; outputAndThoughtMicrosPerMillion: 20_000_000;
 }>;
+export type OpenAiResponsesPricingDocument = Readonly<{ sourceUrl: typeof OPENAI_RESPONSES_PRICING_URL; bytes: Uint8Array; observedAtMs: number; freshUntilMs: number }>;
 /** Reads ADC only from gcloud stdout into this process's memory. No project is
  * selected, and no token crosses argv, environment, a digest, or an output. */
 export function createApplicationDefaultTokenPort(): ApplicationDefaultTokenPort {
@@ -129,6 +136,25 @@ async function readOfficial(fetcher: OfficialFetch, url: string, token?: string,
   try { for (;;) { const remaining = deadline - Date.now(); if (remaining <= 0) throw new Error("OFFICIAL_SOURCE_TIMEOUT"); let readTimer: ReturnType<typeof setTimeout> | undefined; const next = await Promise.race([reader.read(), new Promise<never>((_resolve, reject) => { readTimer = setTimeout(() => reject(new Error("OFFICIAL_SOURCE_TIMEOUT")), remaining); })]).finally(() => { if (readTimer !== undefined) clearTimeout(readTimer); }); if (next.done) { complete = true; break; } length += next.value.byteLength; if (length > MAX_SOURCE_BYTES) throw new Error("OFFICIAL_SOURCE_BYTES_REJECTED"); chunks.push(next.value); } }
   finally { if (!complete) { controller.abort(); void reader.cancel(); } reader.releaseLock(); }
   if (length === 0) throw new Error("OFFICIAL_SOURCE_BYTES_REJECTED"); const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; } return bytes;
+}
+
+/** Fixed-origin public capture only. A document capture cannot represent an
+ * account-specific price, model entitlement, or billing authorization. */
+export async function captureOpenAiResponsesPricingDocument(input: Readonly<{ fetch: OfficialFetch; now?: () => number; freshnessMs?: number; timeoutMs?: number }>): Promise<OpenAiResponsesPricingDocument> {
+  const now = input.now ?? Date.now;
+  const observedAtMs = now();
+  const freshnessMs = input.freshnessMs ?? 60 * 60 * 1000;
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0 || !Number.isSafeInteger(freshnessMs) || freshnessMs < 1_000 || freshnessMs > 24 * 60 * 60 * 1000 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) throw new Error("OPENAI_PRICE_SOURCE_CONFIGURATION_INVALID");
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await Promise.race([input.fetch(OPENAI_RESPONSES_PRICING_URL, { method: "GET", redirect: "error", headers: { accept: "text/html" }, signal: controller.signal }), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("OPENAI_PRICE_SOURCE_TIMEOUT")); }, timeoutMs); })]);
+    if (!response.ok || response.redirected || new URL(response.url || OPENAI_RESPONSES_PRICING_URL).origin !== "https://developers.openai.com") throw new Error("OPENAI_PRICE_SOURCE_RESPONSE_REJECTED");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_SOURCE_BYTES) throw new Error("OPENAI_PRICE_SOURCE_BYTES_REJECTED");
+    return Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes, observedAtMs, freshUntilMs: observedAtMs + freshnessMs });
+  } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
 }
 function json(bytes: Uint8Array): Record<string, unknown> { try { const value: unknown = JSON.parse(new TextDecoder().decode(bytes)); assertBounded(value, "OFFICIAL_SOURCE_PARSER_DRIFT"); return value; } catch (error) { if (error instanceof Error && error.message === "OFFICIAL_SOURCE_PARSER_DRIFT") throw error; throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); } }
 function joinRawDocuments(documents: readonly Uint8Array[]): Uint8Array { const total = documents.reduce((sum, document) => sum + document.byteLength, 0); if (total === 0 || total > MAX_SOURCE_BYTES) throw new Error("OFFICIAL_SOURCE_BYTES_REJECTED"); const joined = new Uint8Array(total); let cursor = 0; for (const document of documents) { joined.set(document, cursor); cursor += document.byteLength; } return joined; }

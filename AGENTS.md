@@ -1,3 +1,12 @@
+<!-- MANUAL NON-GOOGLE PRODUCTION CONSTRAINT (D-141, 2026-10-31): Google Cloud,
+Vertex/Gemini, ADC, BigQuery, Cloud Run, Cloud SQL, and GCS are excluded from
+new production selection, implementation, provisioning, or execution. Preserve
+historical code/evidence for audit and recovery only. New production work must
+use the non-Google transition recorded in
+.planning/phases/07-admission-slo-resilience-launch-safety/07-65-NON-GOOGLE-MODEL-COST-HANDOFF.md.
+Do not weaken the delivered CVM/homelab activation guards; a later measured
+full-graph plan owns any replacement activation decision. -->
+
 <!-- GSD:project-start source:PROJECT.md -->
 
 ## Project

@@ -71,6 +71,30 @@ export const AuthoritativeUsageReportEnvelopeSchema = z.object({
 }).strict();
 export type AuthoritativeUsageReportEnvelope = z.infer<typeof AuthoritativeUsageReportEnvelopeSchema>;
 
+/** Store-agnostic successor envelope. It never emits a report query or
+ * fabricates a cloud URI; the later selected object authority provides the
+ * opaque identity. Existing V1 structures remain historic-byte compatible. */
+const UsageArtifactReferenceV2Schema = z.object({
+  version: z.literal(2),
+  storageKind: z.enum(["postgres-bytea-object-v1", "opaque-external"]),
+  objectIdentitySha256: DigestSchema,
+  contentSha256: DigestSchema,
+}).strict();
+export const AuthoritativeUsageReportEnvelopeV2Schema = z.object({
+  version: z.literal(2),
+  originalOperationId: z.string().regex(/^[a-z][a-z0-9_:-]{2,127}$/u),
+  originalOperationSha256: DigestSchema,
+  rawArtifact: UsageArtifactReferenceV2Schema,
+  coverage: z.enum(["complete", "partial", "unknown"]),
+  currency: z.literal("USD"),
+  grossMeteredMicros: MicrosSchema.nullable(),
+  creditsMicros: z.number().int().safe().nullable(),
+  adjustmentsMicros: z.number().int().safe().nullable(),
+  netInvoiceMicros: z.number().int().safe().nullable(),
+  observedAtMs: z.number().int().nonnegative(),
+}).strict();
+export type AuthoritativeUsageReportEnvelopeV2 = z.infer<typeof AuthoritativeUsageReportEnvelopeV2Schema>;
+
 async function sha256(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   return Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
@@ -141,6 +165,18 @@ export async function verifyAuthoritativeUsageReportArtifact(envelopeInput: unkn
   const envelope = AuthoritativeUsageReportEnvelopeSchema.parse(envelopeInput);
   const actual = await sha256Bytes(rawReportBytes);
   if (actual !== envelope.rawReportSha256 || actual !== envelope.rawArtifact.sha256) throw new Error("AUTHORITATIVE_USAGE_ARTIFACT_INVALID");
+  return envelope;
+}
+
+export async function createAuthoritativeUsageReportEnvelopeV2(input: Omit<AuthoritativeUsageReportEnvelopeV2, "rawArtifact"> & Readonly<{ rawArtifact: Omit<z.infer<typeof UsageArtifactReferenceV2Schema>, "contentSha256">; rawReportBytes: Uint8Array }>): Promise<AuthoritativeUsageReportEnvelopeV2> {
+  const { rawReportBytes, ...base } = input;
+  const contentSha256 = await sha256Bytes(rawReportBytes);
+  return AuthoritativeUsageReportEnvelopeV2Schema.parse({ ...base, rawArtifact: { ...base.rawArtifact, contentSha256 } });
+}
+
+export async function verifyAuthoritativeUsageReportArtifactV2(envelopeInput: unknown, rawReportBytes: Uint8Array): Promise<AuthoritativeUsageReportEnvelopeV2> {
+  const envelope = AuthoritativeUsageReportEnvelopeV2Schema.parse(envelopeInput);
+  if (await sha256Bytes(rawReportBytes) !== envelope.rawArtifact.contentSha256) throw new Error("AUTHORITATIVE_USAGE_ARTIFACT_V2_INVALID");
   return envelope;
 }
 

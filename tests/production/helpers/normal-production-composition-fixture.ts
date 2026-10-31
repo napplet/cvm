@@ -86,10 +86,8 @@ async function main(): Promise<void> {
     const record = materializeMountedProductionSessionRecord({ config, measured: {
       ...fixture.measured,
       googleControls: {
-        accountScopeSha256: fixture.accountScopeSha256,
         cloudRun: controlDeployment,
         cloudSql: { tier: "db-custom-2-8192", privateNetwork: "projects/napplet-cvm-01/global/networks/release-private", storageGb: 20, authorityInstanceId: "release-sql" },
-        gcs: { encryptionKeyReference: "gcs:key" },
         collector: { endpointReference: "collector/release", deployment: collectorDeployment },
       },
     } });

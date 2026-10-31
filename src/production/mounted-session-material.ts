@@ -480,7 +480,22 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const coreSuites = createProductionCoreSuiteAdapters({ candidate: input.resolved.workerCandidate, control, contextvm: contextvmCertification });
   /* The mount-record parser guarantees JSON-only data; the Google factory
    * re-parses this exact controller shape before it creates ADC clients. */
-  const mountedGoogle = createMountedGoogleControls({ config: input.config, generation: input.generation, configuration: input.resolved.googleControls as MountedGoogleControlConfiguration, telemetry: coreSuites.telemetry, now });
+  /* The immutable record carries only controller-observed deployment facts.
+   * Its account scope is already bound on every provider discovery and the
+   * encryption-key reference is fixed production configuration, so derive
+   * both here instead of widening the JSON record into a credential channel. */
+  const accountScopeSha256 = input.resolved.discoveries.cloud_run.accountScopeSha256;
+  if (input.resolved.discoveries.cloud_sql_postgres.accountScopeSha256 !== accountScopeSha256
+    || input.resolved.discoveries.gcs.accountScopeSha256 !== accountScopeSha256
+    || input.resolved.discoveries.collector.accountScopeSha256 !== accountScopeSha256) {
+    throw new Error("PRODUCTION_MOUNTED_GOOGLE_ACCOUNT_SCOPE_REQUIRED");
+  }
+  const mountedGoogleConfiguration: MountedGoogleControlConfiguration = Object.freeze({
+    ...(input.resolved.googleControls as Omit<MountedGoogleControlConfiguration, "accountScopeSha256" | "gcs">),
+    accountScopeSha256,
+    gcs: Object.freeze({ encryptionKeyReference: input.config.gcs.encryptionKeyReference }),
+  });
+  const mountedGoogle = createMountedGoogleControls({ config: input.config, generation: input.generation, configuration: mountedGoogleConfiguration, telemetry: coreSuites.telemetry, now });
   const { google } = mountedGoogle;
   const cloudRun = createNativeCloudRunProvider({ config: input.resolved.providerConfigurations.cloud_run, port: mountedGoogle.cloudRun, now });
   const cloudSql = createNativeCloudSqlPostgresProvider({ config: input.resolved.providerConfigurations.cloud_sql_postgres, port: mountedGoogle.cloudSql, now });

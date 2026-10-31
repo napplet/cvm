@@ -867,7 +867,10 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         const postgres = new NonGooglePostgresDriver({ host: "127.0.0.1", port: Number(port), database: nativeDatabase, user: nativeServiceRole, passwordPath: "/fixture/native-postgres-password", ssl: false }, { async open() { return Object.freeze({ connect: nativePool.connect.bind(nativePool), end: async () => undefined }); } }, async () => "fixture-password");
         const restore = new NonGoogleFreshRestoreDriver(coolify, { sourceDatabaseUrlPath: "/fixture/native-source-url", freshDatabaseUrlPath: "/fixture/native-fresh-url", archiveRoot: "/fixture/native-archive", trustedRestorerName: "native-restorer", expectedPostgresMajor: 17 }, runner, async path => {
           if (path !== "/fixture/native-source-url") throw new Error("NATIVE_RESTORE_UNEXPECTED_SECRET");
-          return `postgresql://${nativeBackupRole}@127.0.0.1:${port}/${nativeDatabase}`;
+          // pg_dump executes inside the trusted PG17 container, so its source
+          // address is the container's own fixed listener, never the host
+          // port used by the restricted service/object fixture pools.
+          return `postgresql://${nativeBackupRole}@127.0.0.1:5432/${nativeDatabase}`;
         });
         const signoz = new NonGoogleSigNozDriver({ baseOrigin: "https://signoz.fixture.invalid", ingestionKeyPath: "/fixture/signoz-ingest", queryKeyPath: "/fixture/signoz-query", collectorConfigSha256: hex("native-signoz"), serviceName: "native-restore", queryTemplateVersion: "v1" });
         const nativeScope = { checkpointId: nativeCheckpointId, sessionId, ownerId: fixture.ownerId, sourceAuthorityReference: `source:${nativeCheckpointId}` };

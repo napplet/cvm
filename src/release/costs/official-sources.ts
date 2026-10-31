@@ -14,7 +14,7 @@ const FLY_PRICING_URL = "https://docs.fly.io/about/pricing";
  * not the display-only BTC/USD cache.  A settlement binds its exact response
  * digest and may never substitute a stale/cached value. */
 export const BTC_USD_TICKER_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker";
-export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing";
+export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/model-garden/pricing";
 /** Only infrastructure is discoverable through Cloud Billing. Payment rails
  * are funding capital (and separately contracted fees); model prices come
  * from the Vertex model source, never an invented Cloud SKU selector. */

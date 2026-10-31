@@ -42,17 +42,17 @@ export class NonGoogleFreshRestoreProvisioner {
     try {
         const crypto = new PerObjectFileCheckpointCrypto({ pool, custody: new FileObjectKeyCustody({ roots: this.input.custodyRoots }) });
         const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore: this.input.objectStore, journal: this.input.postgresJournal, kekPath: "/non-google-unused-legacy-kek", crypto });
-        await preparer.prepare(this.input.scope);
+        const original = await preparer.prepareAndResolve(this.input.scope);
         const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(this.input.scope);
         if (subjects.length !== 7) throw new Error("NON_GOOGLE_RESTORE_SUBJECT_INVENTORY_REQUIRED");
         const backup = await this.input.driver.captureCustomBackup();
         try {
           const checkpointId = `restore-backup:${this.input.binding.candidateSha256.slice(0, 24)}`;
-          const sealed = await crypto.seal({ checkpointId, plaintext: backup, additionalData: new TextEncoder().encode(JSON.stringify({ scope: this.input.scope, binding: this.input.binding })), binding: { accountId: "restore", sessionId: this.input.scope.sessionId, actionId: this.input.scope.checkpointId, operationId: this.#prepare(), retentionUntil: subjects[0]!.retentionUntil } });
+          const sealed = await crypto.seal({ checkpointId, plaintext: backup, additionalData: new TextEncoder().encode(JSON.stringify({ scope: this.input.scope, binding: this.input.binding })), binding: { accountId: original.accountId, sessionId: this.input.scope.sessionId, actionId: original.actionId, operationId: this.#prepare(), retentionUntil: original.retentionUntil } });
           const stored = await crypto.readSealed(checkpointId);
           if (!stored || stored.keyReference !== sealed.keyReference) throw new Error("NON_GOOGLE_RESTORE_BACKUP_CUSTODY_REQUIRED");
           const reference = await this.input.objectStore.createImmutable({ key: `restore-backups/${checkpointId}/${stored.ciphertextSha256}`, bytes: stored.ciphertext, originalOperationIdentity: createHash("sha256").update(this.#prepare()).digest("hex") });
-          await new PostgresRestorerPullStore(this.input.journal, this.input.objectStore).claimJob({ originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256, roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256), archive: { ...reference, byteCount: stored.ciphertext.byteLength }, expiresAtMs: Date.parse(subjects[0]!.retentionUntil) });
+          await new PostgresRestorerPullStore(this.input.journal, this.input.objectStore).claimJob({ originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256, roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256), archive: { ...reference, byteCount: stored.ciphertext.byteLength }, expiresAtMs: Date.parse(original.retentionUntil) });
         } finally { backup.fill(0); }
         const sourceInstanceId = await this.input.driver.sourceSystemIdentifier();
         const scope = Object.freeze({ checkpointId: this.input.scope.checkpointId, sessionId: this.input.scope.sessionId, ownerId: this.input.scope.ownerId, sourceAuthorityReference: z.string().min(1).max(256).parse(this.input.scope.sourceAuthorityReference) });

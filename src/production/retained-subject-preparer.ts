@@ -20,6 +20,7 @@ const jsonBytes = (value: unknown) => new TextEncoder().encode(canonicalJson(val
 
 export type RetainedSubjectScope = Readonly<{ checkpointId: string; sessionId: string; ownerId: string }>;
 type Binding = Readonly<{ accountId: string; actionId: string; retentionUntil: string; artifactId: string; artifactVersion: number; expectedVersion: number; checkpoint: ProductionDurabilitySubject }>;
+export type PreparedRetainedSubjectBinding = Readonly<Pick<Binding, "accountId" | "actionId" | "retentionUntil">>;
 type Original = Readonly<{ kind: Exclude<z.infer<typeof DurabilitySubjectSchema>["kind"], "checkpoint">; sourceIdentity: string; bytes: Uint8Array }>;
 
 /**
@@ -46,7 +47,11 @@ export class ProductionRetainedSubjectPreparer {
     this.#crypto = input.crypto ?? new MountedKekCheckpointCrypto({ pool: input.pool, kekPath: input.kekPath, readFile: input.readKekFile, now: input.now });
   }
 
-  async prepare(raw: RetainedSubjectScope): Promise<void> {
+  async prepare(raw: RetainedSubjectScope): Promise<void> { await this.prepareAndResolve(raw); }
+
+  /** Native restore custody binds to this same final original checkpoint
+   * record; it must not infer an account/action from a later row. */
+  async prepareAndResolve(raw: RetainedSubjectScope): Promise<PreparedRetainedSubjectBinding> {
     const scope = this.#scope(raw), binding = await this.#binding(scope);
     // Every write/dispatch fence below is rechecked after its preceding
     // awaits. Expiry paths can observe or erase original effects, never add a
@@ -67,6 +72,7 @@ export class ProductionRetainedSubjectPreparer {
     // This is the first read-only point visible to restore. A partial archive
     // is never returned as an inventory and cannot become certification input.
     await registry.inventory(scope);
+    return Object.freeze({ accountId: binding.accountId, actionId: binding.actionId, retentionUntil: binding.retentionUntil });
   }
 
   /** Query-only cloned-authority proof for a retained original. Reopen is not

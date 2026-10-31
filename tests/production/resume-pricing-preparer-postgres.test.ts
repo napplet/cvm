@@ -1052,6 +1052,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await mountedService.prepare({ principal: { id: accountId }, sessionId: workspaceCommand.sessionId,
       checkpointId: workspaceSealed.manifest.checkpointId, expectedSessionVersion: 1, expectedCheckpointVersion: 1,
       idempotencyKey: "prepare:workspace-native" })).toMatchObject({ status: "quoted", quoteReference: workspaceQuote.quoteReference });
+    const beforeMountedResume = await metered.findMeteredAction(accountId, workspaceClaim.actionKey);
+    if (beforeMountedResume?.status !== "prepared") throw new Error(`MOUNTED_PROVIDER_PRECONDITION_INVALID:${beforeMountedResume?.status ?? "missing"}`);
     const runnerInput = { pool, acceptance: workspaceAcceptance, preparer: workspacePreparer, workers: workspaceWorkers,
       restores: workspaceRestores(), generation: core, finalizer, cleanup: cleanup() };
     // First dispatch traverses the mounted public facade into its runner,

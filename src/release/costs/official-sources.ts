@@ -200,45 +200,71 @@ async function modalSandboxSection(document: string): Promise<string> {
     }
   }
 }
-type ModalSandboxElement = { readonly parent?: ModalSandboxElement; readonly children: ModalSandboxElement[]; readonly text: string[]; readonly inSandbox: boolean; };
-function modalSandboxElementRate(element: ModalSandboxElement, resource: "CPU" | "Memory", unit: "core" | "GiB"): bigint | undefined {
-  const source = renderedText(element.text.join(""));
-  const labels = [...source.matchAll(new RegExp(`\\b${resource}\\b`, "giu"))];
-  const qualifiers = [...source.matchAll(/\bnon(?:[-\s]+)preemptible\b/giu)];
-  const rates = [...source.matchAll(new RegExp(`\\$?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(?:[0-9.\\s]{0,128})\\/\\s*${unit}\\s*\\/\\s*sec`, "giu"))];
-  if (labels.length !== 1 || qualifiers.length !== 1 || rates.length !== 1 || !rates[0]?.[1]) return undefined;
-  return decimalToNanos(rates[0][1]);
+const MAX_MODAL_SANDBOX_NODES = 512;
+const MAX_MODAL_SANDBOX_DEPTH = 32;
+const MAX_MODAL_SANDBOX_TEXT_BYTES = 32 * 1024;
+type ModalSandboxElement = { readonly parent?: ModalSandboxElement; readonly children: ModalSandboxElement[]; readonly directText: string[]; readonly inSandbox: boolean; readonly ariaHidden: boolean; readonly className: string; };
+function modalSandboxText(element: ModalSandboxElement): string {
+  if (element.ariaHidden) return "";
+  return renderedText(`${element.directText.join("")} ${element.children.map(modalSandboxText).join(" ")}`);
 }
-function hasRateDescendant(element: ModalSandboxElement, candidates: readonly ModalSandboxElement[]): boolean {
-  for (const candidate of candidates) for (let parent = candidate.parent; parent; parent = parent.parent) if (parent === element) return true;
+function modalSandboxLabel(resource: "CPU" | "Memory"): string { return `${resource} (non-preemptible)`; }
+function modalSandboxLabelElement(element: ModalSandboxElement, resource: "CPU" | "Memory"): boolean { return modalSandboxText(element) === modalSandboxLabel(resource); }
+function modalSandboxPriceElement(element: ModalSandboxElement, unit: "core" | "GiB"): bigint | undefined {
+  const match = new RegExp(`^\\$\\s*([0-9]+(?:\\.[0-9]+)?)\\s*\\/\\s*${unit}\\s*\\/\\s*sec$`, "iu").exec(modalSandboxText(element));
+  return match?.[1] ? decimalToNanos(match[1]) : undefined;
+}
+function isDescendant(element: ModalSandboxElement, ancestor: ModalSandboxElement): boolean {
+  for (let parent = element.parent; parent; parent = parent.parent) if (parent === ancestor) return true;
   return false;
 }
+function innermost(elements: readonly ModalSandboxElement[]): readonly ModalSandboxElement[] { return elements.filter(element => !elements.some(other => other !== element && isDescendant(other, element))); }
+function commonAncestor(first: ModalSandboxElement, second: ModalSandboxElement): ModalSandboxElement | undefined {
+  const ancestors = new Set<ModalSandboxElement>();
+  for (let element: ModalSandboxElement | undefined = first; element; element = element.parent) ancestors.add(element);
+  for (let element: ModalSandboxElement | undefined = second; element; element = element.parent) if (ancestors.has(element)) return element;
+  return undefined;
+}
+function modalSandboxRowBranch(row: ModalSandboxElement, descendant: ModalSandboxElement): ModalSandboxElement | undefined {
+  let branch = descendant;
+  while (branch.parent && branch.parent !== row) branch = branch.parent;
+  return branch.parent === row ? branch : undefined;
+}
+function modalSandboxResourceRow(row: ModalSandboxElement): boolean {
+  return row.className.split(/\s+/u).includes("resource-row") && row.children.filter(child => !child.ariaHidden).length === 2;
+}
 async function modalSandboxRates(document: string): Promise<Readonly<{ cpu: bigint; memory: bigint }>> {
-  const stack: ModalSandboxElement[] = []; let sandboxRoot: ModalSandboxElement | undefined;
+  const stack: ModalSandboxElement[] = []; const elements: ModalSandboxElement[] = []; let sandboxRoot: ModalSandboxElement | undefined; let textBytes = 0;
   try {
     const parsed = new HTMLRewriter().on("*", {
       element(element) {
         const parent = stack.at(-1);
         const inSandbox = parent?.inSandbox === true || (element.tagName.toLowerCase() === "section" && element.getAttribute("id") === "sandboxes");
-        const current: ModalSandboxElement = { ...(parent ? { parent } : {}), children: [], text: [], inSandbox };
+        const current: ModalSandboxElement = { ...(parent ? { parent } : {}), children: [], directText: [], inSandbox, ariaHidden: element.getAttribute("aria-hidden") === "true", className: element.getAttribute("class") ?? "" };
         if (parent) parent.children.push(current);
         if (inSandbox && !parent?.inSandbox) {
           if (sandboxRoot) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
           sandboxRoot = current;
         }
+        if (inSandbox) { elements.push(current); if (elements.length > MAX_MODAL_SANDBOX_NODES || stack.length >= MAX_MODAL_SANDBOX_DEPTH) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); }
         stack.push(current);
         element.onEndTag(() => { if (stack.pop() !== current) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); });
       },
-      text(chunk) { for (const element of stack) if (element.inSandbox) element.text.push(chunk.text); },
+      text(chunk) { const current = stack.at(-1); if (current?.inSandbox && !current.ariaHidden && chunk.text) { textBytes += new TextEncoder().encode(chunk.text).byteLength; if (textBytes > MAX_MODAL_SANDBOX_TEXT_BYTES) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); current.directText.push(chunk.text); } },
     }).transform(new Response(document));
     await parsed.text();
   } catch { throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); }
   if (!sandboxRoot || stack.length !== 0) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
   const rate = (resource: "CPU" | "Memory", unit: "core" | "GiB") => {
-    const candidates = [sandboxRoot!].flatMap(function visit(element): ModalSandboxElement[] { return [element, ...element.children.flatMap(visit)]; }).filter(element => element !== sandboxRoot && modalSandboxElementRate(element, resource, unit) !== undefined);
-    const innermost = candidates.filter(element => !hasRateDescendant(element, candidates));
-    if (innermost.length !== 1) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
-    const value = modalSandboxElementRate(innermost[0]!, resource, unit);
+    const labels = innermost(elements.filter(element => element !== sandboxRoot && modalSandboxLabelElement(element, resource)));
+    const prices = innermost(elements.filter(element => element !== sandboxRoot && modalSandboxPriceElement(element, unit) !== undefined));
+    if (labels.length !== 1 || prices.length !== 1) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+    const row = commonAncestor(labels[0]!, prices[0]!);
+    const value = modalSandboxPriceElement(prices[0]!, unit);
+    const labelBranch = row ? modalSandboxRowBranch(row, labels[0]!) : undefined;
+    const priceBranch = row ? modalSandboxRowBranch(row, prices[0]!) : undefined;
+    const rowLabels = row ? innermost(elements.filter(element => element !== sandboxRoot && (modalSandboxLabelElement(element, "CPU") || modalSandboxLabelElement(element, "Memory")) && (element === row || isDescendant(element, row)))) : [];
+    if (!row || row === sandboxRoot || !modalSandboxResourceRow(row) || !labelBranch || !priceBranch || labelBranch === priceBranch || rowLabels.length !== 1 || rowLabels[0] !== labels[0]!) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
     if (value === undefined) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
     return value;
   };

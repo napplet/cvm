@@ -125,7 +125,7 @@ function modalPricingReader(document: string, unit: "worker-second" | "worker-10
 
 test("Modal worker pricing reads only one rendered Sandbox section and preserves exact pricing units", async () => {
   const generalCompute = "<section id=\"general\"><h2>General compute pricing</h2>CPU $0.00001310 / core / sec Memory $0.00000222 / GiB / sec</section>";
-  const sandbox = "<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2><div><span>CPU (non-preemptible)</span><span>$0.00003942 / core / sec</span></div><div><span>Memory (non-preemptible)</span><span>$0.00000667 / GiB / sec</span></div></section>";
+  const sandbox = "<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2><div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>$0.00003942 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>$0.00000667 / GiB / sec</span></div></section>";
   await expect(modalPricingReader(`${generalCompute}${sandbox}`, "worker-second").sources.readOfficialPricing({ provider: "modal" })).resolves.toMatchObject({
     quotes: [{ unit: "worker-second", priceNanos: "46090", priceMicros: 47 }],
   });
@@ -149,6 +149,8 @@ test("Modal worker pricing rejects preemptible, unlabelled, unrelated, duplicate
   await expect(modalPricingReader(pricing("<div>CPU (non-preemptible) $0.00003942 / core / sec</div><div>Memory (non-preemptible) $0.00000667 / GiB / sec</div><div>CPU (non-preemptible) $0.00000001 / core / sec</div><div>Memory (non-preemptible) $0.00000001 / GiB / sec</div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
   await expect(modalPricingReader(pricing("<div><span>CPU (non-preemptible)</span><span>Storage (non-preemptible) $0.00000001 / core / sec</span></div><div>Memory (non-preemptible) $0.00000667 / GiB / sec</div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
   await expect(modalPricingReader(pricing("<div>CPU (non-preemptible) $0.00003942 / core / sec</div><div><span>Memory (non-preemptible)</span><span>Storage (non-preemptible) $0.00000001 / GiB / sec</span></div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>Storage $0.00000001 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>$0.00000667 / GiB / sec</span></div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("<div class=\"resource-row\"><span>CPU (non-preemptible)</span><span>$0.00003942 / core / sec</span></div><div class=\"resource-row\"><span>Memory (non-preemptible)</span><span>Storage $0.00000001 / GiB / sec</span></div>"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
 });
 
 test("USD receipt settlement captures a fresh executable USD/SAT source quote and always rounds against the service", async () => {

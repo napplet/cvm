@@ -787,7 +787,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const workspaceAllocation = await workerAuthority.allocate(accountId, workspaceResume.idempotencyKey);
     if (workspaceAllocation.status !== "available") throw new Error("EXPECTED_WORKSPACE_CAPACITY");
     const workspaceCapacityIntent = (await refreshedAcceptance.claimWorker(accountId, workspaceResume.idempotencyKey)).workerIntent;
-    const workerOperationId = `capacity-${hash({ intentReference: workspaceCapacityIntent.capacityIntentReference, expectedSessionBindingDigest: workspaceCapacityIntent.sessionBindingDigest }).slice(0, 40)}`;
+    // Match the mounted capacity component's immutable operation derivation.
+    // The prewarm may reconcile this original worker, but must never create a
+    // replacement provider resource after the lost-ACK boundary.
+    const workerOperationId = `capacity-${createHash("sha256").update(`${workspaceCapacityIntent.capacityIntentReference}:${workspaceCapacityIntent.sessionBindingDigest}`).digest("hex").slice(0, 40)}`;
     const nativeWorkerJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-workers", scopeSha256: "4".repeat(64) });
     const nativeJobJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-jobs", scopeSha256: "4".repeat(64) });
     const nativeRequestJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-requests", scopeSha256: "4".repeat(64) });

@@ -3,6 +3,7 @@ import type { PostgresSqlClient, PostgresSqlPool } from "../../persistence/postg
 
 export type OperationRecord<T = unknown> = Readonly<{ operationId: string; identitySha256: string; revision: number; value: T }>;
 const instances = new WeakSet<object>();
+const OPENAI_RESPONSES_JOURNAL_ROLE = "napplet_openai_responses_journal";
 const digest = (value: string) => { if (!/^[a-f0-9]{64}$/u.test(value)) throw new Error("OPERATION_DIGEST_INVALID"); return value; };
 const identifier = (value: string) => { if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$/u.test(value)) throw new Error("OPERATION_IDENTIFIER_INVALID"); return value; };
 function encode(value: unknown): string {
@@ -39,13 +40,26 @@ export class PostgresOperationJournal {
   readonly #pool: PostgresSqlPool;
   readonly #namespace: string;
   readonly #scope: string;
-  constructor(pool: PostgresSqlPool, options: Readonly<{ namespace: string; scopeSha256: string }>) {
+  readonly #purpose: "default" | "openai-responses";
+  constructor(pool: PostgresSqlPool, options: Readonly<{ namespace: string; scopeSha256: string; purpose?: "openai-responses" }>) {
     this.#namespace = identifier(options.namespace);
     this.#scope = digest(options.scopeSha256);
-    this.#pool = bindAccountingRealmPool(pool, createAccountingRealm("production-real"));
+    this.#purpose = options.purpose === "openai-responses" ? "openai-responses" : "default";
+    this.#pool = this.#purpose === "openai-responses" ? Object.freeze({ async connect() {
+      const client = await pool.connect();
+      try {
+        const identity = (await client.query<{ current_user: string; session_user: string; current_is_superuser: boolean; session_is_superuser: boolean }>("SELECT current_user::text AS current_user, session_user::text AS session_user, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AS current_is_superuser, (SELECT rolsuper FROM pg_roles WHERE rolname=session_user) AS session_is_superuser")).rows[0];
+        if (!identity || identity.current_is_superuser || identity.session_is_superuser || identity.current_user === "postgres" || identity.session_user === "postgres") throw new Error("ACCOUNTING_REALM_SUPERUSER_DENIED");
+        await client.query(`SET ROLE ${OPENAI_RESPONSES_JOURNAL_ROLE}`);
+        const selected = (await client.query<{ current_user: string }>("SELECT current_user::text AS current_user")).rows[0];
+        if (!selected || selected.current_user !== OPENAI_RESPONSES_JOURNAL_ROLE) throw new Error("OPENAI_RESPONSES_JOURNAL_ROLE_DENIED");
+        await client.query("SET search_path TO production_real, pg_catalog"); return client;
+      } catch (error) { client.release(); throw error; }
+    } }) : bindAccountingRealmPool(pool, createAccountingRealm("production-real"));
     instances.add(this);
     Object.freeze(this);
   }
+  assertOpenAiResponsesPurpose(): void { if (this.#purpose !== "openai-responses") throw new Error("OPENAI_RESPONSES_JOURNAL_PURPOSE_REQUIRED"); }
   async #transaction<T>(action: (client: PostgresSqlClient) => Promise<T>): Promise<T> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const client = await this.#pool.connect();

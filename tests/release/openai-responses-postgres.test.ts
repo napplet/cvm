@@ -31,11 +31,11 @@ integration("Responses journal uses restricted PostgreSQL for concurrent claims,
     for (let attempt = 0; attempt < 60; attempt++) {
       try { await admin.query("SELECT 1"); break; } catch (error) { if (attempt === 59) throw error; await Bun.sleep(250); }
     }
-    for (const path of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql", "phase-07/001_production_operation_journal.sql"]) await admin.query(await Bun.file(`migrations/${path}`).text());
+    for (const path of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql", "phase-07/001_production_operation_journal.sql", "phase-07/020_openai_responses_journal_role.sql"]) await admin.query(await Bun.file(`migrations/${path}`).text());
     await admin.query("CREATE ROLE responses_journal_test LOGIN");
-    await admin.query("GRANT napplet_production_real TO responses_journal_test");
+    await admin.query("GRANT napplet_openai_responses_journal TO responses_journal_test");
     application = new Pool({ connectionString: `postgresql://responses_journal_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
-    const journal = () => createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(application, { namespace: "openai:responses", scopeSha256: digest("a") }));
+    const journal = () => createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(application, { namespace: "openai:responses", scopeSha256: digest("a"), purpose: "openai-responses" }));
     const rate = { version: 2 as const, sourceUrl: OPENAI_RESPONSES_PRICING_URL as typeof OPENAI_RESPONSES_PRICING_URL, sourceDocumentSha256: digest("b"), sourceArtifactSha256: digest("b"), quoteSha256: digest("c"), observedAtMs: 1, freshUntilMs: 10_000, model: "gpt-4.1-2025-04-14", currency: "USD" as const, inputMicrosPerMillion: 2_000_000, cachedInputMicrosPerMillion: 500_000, outputMicrosPerMillion: 8_000_000 };
     let posts = 0, gets = 0;
     const bytes = new TextEncoder().encode(JSON.stringify({ id: "resp_pg17", model: rate.model, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: '{"files":[]}' }] }], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: 10, output_tokens_details: { reasoning_tokens: 0 } } }));
@@ -75,7 +75,7 @@ integration("Responses journal uses restricted PostgreSQL for concurrent claims,
     const [restoreCode, restoreError] = await Promise.all([restoreProcess.exited, new Response(restoreProcess.stderr).text()]);
     if (restoreCode !== 0) throw new Error(`POSTGRES_RESTORE_FAILED:${restoreError.slice(0, 300)}`);
     restored = new Pool({ connectionString: `postgresql://responses_journal_test@127.0.0.1:${port}/responses_restore`, connectionTimeoutMillis: 2_000 });
-    const restoredJournal = createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(restored, { namespace: "openai:responses", scopeSha256: digest("a") }));
+    const restoredJournal = createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(restored, { namespace: "openai:responses", scopeSha256: digest("a"), purpose: "openai-responses" }));
     expect(await client(restoredJournal).reconcileOriginal({ operationId: command.operationId })).toMatchObject({ status: "completed", responseId: "resp_pg17" });
     expect(posts).toBe(2);
     const restricted = await restored.connect();

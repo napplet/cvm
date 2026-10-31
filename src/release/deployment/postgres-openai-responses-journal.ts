@@ -10,6 +10,7 @@ function identity(value: unknown): string { return createHash("sha256").update(c
  * The original entry commits before `create` can receive any authorization. */
 export function createPostgresOpenAiResponsesOperationJournal(journal: PostgresOperationJournal): OpenAiResponsesOperationJournal {
   assertPostgresOperationJournal(journal);
+  journal.assertOpenAiResponsesPurpose();
   return Object.freeze({
     async claim(entry) {
       const parsed = OpenAiResponsesJournalEntrySchema.parse(entry);

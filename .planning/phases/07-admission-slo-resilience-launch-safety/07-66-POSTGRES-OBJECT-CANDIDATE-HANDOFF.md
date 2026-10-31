@@ -4,7 +4,7 @@
 
 ## Compatibility map
 
-- `ObjectStorePort` preserves its creation return and generation-pinned read/delete contract. New callers may supply an additive optional `originalOperationIdentity`; `observeExactByKey` remains reconciliation-only and must not expose a latest/list capability.
+- `ObjectStorePort` preserves its creation return and generation-pinned read/delete contract. Constructed adapters expose a bounded recovery capability: historical key/checksum or original-operation identity. New coordinator journals persist and bind that mode; an absent capability holds a new write rather than downgrading it. New callers may supply an additive optional `originalOperationIdentity`; `observeExactByKey` remains reconciliation-only and must not expose a latest/list capability.
 - Existing `GcsObjectStoreAdapter` and `DeterministicObjectStore` remain the legacy/test readers. This candidate neither renames nor emulates their transport. `ProductionCheckpointCoordinator` gains only typed optional crypto dependency injection; its default mounted-KEK construction, journal, pool, and all existing callers remain byte-for-byte behaviour-compatible.
 - `ProductionCheckpointCoordinator` persists original ciphertext material before object creation and binds its immutable object reference to `checkpoint_envelopes`. The new adapter will receive ciphertext bytes through the same port, with a defensive synchronous copy before hashing or an async boundary.
 - Phase-07 migrations currently end at `018`; `007`, `008`, and `009` remain byte-for-byte historical inputs. `019_postgres_bytea_objects.sql` is additive only.
@@ -19,7 +19,7 @@ The application role cannot mutate raw headers/chunks. The adapter accepts only 
 
 ## Quotas and retention boundary
 
-There is no universal 16 MiB limit. New-write budgets must be per producer and versioned: ordinary checkpoint archives retain their current uncapped contract; retained subjects and workspace/artifact paths retain their existing 16 MiB limits; migration archives remain 384 KiB × 512 plus AES-GCM/base64 overhead. Historical reads bypass new-write quotas while retaining exact reference validation.
+There is no universal 16 MiB limit. The candidate adapter binds a versioned producer budget at construction and rejects an over-budget ciphertext/chunk allocation before a SQL claim. Ordinary checkpoint archives retain their current uncapped contract; retained subjects and workspace/artifact paths retain their existing 16 MiB limits; migration archives remain 384 KiB × 512 plus AES-GCM/base64 overhead. Historical reads bypass new-write quotas while retaining exact reference validation.
 
 SQL row deletion or expiry under the existing mounted/common KEK is not an expiry proof: a day-29 backup can remain decryptable on day 59. The candidate therefore remains held unless the retention contract inventories every live DB/base-backup/WAL/replica/restore/broker key copy and demonstrates independently erasable per-object key material (or an exact backup-exclusion/deadline mechanism). Filesystem unlink and a mocked clock are not acceptance evidence. The later selection gate includes actual PG17 restore, all-copy key-custody evidence, WAL/backup I/O, p95 admission impact, host capacity, HA fencing, and one-host failure proof.
 
@@ -38,7 +38,8 @@ checksums for lifecycle receipts, verifies all declared copies agree on restore,
 and removes all declared copies only after the durable erasure intent. It exports
 no key material.
 
-The hosted PG17 test retains a real SQL dump containing old ciphertext/wrapped-DEK
+The hosted PG17 test retains a real SQL dump containing old ciphertext/wrapped-DEK,
+reapplies only migration-owned restricted ACLs after its `--no-privileges` restore,
 and declares both live and key-backup file roots: it restores successfully
 before expiry, then fails after every declared key file is absent. This proves
 only the declared test scope. Borg-packed, replica, WAL, broker, HSM, or other

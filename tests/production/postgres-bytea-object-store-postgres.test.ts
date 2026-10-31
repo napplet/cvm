@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { PostgresByteaObjectStoreAdapter } from "../../src/continuity/postgres-bytea-object-store";
+import { ObjectProducerBudgets } from "../../src/production/object-retention-policy";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 
 const connectionString = process.env.NAPPLET_TEST_POSTGRES_URL;
@@ -20,6 +21,18 @@ function sqlPool(native: Pool): PostgresSqlPool {
     },
   });
 }
+
+test("candidate producer budget rejects bounded writes before any SQL allocation while ordinary checkpoints remain uncapped", async () => {
+  let connects = 0;
+  const neverConnectPool: PostgresSqlPool = Object.freeze({ async connect() { connects += 1; throw new Error("SQL_ALLOCATION_REACHED"); } });
+  const oversized = new Uint8Array(16 * 1024 * 1024 + 17);
+  const bounded = new PostgresByteaObjectStoreAdapter({ pool: neverConnectPool, producerBudget: ObjectProducerBudgets.retained_subject });
+  await expect(bounded.createImmutable({ key: "retained/oversized", bytes: oversized })).rejects.toThrow("OBJECT_PRODUCER_BUDGET_EXCEEDED");
+  expect(connects).toBe(0);
+  const ordinary = new PostgresByteaObjectStoreAdapter({ pool: neverConnectPool, producerBudget: ObjectProducerBudgets.ordinary_checkpoint });
+  await expect(ordinary.createImmutable({ key: "checkpoint/uncapped", bytes: oversized })).rejects.toThrow("SQL_ALLOCATION_REACHED");
+  expect(connects).toBe(1);
+});
 
 integration("immutable SQL objects use a restricted role, exact generations, and permanent tombstones", async () => {
   const admin = new Pool({ connectionString });

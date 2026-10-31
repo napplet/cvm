@@ -9,6 +9,8 @@ export const ImmutableObjectReferenceSchema = z.object({
 }).strict();
 
 export type ImmutableObjectReference = z.infer<typeof ImmutableObjectReferenceSchema>;
+export const ObjectStoreReconciliationModeSchema = z.enum(["legacy-key-checksum-v1", "original-operation-v1"]);
+export type ObjectStoreReconciliationMode = z.infer<typeof ObjectStoreReconciliationModeSchema>;
 /** `originalOperationIdentity` is an optional durable caller fence. Legacy
  * callers retain key/checksum semantics; adapters must hold ambiguity rather
  * than adopting a later same-checksum generation. */
@@ -40,6 +42,9 @@ export const GcsObjectStoreConfigSchema = z.object({
 
 /** Exact-generation port; storage implementation selection stays outside this contract. */
 export interface ObjectStorePort {
+  /** Constructed adapters declare their durable recovery identity. This is not
+   * operator configuration: an absent capability is intentionally held. */
+  readonly reconciliationMode?: ObjectStoreReconciliationMode;
   createImmutable(request: ImmutableObjectCreateRequest): Promise<ImmutableObjectReference>;
   /** Read-only reconciliation by an already journaled immutable key/checksum. */
   observeExactByKey(input: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }>): Promise<ImmutableObjectReference | undefined>;
@@ -58,6 +63,7 @@ async function sha256(bytes: Uint8Array): Promise<string> {
  * to the immutable generation and checksum supplied by the coordinator.
  */
 export class GcsObjectStoreAdapter implements ObjectStorePort {
+  readonly reconciliationMode = "legacy-key-checksum-v1" as const;
   readonly #config: z.infer<typeof GcsObjectStoreConfigSchema>;
   readonly #client: VersionedObjectClientPort;
 
@@ -113,6 +119,7 @@ type Entry = Readonly<ImmutableObjectReference & { bytes: Uint8Array; deleteAfte
 
 /** Deterministic in-memory adapter for tests; it makes no production storage claim. */
 export class DeterministicObjectStore implements ObjectStorePort {
+  readonly reconciliationMode = "legacy-key-checksum-v1" as const;
   #entries = new Map<string, Entry>();
 
   async createImmutable(request: ImmutableObjectCreateRequest): Promise<ImmutableObjectReference> {

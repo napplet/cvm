@@ -25,7 +25,7 @@ export const ObjectProducerBudgets = Object.freeze({
   ordinary_checkpoint: ObjectProducerBudgetSchema.parse({ version: 1, producer: "ordinary_checkpoint", plaintextBytes: Number.MAX_SAFE_INTEGER, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024 }),
   retained_subject: ObjectProducerBudgetSchema.parse({ version: 1, producer: "retained_subject", plaintextBytes: 16 * 1024 * 1024, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024 }),
   workspace_artifact: ObjectProducerBudgetSchema.parse({ version: 1, producer: "workspace_artifact", plaintextBytes: 16 * 1024 * 1024, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024 }),
-  migration_archive: ObjectProducerBudgetSchema.parse({ version: 1, producer: "migration_archive", plaintextBytes: 384 * 1024 * 512, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024, maxChunks: 512 }),
+  migration_archive: ObjectProducerBudgetSchema.parse({ version: 1, producer: "migration_archive", plaintextBytes: 384 * 1024 * 512, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024, maxChunks: 513 }),
 });
 
 export function assertProducerWriteBudget(input: Readonly<{ budget: ObjectProducerBudget; plaintextBytes: number }>): void {
@@ -33,6 +33,16 @@ export function assertProducerWriteBudget(input: Readonly<{ budget: ObjectProduc
   if (!Number.isSafeInteger(input.plaintextBytes) || input.plaintextBytes < 0 || input.plaintextBytes > budget.plaintextBytes) throw new Error("OBJECT_PRODUCER_BUDGET_EXCEEDED");
   const ciphertextBytes = input.plaintextBytes + budget.aesGcmTagBytes;
   const chunks = Math.ceil(ciphertextBytes / budget.chunkBytes);
+  if (!Number.isSafeInteger(chunks) || (budget.maxChunks !== undefined && chunks > budget.maxChunks)) throw new Error("OBJECT_PRODUCER_CHUNK_BUDGET_EXCEEDED");
+}
+
+/** The bytea adapter receives encrypted object bytes, so it must enforce the
+ * producer's post-AES-GCM allocation before claiming any SQL header. */
+export function assertProducerCiphertextBudget(input: Readonly<{ budget: ObjectProducerBudget; ciphertextBytes: number }>): void {
+  const budget = ObjectProducerBudgetSchema.parse(input.budget);
+  if (!Number.isSafeInteger(input.ciphertextBytes) || input.ciphertextBytes < 0) throw new Error("OBJECT_PRODUCER_BUDGET_EXCEEDED");
+  if (budget.plaintextBytes !== Number.MAX_SAFE_INTEGER && input.ciphertextBytes > budget.plaintextBytes + budget.aesGcmTagBytes) throw new Error("OBJECT_PRODUCER_BUDGET_EXCEEDED");
+  const chunks = Math.ceil(input.ciphertextBytes / budget.chunkBytes);
   if (!Number.isSafeInteger(chunks) || (budget.maxChunks !== undefined && chunks > budget.maxChunks)) throw new Error("OBJECT_PRODUCER_CHUNK_BUDGET_EXCEEDED");
 }
 

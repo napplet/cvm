@@ -63,7 +63,8 @@ not authorize a new provider dispatch or implement terminal resumed generation.
 
 The hosted integration test uses real PostgreSQL 17/AES-GCM, a restricted login,
 the matching PostgreSQL 17 `pg_dump`/`psql` clients from the service image into a
-new database, and a disk-backed object protocol fixture. It checks concurrent sealing, upload/delete acknowledgement
+new database, reapplies only the migration-owned narrow ACL contract, and uses a
+disk-backed object protocol fixture. It checks concurrent sealing, upload/delete acknowledgement
 loss, unresolved and legacy operations, owner/key denial, guard preflight, audit
 rollback and exact expiry deletion. Its advanced test clock does not prove 30
 days of elapsed operation. It does not prove live selected-provider/isolated-worker
@@ -82,7 +83,8 @@ not the accounting role and its bounded chunk transactions never include money
 rows.
 
 The existing `ObjectStorePort` remains the compatibility boundary, with an
-additive optional original-operation identity for new reconciliation callers. A header is
+additive constructed-adapter reconciliation capability and optional
+original-operation identity for new callers. A header is
 permanent at `(logical key, generation)` and its per-key serializable head
 allocates a positive JavaScript-safe generation. A tombstone never reuses an old
 physical generation, while a legitimate logical-key recreation receives a new
@@ -94,9 +96,15 @@ seals only after count, length and streamed SHA-256 verification, and retries
 only serializable SQL work. A lost commit acknowledgement is held until the
 same original identity is observed; it never dispatches an external effect.
 Without that identity, any historical same-key/same-checksum ambiguity is held
-rather than mapped to the newest generation.
+rather than mapped to the newest generation. A new coordinator journal persists
+the constructed adapter's recovery mode. PostgreSQL requires
+`original-operation-v1`; legacy key/checksum journals may use only the same
+legacy-compatible adapter mode. Unknown capabilities hold before a successor
+write and cannot silently downgrade PostgreSQL recovery.
 
-There is intentionally no global 16 MiB cap. New writes have versioned producer
+There is intentionally no global 16 MiB cap. The bytea adapter checks its bound
+producer's versioned ciphertext and chunk allocation before it claims a SQL
+header. New writes have versioned producer
 budgets: ordinary checkpoints preserve their existing uncapped archive contract;
 retained subjects and workspace/artifact paths retain their 16 MiB caller
 bound; migration archives retain 384 KiB × 512 before AES-GCM/tag/base64

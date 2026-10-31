@@ -57,8 +57,8 @@ jobs:
         run: |
           postgres17_container="$(docker ps --filter 'ancestor=postgres:17-alpine' --format '{{.ID}}' | head -n 1)"
           test -n "$postgres17_container"
-          docker exec "$postgres17_container" pg_dump --version | grep -Eq '17\\.'
-          docker exec "$postgres17_container" psql --version | grep -Eq '17\\.'
+          docker exec "$postgres17_container" pg_dump --version | grep -Eq '17\.'
+          docker exec "$postgres17_container" psql --version | grep -Eq '17\.'
           echo "NAPPLET_POSTGRES17_CONTAINER=$postgres17_container" >> "$GITHUB_ENV"
       - run: bun install --frozen-lockfile
       - run: bun install --cwd tests/dev-ui --frozen-lockfile

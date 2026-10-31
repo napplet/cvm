@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ImmutableObjectCreateRequest, ImmutableObjectReference, ObjectStorePort } from "./object-store";
 import type { PostgresSqlClient, PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
+import { ObjectProducerBudgets, ObjectProducerBudgetSchema, assertProducerCiphertextBudget, type ObjectProducerBudget } from "../production/object-retention-policy";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Key = z.string().min(1).max(2048);
@@ -42,9 +43,11 @@ function parseHeader(row: Record<string, unknown>): Header {
  * cannot read or mutate the ledger, secret tables, or raw object tables.
  */
 export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
+  readonly reconciliationMode = "original-operation-v1" as const;
   readonly #chunkBytes: number;
   readonly #now: () => number;
   readonly #retentionUntil: () => string;
+  readonly #producerBudget: ObjectProducerBudget;
 
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
@@ -52,17 +55,21 @@ export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
     now?: () => number;
     /** A producer/version-bound retention deadline supplied by later composition. */
     retentionUntil?: () => string;
+    /** Candidate construction binds every new writer to a versioned producer budget. */
+    producerBudget?: ObjectProducerBudget;
   }>) {
     if (!input.pool || typeof input.pool.connect !== "function") throw new Error("OBJECT_POOL_REQUIRED");
     this.#chunkBytes = input.chunkBytes ?? DEFAULT_CHUNK_BYTES;
     if (!Number.isSafeInteger(this.#chunkBytes) || this.#chunkBytes < 1 || this.#chunkBytes > DEFAULT_CHUNK_BYTES) throw new Error("OBJECT_CHUNK_SIZE_INVALID");
     this.#now = input.now ?? Date.now;
     this.#retentionUntil = input.retentionUntil ?? (() => new Date(this.#now() + 30 * 86_400_000).toISOString());
+    this.#producerBudget = ObjectProducerBudgetSchema.parse(input.producerBudget ?? ObjectProducerBudgets.ordinary_checkpoint);
   }
 
   async createImmutable(request: ImmutableObjectCreateRequest): Promise<ImmutableObjectReference> {
     const key = Key.parse(request.key);
     if (!(request.bytes instanceof Uint8Array)) throw new Error("OBJECT_INVALID");
+    assertProducerCiphertextBudget({ budget: this.#producerBudget, ciphertextBytes: request.bytes.byteLength });
     // The caller may mutate its buffer after initiating storage. Own every byte
     // before the digest or first await, then zero this temporary on all exits.
     const owned = new Uint8Array(request.bytes);

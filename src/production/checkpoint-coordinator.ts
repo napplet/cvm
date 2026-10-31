@@ -2,7 +2,7 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accou
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CheckpointEnvelopeSchema, CheckpointEnvelopeService, CheckpointManifestSchema, type CheckpointEnvelope, type CheckpointManifest, type CheckpointSealRequest } from "../continuity/checkpoint-envelope";
-import { ImmutableObjectReferenceSchema, type ObjectStorePort } from "../continuity/object-store";
+import { ImmutableObjectReferenceSchema, ObjectStoreReconciliationModeSchema, type ObjectStorePort, type ObjectStoreReconciliationMode } from "../continuity/object-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../promotion/schema";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
@@ -23,7 +23,14 @@ type StoredEnvelope = Readonly<{
   keyReference: string;
   state: "retained" | "destroyed";
 }>;
-type CoordinatorIntent = Readonly<{ checkpointId: string; requestSha256: string; committedAt: string; formatVersion?: 2 | 3; objectWrite?: Readonly<{ key: string; checksum: string; originalOperationIdentity?: string }> }>;
+type CoordinatorIntent = Readonly<{
+  checkpointId: string;
+  requestSha256: string;
+  committedAt: string;
+  formatVersion?: 1 | 2 | 3 | 4;
+  reconciliationMode?: ObjectStoreReconciliationMode;
+  objectWrite?: Readonly<{ key: string; checksum: string; reconciliationMode?: ObjectStoreReconciliationMode; originalOperationIdentity?: string }>;
+}>;
 const coordinators = new WeakSet<object>();
 
 function rowToStored(row: Record<string, unknown>): StoredEnvelope {
@@ -79,7 +86,8 @@ export class ProductionCheckpointCoordinator {
     const checkpointId = Identity.parse(originalRequest.checkpointId);
     const requestSha256 = sha256(canonicalBytes({ ...originalRequest, archive: undefined, archiveSha256: sha256(originalRequest.archive) }));
     const operationId = `checkpoint-seal:${checkpointId}`;
-    const claimed = await this.input.journal.claim<CoordinatorIntent>(operationId, requestSha256, Object.freeze({ formatVersion: 3, checkpointId, requestSha256, committedAt: new Date((this.input.now ?? Date.now)()).toISOString() }));
+    const mode = this.#storeMode();
+    const claimed = await this.input.journal.claim<CoordinatorIntent>(operationId, requestSha256, Object.freeze({ formatVersion: 4, reconciliationMode: mode, checkpointId, requestSha256, committedAt: new Date((this.input.now ?? Date.now)()).toISOString() }));
     const intent = claimed.record.value;
     if (intent.checkpointId !== checkpointId || intent.requestSha256 !== requestSha256 || Number.isNaN(Date.parse(intent.committedAt))) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
     const request: CheckpointSealRequest = { ...originalRequest, retentionUntil: "retentionUntil" in originalRequest ? originalRequest.retentionUntil : new Date(Date.parse(intent.committedAt) + 2_592_000_000).toISOString() };
@@ -87,9 +95,10 @@ export class ProductionCheckpointCoordinator {
     if (existing) return this.#readback(existing, request);
     // A legacy unresolved operation has no trustworthy upload-dispatch fence.
     // Without its original crypto record, even a new nonce would invent lineage.
-    if (intent.formatVersion !== 3 && !await this.#crypto.readSealed(checkpointId)) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+    if ((intent.formatVersion === 1 || intent.formatVersion === 2 || intent.formatVersion === undefined) && !await this.#crypto.readSealed(checkpointId)) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
 
     const objectStore: ObjectStorePort = {
+      reconciliationMode: this.input.objectStore.reconciliationMode,
       createImmutable: value => this.#createOriginalObject(operationId, requestSha256, value),
       readExact: value => this.input.objectStore.readExact(value),
       observeExactByKey: value => this.input.objectStore.observeExactByKey(value),
@@ -241,12 +250,17 @@ export class ProductionCheckpointCoordinator {
    * observes the original key/checksum, including an acknowledgement loss.
    * Old intents without this dispatch fence stay query-only when unresolved. */
   async #createOriginalObject(operationId: string, requestSha256: string, value: Parameters<ObjectStorePort["createImmutable"]>[0]) {
-    const expected = { key: value.key, checksum: sha256(value.bytes), originalOperationIdentity: sha256(canonicalBytes({ operationId, requestSha256, key: value.key })) };
     const prior = await this.input.journal.read<CoordinatorIntent>(operationId);
     if (!prior || prior.identitySha256 !== requestSha256 || prior.value.requestSha256 !== requestSha256) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
-    if (prior.value.objectWrite && (prior.value.objectWrite.key !== expected.key || prior.value.objectWrite.checksum !== expected.checksum || prior.value.objectWrite.originalOperationIdentity !== expected.originalOperationIdentity)) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
+    const mode = this.#modeForIntent(prior.value);
+    if (mode !== this.#storeMode()) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+    const originalOperationIdentity = sha256(canonicalBytes({ operationId, requestSha256, key: value.key }));
+    const expected = Object.freeze({ key: value.key, checksum: sha256(value.bytes), reconciliationMode: mode, ...(mode === "original-operation-v1" ? { originalOperationIdentity } : {}) });
+    if (prior.value.objectWrite) {
+      if (prior.value.objectWrite.key !== expected.key || prior.value.objectWrite.checksum !== expected.checksum || (prior.value.formatVersion === 4 && prior.value.objectWrite.reconciliationMode !== expected.reconciliationMode) || (mode === "original-operation-v1" && prior.value.objectWrite.originalOperationIdentity !== originalOperationIdentity)) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
+    }
     const observe = async () => {
-      const found = await this.input.objectStore.observeExactByKey(expected);
+      const found = await this.input.objectStore.observeExactByKey(mode === "original-operation-v1" ? expected : { key: expected.key, checksum: expected.checksum });
       if (!found) return undefined;
       const exact = ImmutableObjectReferenceSchema.parse(found);
       if (exact.key !== expected.key || exact.checksum !== expected.checksum) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
@@ -254,14 +268,33 @@ export class ProductionCheckpointCoordinator {
     };
     const existing = await observe();
     if (existing) return existing;
-    if (prior.value.formatVersion !== 3 || prior.value.objectWrite) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+    if (prior.value.objectWrite) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
     const claimed = await this.input.journal.compareAndSet(operationId, requestSha256, prior.revision, { ...prior.value, objectWrite: expected });
     if (!claimed) {
       const original = await observe();
       if (original) return original;
       throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
     }
-    return this.input.objectStore.createImmutable({ ...value, originalOperationIdentity: expected.originalOperationIdentity });
+    return this.input.objectStore.createImmutable(mode === "original-operation-v1" ? { ...value, originalOperationIdentity } : value);
+  }
+
+  #storeMode(): ObjectStoreReconciliationMode {
+    const mode = ObjectStoreReconciliationModeSchema.safeParse(this.input.objectStore.reconciliationMode);
+    if (!mode.success) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+    return mode.data;
+  }
+
+  #modeForIntent(intent: CoordinatorIntent): ObjectStoreReconciliationMode {
+    if (intent.formatVersion === 4) {
+      const mode = ObjectStoreReconciliationModeSchema.safeParse(intent.reconciliationMode);
+      if (!mode.success) throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
+      return mode.data;
+    }
+    if (intent.formatVersion === 3) return "original-operation-v1";
+    // Formats 1/2 predate the new capability. They are allowed only through a
+    // currently constructed legacy adapter and retain their original lookup.
+    if (intent.formatVersion === 1 || intent.formatVersion === 2 || intent.formatVersion === undefined) return "legacy-key-checksum-v1";
+    throw new Error("CHECKPOINT_OBJECT_RECONCILIATION_REQUIRED");
   }
 
   async #find(checkpointId: string): Promise<StoredEnvelope | undefined> {

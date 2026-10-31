@@ -54,7 +54,7 @@ integration("declared per-object custody survives a fresh snapshot before expiry
   const admin = new Pool({ connectionString });
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
   const runtimeRole = `retention_runtime_${suffix}`, objectRole = `retention_object_${suffix}`, recoveredDb = `retention_recovered_${suffix}`;
-  let runtime: Pool | undefined, objectRuntime: Pool | undefined, recoveredRuntime: Pool | undefined, recoveredObjectRuntime: Pool | undefined;
+  let runtime: Pool | undefined, objectRuntime: Pool | undefined, recoveredAdmin: Pool | undefined, recoveredRuntime: Pool | undefined, recoveredObjectRuntime: Pool | undefined;
   const roots = [await mkdtemp(join(tmpdir(), "cvm-object-live-")), await mkdtemp(join(tmpdir(), "cvm-object-key-backup-"))];
   try {
     for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
@@ -73,19 +73,33 @@ integration("declared per-object custody survives a fresh snapshot before expiry
     const open = (pool = raw, objectStore = objects, checkpointCrypto = cryptoPort) => new ProductionCheckpointCoordinator({ pool, objectStore, journal: new PostgresOperationJournal(pool, { namespace: `retention-${suffix}`, scopeSha256: "a".repeat(64) }), crypto: checkpointCrypto, kekPath: "/unused/legacy-kek", readKekFile: async () => Buffer.alloc(32, 3).toString("base64"), now: () => now });
     const archive = new TextEncoder().encode("per-object custody checkpoint bytes");
     const sealed = await open().seal({ checkpointId: `checkpoint:${suffix}`, accountId, sessionId, pauseGeneration: 1, sessionVersion: 0, actionVersion: 0, artifactVersion: 0, workspaceVersion: 0, workspaceLineage: `workspace:${suffix}`, action: { actionId: `action:${suffix}`, operationId: `operation:${suffix}`, ledgerReference: "fixture:admission", pendingActionReference: `pending:${suffix}`, idempotencyKey: `key:${suffix}` }, archive, inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"], evidenceSha256: "b".repeat(64), compatibility: { policyVersion: "fixture", modelIdentity: `profile:${suffix}`, nappletSdkIdentity: `price:${suffix}`, toolchainIdentity: "c".repeat(64) }, retentionUntil: new Date(now + THIRTY_DAY_RETENTION_MS).toISOString() });
+    const journalRecord = await new PostgresOperationJournal(raw, { namespace: `retention-${suffix}`, scopeSha256: "a".repeat(64) }).read(`checkpoint-seal:checkpoint:${suffix}`);
+    expect(journalRecord?.value).toMatchObject({ formatVersion: 4, reconciliationMode: "original-operation-v1", objectWrite: { reconciliationMode: "original-operation-v1" } });
     const record = await admin.query("SELECT key_reference,wrapped_dek,ciphertext FROM production_real.checkpoint_crypto_records WHERE checkpoint_id=$1", [`checkpoint:${suffix}`]);
     expect(record.rows).toHaveLength(1); expect(record.rows[0].wrapped_dek).toBeTruthy(); expect(Buffer.from(record.rows[0].ciphertext).includes(Buffer.from(archive))).toBe(false);
     expect(await run(postgres17Command("pg_dump", "--version"))).toContain("17.");
     expect(await run(postgres17Command("psql", "--version"))).toContain("17.");
     const dump = await run(postgres17Command("pg_dump", connectionString!, "--schema=production_real", "--no-owner", "--no-privileges"));
     await admin.query(`CREATE DATABASE ${recoveredDb}`);
-    await run(postgres17Command("psql", connectionString!.replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`), "--set", "ON_ERROR_STOP=1"), dump);
+    const recoveredConnectionString = connectionString!.replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`);
+    await run(postgres17Command("psql", recoveredConnectionString, "--set", "ON_ERROR_STOP=1"), dump);
+    // A no-privileges dump intentionally omits ACLs. Reapply only the checked
+    // migration-owned restricted grants, never a broad runtime/superuser grant.
+    recoveredAdmin = new Pool({ connectionString: recoveredConnectionString });
+    for (const file of ["phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await recoveredAdmin.query(await Bun.file(`migrations/${file}`).text());
     recoveredRuntime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${runtimeRole}@`).replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`) });
     recoveredObjectRuntime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${objectRole}@`).replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`) });
     const recoveredPool = sqlPool(recoveredRuntime);
     const recoveredObjects = new PostgresByteaObjectStoreAdapter({ pool: sqlPool(recoveredObjectRuntime), now: () => now, retentionUntil: () => new Date(now + THIRTY_DAY_RETENTION_MS).toISOString() });
     const recoveredCrypto = new PerObjectFileCheckpointCrypto({ pool: recoveredPool, custody, now: () => now });
     expect(await open(recoveredPool, recoveredObjects, recoveredCrypto).restore({ checkpointId: `checkpoint:${suffix}`, accountId, sessionId })).toEqual(archive);
+    const recoveredObjectClient = await recoveredObjectRuntime.connect();
+    try {
+      await recoveredObjectClient.query("SET ROLE napplet_production_object");
+      for (const table of ["funding_accounts", "checkpoint_crypto_records", "checkpoint_object_key_custody", "immutable_object_generations"]) {
+        await expect(recoveredObjectClient.query(`SELECT * FROM production_real.${table} LIMIT 1`)).rejects.toThrow();
+      }
+    } finally { recoveredObjectClient.release(); }
     const copies = custody.inventory(sealed.envelope.crypto.keyReference);
     expect(copies).toHaveLength(2);
     now += THIRTY_DAY_RETENTION_MS;
@@ -125,7 +139,7 @@ integration("declared per-object custody survives a fresh snapshot before expiry
     await reconciled.destroy(boundary.keyReference);
     expect(await reconciled.isDestroyed(boundary.keyReference)).toBe(true);
   } finally {
-    await recoveredObjectRuntime?.end(); await recoveredRuntime?.end(); await objectRuntime?.end(); await runtime?.end();
+    await recoveredObjectRuntime?.end(); await recoveredRuntime?.end(); await recoveredAdmin?.end(); await objectRuntime?.end(); await runtime?.end();
     await admin.query(`DROP DATABASE IF EXISTS ${recoveredDb}`).catch(() => undefined);
     await admin.query(`REVOKE napplet_production_real FROM ${runtimeRole}`).catch(() => undefined); await admin.query(`REVOKE napplet_production_object FROM ${objectRole}`).catch(() => undefined);
     await admin.query(`DROP ROLE IF EXISTS ${runtimeRole}`).catch(() => undefined); await admin.query(`DROP ROLE IF EXISTS ${objectRole}`).catch(() => undefined);

@@ -304,8 +304,9 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
         async createWorkerRouter(input) { return new ProductionWorkerJobRouter({ workerJournal: input.workerJournal, jobJournal: input.jobJournal, executables: [{ image: config.worker.image, toolchainSha256: config.worker.toolchainSha256, clients: mountedWorkers, modalAppName: "retained-workers", flyAppName: "retained-workers" }] }); } } });
     const mounted = await mountedRuntime.open({ freshInstanceId: "fresh-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore" });
     const recoveredServiceJournals = await openProductionServiceJournals({ pool: recoveredPool, servicePubkey: config.certification.serverPubkey, initialTopologySha256: config.topologySha256, requireExisting: true });
+    const checkpointResolver = new ProductionWorkerOwnershipResolver({ pool: recoveredPool, policyVersion: config.worker.policyVersion, capacityJournal: recoveredServiceJournals.capacity });
     const ordinaryBridge = new ProductionWorkerBridge({
-      resolver: new ProductionWorkerOwnershipResolver({ pool: recoveredPool, policyVersion: config.worker.policyVersion, capacityJournal: recoveredServiceJournals.capacity }),
+      resolver: checkpointResolver,
       workers: mountedWorkers,
       workerJournal: recoveredServiceJournals.worker,
       jobJournal: recoveredServiceJournals.job,
@@ -318,6 +319,9 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     // reattach capability. It cannot restart ordinary model/tool generation.
     expect(await ordinaryBridge.run(workerRequest, new AbortController().signal)).toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     expect(mountedFences).toBe(0); expect(mountedRestores).toBe(0); expect(mountedObservations).toBe(0);
+    try {
+      expect(await checkpointResolver.resolveCheckpointWorker({ accountId, sessionId, actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0, workspaceLineage: `workspace:${sessionId}`, leaseToken: "lease:retained:reattach" })).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
+    } catch (error) { throw new Error(`MOUNTED_CHECKPOINT_RESOLUTION:${error instanceof Error ? error.message : "UNKNOWN"}`); }
     const mountedInstance = {
       freshInstanceId: "fresh-retained", sourceInstanceId: "source-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore",
       pool: mounted.pool, migrationTargetPool: mounted.migrationTargetPool, objectStore: mounted.objectStore,

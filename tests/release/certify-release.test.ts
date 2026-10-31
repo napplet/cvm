@@ -74,6 +74,20 @@ test("one product command is registered without hand-authored certification inpu
   expect(packageJson.scripts?.["release:certify"]).not.toContain("--registry");
 });
 
+test("fresh documented default workspace prepares itself before no-effect refusal", async () => {
+  const workspace = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(`${stdout}${stderr}`).not.toContain("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    const result = JSON.parse(stdout);
+    expect(result).toMatchObject({ progress: "preapproval_blocked", readiness: { execution: { status: "blocked" } } });
+    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBeTrue();
+  } finally { await rm(workspace, { recursive: true, force: true }); }
+});
+
 test("documented no-env command materializes a bounded authorization request without provider effects", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-no-env-");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent" } as Record<string, string>;

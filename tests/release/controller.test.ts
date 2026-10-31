@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
 import { createAuthorizationReceipt, createAuthorizationRequest, validateAuthorizationReceipt } from "../../src/release/authorization";
 import { canonicalJson } from "../../src/promotion/schema";
@@ -547,10 +547,51 @@ test("metadata-sync failure prevents a durable dispatch claim from reaching appl
   expect(applies).toBe(0);
 });
 
-test("an absent caller-provisioned workspace anchor cannot create an authority root", async () => {
+test("project-owned workspace preparation creates an absent authority root", async () => {
   const root = await workspace();
   await rm(root, { recursive: true, force: true });
-  await expect(runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  const result = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+  expect(result.state.status).toBe("authorization_required");
+});
+
+test("a bare existing workspace still syncs every ancestor through the filesystem root", async () => {
+  const root = await workspace();
+  const synced: string[] = [];
+  const result = await runReleaseCertification({
+    candidatePath, workspace: root, dryRun: true, now: () => 1_000,
+    syncDirectory: async (path) => { synced.push(resolve(path)); },
+  });
+  expect(result.state.status).toBe("authorization_required");
+  const canonicalRoot = await realpath(root);
+  expect(synced).toContain(canonicalRoot);
+  expect(synced).toContain(dirname(canonicalRoot));
+  expect(synced).toContain(resolve("/"));
+});
+
+test("a multi-level workspace ancestor sync failure prevents provider apply", async () => {
+  const root = await workspace();
+  const nested = join(root, "new", "durable", "workspace");
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: nested, dryRun: true, now: () => 1_000, collectorImage });
+  const failedAncestor = await realpath(join(root, "new"));
+  let applies = 0;
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => { applies += 1; return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` }; },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }), cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+  await expect(new ReleaseCertificationController({
+    candidatePath, workspace: nested, now: () => 1_000, collectorImage,
+    syncDirectory: async (path) => {
+      if (resolve(path) === failedAncestor) throw new Error("MULTI_LEVEL_METADATA_SYNC_FAILED");
+    },
+  }).provision({ receipt, registry })).rejects.toThrow("MULTI_LEVEL_METADATA_SYNC_FAILED");
+  expect(applies).toBe(0);
 });
 
 test("a damaged root with prior dispatch lineage fails closed instead of issuing a fresh request", async () => {

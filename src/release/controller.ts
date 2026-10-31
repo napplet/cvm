@@ -1,4 +1,4 @@
-import { link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
@@ -33,6 +33,13 @@ import { validateOperatorFundingReadiness, type OperatorFundingReadiness } from 
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
+const DURABLE_WORKSPACE_FILESYSTEM_ROOT = "/";
+const preparedWorkspaces = new WeakSet<object>();
+
+/** An opaque, project-created witness that the workspace publication chain was
+ * synced through the POSIX filesystem root. It is not user JSON or a manual
+ * operator trust flag. */
+export type ReleaseWorkspaceCapability = Readonly<{ workspace: string }>;
 
 type CandidateIdentity = ReleaseControllerState["candidate"];
 type ControllerOptions = Readonly<{
@@ -57,6 +64,9 @@ type ControllerOptions = Readonly<{
   /** Internal fault-injection seam for filesystem durability tests. Product
    * construction never supplies it; production uses real directory fsync. */
   syncDirectory?: (path: string) => Promise<void>;
+  /** Created only by prepareReleaseWorkspace; direct controller callers keep
+   * working because the controller prepares its own capability when absent. */
+  workspaceCapability?: ReleaseWorkspaceCapability;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -297,7 +307,7 @@ async function stateFor(input: Omit<ReleaseControllerState, "stateSha256">): Pro
   return ReleaseControllerStateSchema.parse({ ...input, stateSha256: await digest(input) });
 }
 
-async function createOrVerify(path: string, content: string, collision: string): Promise<void> {
+async function createOrVerify(path: string, content: string, collision: string, synchronizer: (path: string) => Promise<void> = syncDirectory): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
@@ -305,23 +315,24 @@ async function createOrVerify(path: string, content: string, collision: string):
     const temporary = await open(temporaryPath, "r");
     try { await temporary.sync(); } finally { await temporary.close(); }
     await link(temporaryPath, path);
-    await syncDirectory(dirname(path));
+    await syncDirectoryChain(dirname(path), DURABLE_WORKSPACE_FILESYSTEM_ROOT, synchronizer);
   } catch (error) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
     if (await readFile(path, "utf8") !== content) throw new Error(collision);
+    await syncDirectoryChain(dirname(path), DURABLE_WORKSPACE_FILESYSTEM_ROOT, synchronizer);
   } finally {
     await rm(temporaryPath, { force: true });
   }
 }
 
-async function replaceSynced(path: string, content: string): Promise<void> {
+async function replaceSynced(path: string, content: string, synchronizer: (path: string) => Promise<void> = syncDirectory): Promise<void> {
   const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
   try {
     const temporary = await open(temporaryPath, "r");
     try { await temporary.sync(); } finally { await temporary.close(); }
     await rename(temporaryPath, path);
-    await syncDirectory(dirname(path));
+    await syncDirectoryChain(dirname(path), DURABLE_WORKSPACE_FILESYSTEM_ROOT, synchronizer);
   } finally { await rm(temporaryPath, { force: true }); }
 }
 
@@ -333,9 +344,41 @@ async function syncDirectory(path: string): Promise<void> {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
+async function validateDurableWorkspacePath(workspace: string, synchronizer: (path: string) => Promise<void>): Promise<void> {
+  if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
+  let root: string;
+  let resolved: string;
+  try {
+    root = await realpath(DURABLE_WORKSPACE_FILESYSTEM_ROOT);
+    resolved = await realpath(workspace);
+  } catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+  let current = root;
+  for (const segment of resolved.slice(root.length).split("/").filter(Boolean)) {
+    current = join(current, segment);
+    let metadata;
+    try { metadata = await lstat(current); }
+    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  }
+  await syncDirectoryChain(resolved, root, synchronizer);
+}
+
+/** Project-owned normal-entry preparation. It creates missing path components,
+ * validates every ancestor is a real directory, then publishes each directory
+ * entry all the way through the known POSIX filesystem root. */
+export async function prepareReleaseWorkspace(workspace: string, synchronizer: (path: string) => Promise<void> = syncDirectory): Promise<ReleaseWorkspaceCapability> {
+  const resolved = resolve(workspace);
+  if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
+  await mkdir(resolved, { recursive: true, mode: 0o700 });
+  await validateDurableWorkspacePath(resolved, synchronizer);
+  const capability = Object.freeze({ workspace: resolved });
+  preparedWorkspaces.add(capability);
+  return capability;
+}
+
 async function syncDirectoryChain(path: string, anchor: string, synchronizer: (path: string) => Promise<void>): Promise<void> {
-  let current = resolve(path);
-  const stableAnchor = resolve(anchor);
+  let current = await realpath(path);
+  const stableAnchor = await realpath(anchor);
   while (true) {
     await synchronizer(current);
     if (current === stableAnchor) return;
@@ -360,7 +403,10 @@ async function createSynced(path: string, content: string, anchor: string, synch
     await syncDirectoryChain(dirname(path), anchor, synchronizer);
     return "created";
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "EEXIST") return "exists";
+    if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+      await syncDirectoryChain(dirname(path), anchor, synchronizer);
+      return "exists";
+    }
     throw error;
   } finally {
     await handle?.close();
@@ -407,6 +453,7 @@ export class ReleaseCertificationController {
   readonly #operatorFundingReadiness: OperatorFundingReadiness | undefined;
   readonly #collectorImage: PreparedCollectorImage | ObservedCollectorRegistryImage | undefined;
   readonly #syncDirectory: (path: string) => Promise<void>;
+  readonly #workspaceCapability: ReleaseWorkspaceCapability | undefined;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
@@ -419,18 +466,24 @@ export class ReleaseCertificationController {
     this.#operatorFundingReadiness = options.operatorFundingReadiness;
     this.#collectorImage = options.collectorImage;
     this.#syncDirectory = options.syncDirectory ?? syncDirectory;
+    this.#workspaceCapability = options.workspaceCapability;
     this.#now = options.now ?? Date.now;
   }
 
   async #ensureDurableWorkspace(): Promise<void> {
-    let metadata;
-    try { metadata = await lstat(this.#workspace); }
-    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
-    if (!metadata.isDirectory()) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
-    /* The caller provisions this durable anchor. Commit both its directory
-     * metadata and the parent entry before publishing any authority below it. */
-    await this.#syncDirectory(this.#workspace);
-    await this.#syncDirectory(dirname(this.#workspace));
+    const capability = this.#workspaceCapability ?? await prepareReleaseWorkspace(this.#workspace, this.#syncDirectory);
+    if (!preparedWorkspaces.has(capability) || capability.workspace !== this.#workspace) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    /* Revalidate and resync every component even for an earlier capability:
+     * a caller-created bare workspace never skips the root publication chain. */
+    await validateDurableWorkspacePath(this.#workspace, this.#syncDirectory);
+  }
+
+  async #createOrVerify(path: string, content: string, collision: string): Promise<void> {
+    await createOrVerify(path, content, collision, this.#syncDirectory);
+  }
+
+  async #replaceSynced(path: string, content: string): Promise<void> {
+    await replaceSynced(path, content, this.#syncDirectory);
   }
 
   async #hasEffectLineage(): Promise<boolean> {
@@ -510,7 +563,7 @@ export class ReleaseCertificationController {
       priorStateSha256: null, authorizationRequestSha256: null, authorizationReceiptSha256: null,
       providerOperationIds: [], deployedTopologySha256: null, blockReasonCode: null, createdAtMs: nowMs,
     });
-    await createOrVerify(join(this.#workspace, "states", `${discovering.stateSha256}.json`), `${canonicalJson(discovering)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "states", `${discovering.stateSha256}.json`), `${canonicalJson(discovering)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     const request = await createAuthorizationRequest({
       candidateSha256: candidate.candidateSha256,
       topologySha256: topology.topologySha256,
@@ -534,17 +587,17 @@ export class ReleaseCertificationController {
       expiresAtMs: Math.min(discovering.createdAtMs + 30 * 60 * 1000, estimate.freshUntilMs - 1),
       supersedesAuthorizationRequestSha256: existing?.authorizationRequest.authorizationRequestSha256 ?? null,
     });
-    await createOrVerify(join(this.#workspace, "authorization-requests", `${request.authorizationRequestSha256}.json`), `${canonicalJson(request)}\n`, "RELEASE_CONTROLLER_AUTHORIZATION_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "authorization-requests", `${request.authorizationRequestSha256}.json`), `${canonicalJson(request)}\n`, "RELEASE_CONTROLLER_AUTHORIZATION_COLLISION");
     const final = await stateFor({
       version: 1, status: "authorization_required", candidate, topologySha256: topology.topologySha256, capabilities,
       priorStateSha256: discovering.stateSha256, authorizationRequestSha256: request.authorizationRequestSha256,
       authorizationReceiptSha256: null, providerOperationIds: [], deployedTopologySha256: null, blockReasonCode: "AUTHORIZATION_REQUIRED", createdAtMs: discovering.createdAtMs,
     });
-    await createOrVerify(join(this.#workspace, "states", `${final.stateSha256}.json`), `${canonicalJson(final)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "states", `${final.stateSha256}.json`), `${canonicalJson(final)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     const pointerBase = { version: 1 as const, stateSha256: final.stateSha256, candidateSha256: candidate.candidateSha256 };
     const pointer = { ...pointerBase, pointerSha256: await digest(pointerBase) };
     if (existing) await this.#writeCurrent(final);
-    else await createOrVerify(join(this.#workspace, "current.json"), `${canonicalJson(pointer)}\n`, "RELEASE_CONTROLLER_CONCURRENT_WRITE");
+    else await this.#createOrVerify(join(this.#workspace, "current.json"), `${canonicalJson(pointer)}\n`, "RELEASE_CONTROLLER_CONCURRENT_WRITE");
     return (await this.status())!;
   }
 
@@ -571,7 +624,7 @@ export class ReleaseCertificationController {
     const request = await this.#readRequest(current.state.authorizationRequestSha256);
     const approval = await this.#consent.launch({ authorizationRequest: request });
     const receipt = await createOfficialConsentReceipt({ request, approval });
-    await createOrVerify(
+    await this.#createOrVerify(
       join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`),
       `${canonicalJson(receipt)}\n`,
       "RELEASE_CONTROLLER_AUTHORIZATION_RECEIPT_COLLISION",
@@ -591,7 +644,7 @@ export class ReleaseCertificationController {
     let receipt: ReleaseAuthorizationReceipt;
     try { receipt = await validateAuthorizationReceipt({ request, receipt: receiptInput, nowMs: this.#now() }); }
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
-    await createOrVerify(
+    await this.#createOrVerify(
       join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`),
       `${canonicalJson(receipt)}\n`,
       "RELEASE_CONTROLLER_AUTHORIZATION_RECEIPT_COLLISION",
@@ -650,7 +703,7 @@ export class ReleaseCertificationController {
         const scope = request.providerScopes.find((item) => item.provider === operation.provider);
         if (!effect || !scope || !Number.isSafeInteger(effect.estimatedCostMicros) || effect.estimatedCostMicros < 0) throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_INVALID");
         const initial = await this.#appendOperation({ version: 3, operation, status: "pending", billingStatus: "unknown", reservedCostMicros: effect.estimatedCostMicros, actualCostMicros: null, costObservation: null, costObservationSha256: null, accountScopeSha256: scope.accountScopeSha256, projectScopeSha256: scope.projectScopeSha256, resourceIdentitySha256: null, priorRecordSha256: null });
-        await createOrVerify(join(this.#workspace, "provider-operations", `${operation.operationId}.json`), `${canonicalJson(initial)}\n`, "RELEASE_CONTROLLER_OPERATION_COLLISION");
+        await this.#createOrVerify(join(this.#workspace, "provider-operations", `${operation.operationId}.json`), `${canonicalJson(initial)}\n`, "RELEASE_CONTROLLER_OPERATION_COLLISION");
         operationRecordSha256s.push(initial.recordSha256);
       }
     }
@@ -741,7 +794,7 @@ export class ReleaseCertificationController {
       limitations: ["DATABASE_CONTINUITY_NOT_CERTIFIED", "OBJECT_STORE_FAILOVER_NOT_CERTIFIED", "WORKER_CONTINUITY_NOT_CERTIFIED", "LIVE_DRILL_REQUIRED"] as const,
     };
     const topology = ReleaseTopologyObservationSchema.parse({ ...topologyBase, deployment, topologySha256: await digest({ ...topologyBase, deployment }) }) as ReleaseProvisioningResult["topology"];
-    await createOrVerify(join(this.#workspace, "topologies", `${topology.topologySha256}.json`), `${canonicalJson(topology)}\n`, "RELEASE_CONTROLLER_TOPOLOGY_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "topologies", `${topology.topologySha256}.json`), `${canonicalJson(topology)}\n`, "RELEASE_CONTROLLER_TOPOLOGY_COLLISION");
     state = await this.#advance(state, "topology_ready", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), topology.topologySha256, null);
     return { state, authorizationRequest: request, topology };
   }
@@ -815,7 +868,7 @@ export class ReleaseCertificationController {
         });
         record = run.records[0];
         if (!record) throw new Error("RELEASE_CONTROLLER_PROTECTED_SET_INVALID");
-        await createOrVerify(join(this.#workspace, "protected-records", `${suite}.json`), `${canonicalJson({ version: 1, candidateSha256: state.candidate.candidateSha256, topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, record })}\n`, "RELEASE_CONTROLLER_PROTECTED_RECORD_COLLISION");
+        await this.#createOrVerify(join(this.#workspace, "protected-records", `${suite}.json`), `${canonicalJson({ version: 1, candidateSha256: state.candidate.candidateSha256, topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, record })}\n`, "RELEASE_CONTROLLER_PROTECTED_RECORD_COLLISION");
       }
       records.push(record);
     }
@@ -861,7 +914,7 @@ export class ReleaseCertificationController {
       ...priorState, status, priorStateSha256: prior.stateSha256, authorizationReceiptSha256,
       providerOperationIds, ...(providerOperationRecordSha256s ? { providerOperationRecordSha256s } : {}), deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
     });
-    await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     return this.#commitStateTransition(prior.stateSha256, next);
   }
 
@@ -871,13 +924,13 @@ export class ReleaseCertificationController {
       ...priorState, version: 2, status, priorStateSha256: prior.stateSha256, authorizationReceiptSha256,
       providerOperationIds, deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
     });
-    await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     return this.#commitStateTransition(prior.stateSha256, next);
   }
 
   async #writeCurrent(state: ReleaseControllerState): Promise<void> {
     const pointerBase = { version: 1 as const, stateSha256: state.stateSha256, candidateSha256: state.candidate.candidateSha256 };
-    await replaceSynced(join(this.#workspace, "current.json"), `${canonicalJson({ ...pointerBase, pointerSha256: await digest(pointerBase) })}\n`);
+    await this.#replaceSynced(join(this.#workspace, "current.json"), `${canonicalJson({ ...pointerBase, pointerSha256: await digest(pointerBase) })}\n`);
   }
 
   async #loadCurrent(): Promise<Readonly<{ state: ReleaseControllerState; pointer: z.infer<typeof ReleaseControllerCurrentPointerSchema> }>> {
@@ -903,7 +956,7 @@ export class ReleaseCertificationController {
     const base = { version: 1 as const, priorStateSha256, nextStateSha256: next.stateSha256 };
     const transition: StateTransition = { ...base, transitionSha256: await digest(base) };
     const path = join(this.#workspace, "state-transitions", `${priorStateSha256}.json`);
-    const outcome = await createSynced(path, `${canonicalJson(transition)}\n`, this.#workspace, this.#syncDirectory);
+    const outcome = await createSynced(path, `${canonicalJson(transition)}\n`, DURABLE_WORKSPACE_FILESYSTEM_ROOT, this.#syncDirectory);
     if (outcome === "created") return next;
     const existing = await this.#readStateTransition(priorStateSha256);
     if (!existing || existing.nextStateSha256 !== next.stateSha256) throw new Error("RELEASE_CONTROLLER_STATE_RACE");
@@ -930,7 +983,7 @@ export class ReleaseCertificationController {
     };
     const claim: DispatchClaim = { ...base, dispatchClaimSha256: await digest(base) };
     const path = join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`);
-    const outcome = await createSynced(path, `${canonicalJson(claim)}\n`, this.#workspace, this.#syncDirectory);
+    const outcome = await createSynced(path, `${canonicalJson(claim)}\n`, DURABLE_WORKSPACE_FILESYSTEM_ROOT, this.#syncDirectory);
     if (outcome === "created") return true;
     let raw: unknown;
     try { raw = JSON.parse(await readFile(path, "utf8")); }
@@ -963,7 +1016,7 @@ export class ReleaseCertificationController {
 
   async #appendOperation(record: Omit<CurrentProviderOperationRecord, "recordSha256">): Promise<CurrentProviderOperationRecord> {
     const next = { ...record, recordSha256: await digest(record) } as CurrentProviderOperationRecord;
-    await createOrVerify(join(this.#workspace, "provider-operation-records", `${next.recordSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_OPERATION_RECORD_COLLISION");
+    await this.#createOrVerify(join(this.#workspace, "provider-operation-records", `${next.recordSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_OPERATION_RECORD_COLLISION");
     return next;
   }
 
@@ -1127,6 +1180,7 @@ export async function runReleaseCertification(options: ControllerOptions & Reado
       workspace: options.workspace,
       providers: createReleaseControllerProviderRegistry(options.session.registry),
       ...(options.collectorImage ? { collectorImage: options.collectorImage } : {}),
+      ...(options.workspaceCapability ? { workspaceCapability: options.workspaceCapability } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
     const pending = await controller.dryRun();
@@ -1137,6 +1191,7 @@ export async function runReleaseCertification(options: ControllerOptions & Reado
     const observedController = new ReleaseCertificationController({
       candidatePath: options.candidatePath, workspace: options.workspace,
       providers: createReleaseControllerProviderRegistry(options.session.registry), collectorImage,
+      ...(options.workspaceCapability ? { workspaceCapability: options.workspaceCapability } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
     const execution = await options.session.prepareAuthorizedExecution({ authorizationRequest: pending.authorizationRequest });

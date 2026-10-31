@@ -60,40 +60,71 @@ async function measureDirectToolchain() {
     workerPackageSha256, workerLockSha256, templatePackageSha256, templateLockSha256 };
   validateToolchainReceipt(receipt); return receipt;
 }
-type LegacyRequest = { version: 1; actionId: string; sessionId: string; expectedVersion: number; proposalSha256: string; toolchainSha256: string; deadlineEpochMs: number; files: Array<{ path: string; content: string }>; publication?: { server: string } };
-type DirectRequest = Omit<LegacyRequest, "version" | "publication"> & { version: 2; artifactContract: "nip5d-direct-v1"; purpose: string; publication: { server: string } };
+type RequestCore = { actionId: string; sessionId: string; expectedVersion: number; proposalSha256: string; toolchainSha256: string; deadlineEpochMs: number; files: Array<{ path: string; content: string }> };
+type LegacyRequest = RequestCore & { version: 1; publication?: { server: string } };
+type DirectRequest = RequestCore & { version: 2; artifactContract: "nip5d-direct-v1"; purpose: string; publication: { server: string } };
 type EdgeCertification = { version: 1; candidateSha256: string; topologySha256: string; workerOperationId: string; sessionLeaseSha256: string; providerImage: string };
-type EdgeRequest = LegacyRequest & { version: 3; edgeCertification: EdgeCertification };
+type EdgeRequest = RequestCore & { version: 3; edgeCertification: EdgeCertification; publication?: { server: string } };
 type Request = LegacyRequest | DirectRequest | EdgeRequest;
+function isObject(value: unknown): value is object { return typeof value === "object" && value !== null; }
+function objectRecord(value: unknown, code: string): Record<string, unknown> {
+  if (!isObject(value) || Array.isArray(value)) return fail(code);
+  const output: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) output[key] = Reflect.get(value, key);
+  return output;
+}
+function stringField(value: Record<string, unknown>, key: string, code: string): string {
+  const result = value[key]; if (typeof result === "string") return result; return fail(code);
+}
+function numberField(value: Record<string, unknown>, key: string, code: string): number {
+  const result = value[key]; if (typeof result === "number") return result; return fail(code);
+}
+function publication(value: Record<string, unknown>): { server: string } | undefined {
+  if (value.publication === undefined) return undefined;
+  const raw = objectRecord(value.publication, "JOB_PUBLICATION_INVALID");
+  if (Object.keys(raw).join(",") !== "server") fail("JOB_PUBLICATION_INVALID");
+  const server = stringField(raw, "server", "JOB_PUBLICATION_INVALID");
+  if (server.length > 512) fail("JOB_PUBLICATION_INVALID");
+  const url = new URL(server);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/" || url.origin !== server) fail("JOB_PUBLICATION_INVALID");
+  return { server };
+}
 function parseRequest(value: unknown): Request {
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail("JOB_REQUEST_INVALID");
-  const v = value as Request;
-  const expectedKeys = v.version === 2 ? "actionId,artifactContract,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,purpose,sessionId,toolchainSha256,version" : v.version === 3 ? (v.publication === undefined ? "actionId,deadlineEpochMs,edgeCertification,expectedVersion,files,proposalSha256,sessionId,toolchainSha256,version" : "actionId,deadlineEpochMs,edgeCertification,expectedVersion,files,proposalSha256,publication,sessionId,toolchainSha256,version") : v.publication === undefined ? "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,sessionId,toolchainSha256,version" : "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,sessionId,toolchainSha256,version";
-  if (Object.keys(v).sort().join(",") !== expectedKeys || ![1, 2, 3].includes(v.version) || ![v.actionId, v.sessionId].every(id => typeof id === "string" && id.length > 0 && id.length <= 256) || !Number.isSafeInteger(v.expectedVersion) || v.expectedVersion < 0 || ![v.proposalSha256, v.toolchainSha256].every(x => /^[a-f0-9]{64}$/u.test(x)) || !Number.isSafeInteger(v.deadlineEpochMs) || !Array.isArray(v.files) || v.files.length < 1 || v.files.length > 3) fail("JOB_REQUEST_INVALID");
-  if (v.version === 2 && (v.artifactContract !== "nip5d-direct-v1" || typeof v.purpose !== "string" || !v.purpose.trim() || v.purpose !== v.purpose.trim() || v.purpose.length > 4096 || !v.publication)) fail("JOB_DIRECT_METADATA_INVALID");
-  if (v.publication !== undefined) {
-    if (!v.publication || Object.keys(v.publication).join(",") !== "server" || typeof v.publication.server !== "string" || v.publication.server.length > 512) fail("JOB_PUBLICATION_INVALID");
-    const url = new URL(v.publication.server);
-    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/" || url.origin !== v.publication.server) fail("JOB_PUBLICATION_INVALID");
-  }
+  const raw = objectRecord(value, "JOB_REQUEST_INVALID"), version = raw.version;
+  if (version !== 1 && version !== 2 && version !== 3) fail("JOB_REQUEST_INVALID");
+  const expectedKeys = version === 2 ? "actionId,artifactContract,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,purpose,sessionId,toolchainSha256,version" : version === 3 ? (raw.publication === undefined ? "actionId,deadlineEpochMs,edgeCertification,expectedVersion,files,proposalSha256,sessionId,toolchainSha256,version" : "actionId,deadlineEpochMs,edgeCertification,expectedVersion,files,proposalSha256,publication,sessionId,toolchainSha256,version") : raw.publication === undefined ? "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,sessionId,toolchainSha256,version" : "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,sessionId,toolchainSha256,version";
+  if (Object.keys(raw).sort().join(",") !== expectedKeys) fail("JOB_REQUEST_INVALID");
+  const actionId = stringField(raw, "actionId", "JOB_REQUEST_INVALID"), sessionId = stringField(raw, "sessionId", "JOB_REQUEST_INVALID"), proposalSha256 = stringField(raw, "proposalSha256", "JOB_REQUEST_INVALID"), toolchainSha256 = stringField(raw, "toolchainSha256", "JOB_REQUEST_INVALID");
+  const expectedVersion = numberField(raw, "expectedVersion", "JOB_REQUEST_INVALID"), deadlineEpochMs = numberField(raw, "deadlineEpochMs", "JOB_REQUEST_INVALID");
+  if (![actionId, sessionId].every(id => id.length > 0 && id.length <= 256) || ![proposalSha256, toolchainSha256].every(item => /^[a-f0-9]{64}$/u.test(item)) || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || !Number.isSafeInteger(deadlineEpochMs)) fail("JOB_REQUEST_INVALID");
+  const sourceFiles = raw.files;
+  if (!Array.isArray(sourceFiles) || sourceFiles.length < 1 || sourceFiles.length > 3) return fail("JOB_REQUEST_INVALID");
   const allowed = new Set(["src/main.ts", "src/styles.css", "src/capabilities.json"]);
-  for (const file of v.files) if (!file || Object.keys(file).sort().join(",") !== "content,path" || !allowed.has(file.path) || typeof file.content !== "string" || Buffer.byteLength(file.content) > 30_000) fail("JOB_SOURCE_INVALID");
-  if (new Set(v.files.map(file => file.path)).size !== v.files.length || !v.files.some(file => file.path === "src/main.ts")) fail("JOB_SOURCE_INVALID");
-  if (v.version === 2) {
-    const content = v.files.find(file => file.path === "src/capabilities.json")?.content ?? fail("JOB_DIRECT_DECLARATION_REQUIRED");
+  const files = sourceFiles.map(value => { const file = objectRecord(value, "JOB_SOURCE_INVALID"), path = stringField(file, "path", "JOB_SOURCE_INVALID"), content = stringField(file, "content", "JOB_SOURCE_INVALID"); if (Object.keys(file).sort().join(",") !== "content,path" || !allowed.has(path) || Buffer.byteLength(content) > 30_000) fail("JOB_SOURCE_INVALID"); return { path, content }; });
+  if (new Set(files.map(file => file.path)).size !== files.length || !files.some(file => file.path === "src/main.ts")) fail("JOB_SOURCE_INVALID");
+  const common: RequestCore = { actionId, sessionId, expectedVersion, proposalSha256, toolchainSha256, deadlineEpochMs, files };
+  const mountedPublication = publication(raw);
+  if (version === 2) {
+    if (raw.artifactContract !== "nip5d-direct-v1" || mountedPublication === undefined) return fail("JOB_DIRECT_METADATA_INVALID");
+    const purpose = stringField(raw, "purpose", "JOB_DIRECT_METADATA_INVALID");
+    if (!purpose.trim() || purpose !== purpose.trim() || purpose.length > 4096) fail("JOB_DIRECT_METADATA_INVALID");
+    const content = files.find(file => file.path === "src/capabilities.json")?.content ?? fail("JOB_DIRECT_DECLARATION_REQUIRED");
     const declaration = JSON.parse(content);
     if (!declaration || Object.keys(declaration).sort().join(",") !== "optional,required" || ![declaration.required, declaration.optional].every(list => Array.isArray(list) && list.length <= 32 && list.every((domain: unknown) => typeof domain === "string" && /^[a-z][a-z0-9-]{0,31}$/u.test(domain)))) fail("JOB_DIRECT_DECLARATION_INVALID");
     const domains = [...declaration.required, ...declaration.optional];
     if (new Set(domains).size !== domains.length) fail("JOB_DIRECT_DECLARATION_INVALID");
+    return { version: 2, ...common, artifactContract: "nip5d-direct-v1", purpose, publication: mountedPublication };
   }
-  if (v.version === 3) {
-    const edge = v.edgeCertification;
-    if (!edge || Object.keys(edge).sort().join(",") !== "candidateSha256,providerImage,sessionLeaseSha256,topologySha256,version,workerOperationId" || edge.version !== 1
+  if (version === 3) {
+    const edgeRaw = objectRecord(raw.edgeCertification, "JOB_EDGE_CERTIFICATION_INVALID");
+    const edge: EdgeCertification = { version: edgeRaw.version === 1 ? 1 : fail("JOB_EDGE_CERTIFICATION_INVALID"), candidateSha256: stringField(edgeRaw, "candidateSha256", "JOB_EDGE_CERTIFICATION_INVALID"), topologySha256: stringField(edgeRaw, "topologySha256", "JOB_EDGE_CERTIFICATION_INVALID"), workerOperationId: stringField(edgeRaw, "workerOperationId", "JOB_EDGE_CERTIFICATION_INVALID"), sessionLeaseSha256: stringField(edgeRaw, "sessionLeaseSha256", "JOB_EDGE_CERTIFICATION_INVALID"), providerImage: stringField(edgeRaw, "providerImage", "JOB_EDGE_CERTIFICATION_INVALID") };
+    if (Object.keys(edgeRaw).sort().join(",") !== "candidateSha256,providerImage,sessionLeaseSha256,topologySha256,version,workerOperationId" || edge.version !== 1
       || ![edge.candidateSha256, edge.topologySha256, edge.sessionLeaseSha256].every(item => typeof item === "string" && /^[a-f0-9]{64}$/u.test(item))
       || typeof edge.workerOperationId !== "string" || !/^capacity-[a-f0-9]{40}$/u.test(edge.workerOperationId)
       || typeof edge.providerImage !== "string" || !/^.+@sha256:[a-f0-9]{64}$/iu.test(edge.providerImage)) fail("JOB_EDGE_CERTIFICATION_INVALID");
+    return { version: 3, ...common, edgeCertification: edge, ...(mountedPublication === undefined ? {} : { publication: mountedPublication }) };
   }
-  return v;
+  return { version: 1, ...common, ...(mountedPublication === undefined ? {} : { publication: mountedPublication }) };
 }
 /** The immutable image selects its ABI; request data cannot upgrade it. */
 async function assertImageContract(request: Request) {
@@ -331,16 +362,17 @@ async function measuredLockedFile(path: string) {
   } finally { await handle.close(); }
 }
 function parsedEdgeAudit(stdout: string, request: EdgeRequest) {
-  const value = JSON.parse(stdout) as Record<string, unknown>, edge = request.edgeCertification;
-  const hostile = value.hostile as Record<string, unknown> | undefined;
+  const value = objectRecord(JSON.parse(stdout), "JOB_EDGE_AUDIT_INVALID"), edge = request.edgeCertification;
+  const hostile = objectRecord(value.hostile, "JOB_EDGE_AUDIT_INVALID");
+  const remainingLifetimeMs = numberField(value, "remainingLifetimeMs", "JOB_EDGE_AUDIT_INVALID");
   if (Object.keys(value).sort().join(",") !== "candidateSha256,hostile,image,kind,remainingLifetimeMs,sessionLeaseSha256,toolchainSha256,topologySha256,version"
     || value.version !== 1 || value.kind !== "edge-native-v1" || value.candidateSha256 !== edge.candidateSha256 || value.topologySha256 !== edge.topologySha256
     || value.image !== edge.providerImage.toLowerCase() || value.sessionLeaseSha256 !== edge.sessionLeaseSha256 || value.toolchainSha256 !== request.toolchainSha256
-    || !Number.isSafeInteger(value.remainingLifetimeMs) || (value.remainingLifetimeMs as number) <= 0 || (value.remainingLifetimeMs as number) > 1_200_000
-    || !hostile || Object.keys(hostile).sort().join(",") !== "filesystemDenied,lifetimeBounded,minimalCapabilities,networkDenied,noInboundPorts,nonRoot,resourceBounded"
+    || !Number.isSafeInteger(remainingLifetimeMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000
+    || Object.keys(hostile).sort().join(",") !== "filesystemDenied,lifetimeBounded,minimalCapabilities,networkDenied,noInboundPorts,nonRoot,resourceBounded"
     || Object.values(hostile).some(item => item !== true)) fail("JOB_EDGE_AUDIT_INVALID");
-  return { version: 1 as const, candidateSha256: edge.candidateSha256, topologySha256: edge.topologySha256, workerOperationId: edge.workerOperationId, providerImage: edge.providerImage.toLowerCase(), sessionLeaseSha256: edge.sessionLeaseSha256, toolchainSha256: request.toolchainSha256, remainingLifetimeMs: value.remainingLifetimeMs as number,
-    hostile: { filesystemDenied: true as const, networkDenied: true as const, resourceBounded: true as const, lifetimeBounded: true as const, noInboundPorts: true as const, nonRoot: true as const, minimalCapabilities: true as const } };
+  return { version: 1, candidateSha256: edge.candidateSha256, topologySha256: edge.topologySha256, workerOperationId: edge.workerOperationId, providerImage: edge.providerImage.toLowerCase(), sessionLeaseSha256: edge.sessionLeaseSha256, toolchainSha256: request.toolchainSha256, remainingLifetimeMs,
+    hostile: { filesystemDenied: true, networkDenied: true, resourceBounded: true, lifetimeBounded: true, noInboundPorts: true, nonRoot: true, minimalCapabilities: true } };
 }
 async function reproduce(id: string, request: EdgeRequest) {
   const project = `/workspace/jobs/${id}/reproduction`, commands: Awaited<ReturnType<typeof command>>[] = [];

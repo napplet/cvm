@@ -245,6 +245,28 @@ try {
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;
     }
   }
+  if (!direct) {
+    const edgeBody = canonicalJson({ version: 3, sessionId: "native-edge-proof", actionId: "hostile-supply", expectedVersion: 0, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000,
+      edgeCertification: { version: 1, candidateSha256: "d".repeat(64), topologySha256: "e".repeat(64), workerOperationId: `capacity-${"f".repeat(40)}`, sessionLeaseSha256: lease, providerImage: `registry.example/worker@sha256:${imageHash}` }, files: JSON.parse(sourceJson).files });
+    const edgeBytes = Buffer.from(edgeBody), edgeId = new Bun.CryptoHasher("sha256").update(edgeBytes).digest("hex");
+    for (let offset = 0, index = 0; offset < edgeBytes.length; offset += 24_576, index++) await jobCommand("put", edgeId, String(index), edgeBytes.subarray(offset, offset + 24_576).toString("base64"));
+    await jobCommand("start", edgeId, String(Math.ceil(edgeBytes.length / 24_576)));
+    let edgeResult: Record<string, unknown> | undefined;
+    const edgeDeadline = Date.now() + 600_000;
+    do { edgeResult = await jobCommand("status", edgeId); if (edgeResult.state !== "pending") break; await Bun.sleep(1_000); } while (Date.now() < edgeDeadline);
+    if (edgeResult?.state !== "completed" || edgeResult.requestSha256 !== edgeId || !Array.isArray(edgeResult.commands) || edgeResult.commands.length !== 8 || edgeResult.commands.some(command => command.exitCode !== 0)) throw new Error(`WORKER_NATIVE_EDGE_JOB_FAILED:${JSON.stringify(edgeResult)}`);
+    const parts: Buffer[] = [];
+    for (let offset = 0; offset < Number(edgeResult.artifactBytes); offset += 24_576) parts.push(Buffer.from(String((await jobCommand("artifact", edgeId, String(offset))).bytesBase64), "base64"));
+    const edgeArtifact = JSON.parse(Buffer.concat(parts).toString("utf8"));
+    const certification = edgeArtifact.edgeCertification;
+    if (edgeArtifact.version !== 4 || !certification || certification.candidateSha256 !== "d".repeat(64) || certification.topologySha256 !== "e".repeat(64)
+      || certification.workerOperationId !== `capacity-${"f".repeat(40)}` || certification.providerImage !== `registry.example/worker@sha256:${imageHash}`
+      || certification.toolchainSha256 !== toolchain || certification.supply?.format !== "pnpm-lock-v1"
+      || certification.supply.primary.aggregateSha256 !== certification.supply.secondary.aggregateSha256
+      || certification.supply.primary.lockSha256 !== certification.supply.secondary.lockSha256
+      || !Object.values(certification.hostile ?? {}).every(value => value === true)) throw new Error("WORKER_NATIVE_EDGE_EVIDENCE_INVALID");
+    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, supply: certification.supply };
+  }
   report.durableJobs = jobs; report.durableJobManifests = jobManifests;
   const fence = await jobCommand("fence", lastJobId, lease);
   const fenceAgain = await jobCommand("fence-status", lastJobId, lease);

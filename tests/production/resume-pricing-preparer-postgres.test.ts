@@ -216,12 +216,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       maximum: "50", policyVersion: "policy:one", idea: "Build one focused private counter." });
     const sessionId = `session:${hash({ accountId, key: command.idempotencyKey }).slice(0, 24)}`;
     await admin.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [accountId]);
-    // This quote is made after a previously authorized operation has consumed
-    // all but three sats of the original approval.  The residual hold must be
-    // sufficient for the quoted work, but it must not make the later negative
-    // acceptance cases funded by accident.
-    await admin.query("INSERT INTO production_real.account_balance_projection(account_id,unit,settled_available,held) VALUES($1,'sat',3,3)", [accountId]);
-    await admin.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:one',$1,'admission:one',50,3,'active')", [accountId]);
+    await admin.query("INSERT INTO production_real.account_balance_projection(account_id,unit,settled_available,held) VALUES($1,'sat',0,0)", [accountId]);
+    await admin.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:one',$1,'admission:one',50,0,'active')", [accountId]);
     await admin.query("INSERT INTO production_real.admissions(admission_id,account_id,reference,capacity_reference,state) VALUES('admission:one',$1,'admission:one','capacity:fixture','accepted')", [accountId]);
 
     const values = new Map<string, { bytes: Uint8Array; checksum: string }>(); let objectReads = 0, allocations = 0, deletions = 0;
@@ -261,6 +257,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       expectedSessionVersion: 0, expectedArtifactVersion: 0, manifestReference: `checkpoint-manifest:${sealed.manifest.checkpointId}:${sealed.envelope.manifestSha256}`,
       objectKey: sealed.envelope.object.key, objectGeneration: String(sealed.envelope.object.generation), objectChecksum: sealed.envelope.object.checksum,
       keyReference: sealed.envelope.crypto.keyReference, compatibilityIdentity: hash(sealed.manifest.compatibility), checkpointCommittedAtMs: Date.parse(sealed.manifest.committedAt) }));
+    // The signed original pause was unfunded. Model the later top-up and cap
+    // approval only after it has been durably checkpointed, leaving three sats
+    // of held residual for the V2 preparation below.
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=3,held=3 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.session_cap_holds SET held_amount=3 WHERE account_id=$1 AND reference='admission:one'", [accountId]);
     const currentPricing = await resumePricingMaterial(now, "profile:current");
     await registerProductionPricing({ pool, ...currentPricing });
     const preparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing,

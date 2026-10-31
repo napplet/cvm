@@ -6,7 +6,16 @@ import { createFundedCore } from "../../src/phase-03/funded-core";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 import { FundingService } from "../../src/funding/funding-service";
-import type { CashuTopUpRecord } from "../../src/funding/cashu-top-up";
+import { CashuMintPolicyRegistry, CashuMintPolicySchema } from "../../src/funding/cashu-mint-policy";
+import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
+import { CashuTopUpCoordinator, type CashuTopUpRecord } from "../../src/funding/cashu-top-up";
+import fixture from "../fixtures/cashu-phase-03.json";
+
+const deferred = <T = void>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+};
 
 test("production realm rejects development-only funding adapters before construction", () => {
   const descriptor = { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" };
@@ -104,17 +113,170 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     const funding = new FundingService(database.funding);
     expect((await funding.status(principal)).available).toBe("0");
     await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [productionAccountId]);
-    const cashuRecord = (topUpId: string, commitment: string): CashuTopUpRecord => ({
+    const cashuRecord = (topUpId: string, commitment: string, proofIdentity = "9".repeat(64)): CashuTopUpRecord => ({
       result: { topUpId, state: "verifying", policyVersion: "cashu-policy", commitment }, accountId: productionAccountId,
       policy: { version: "cashu-policy", mints: [] } as never, protectedId: `protected:${topUpId}`,
-      semanticProofIdentities: ["9".repeat(64)], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
+      semanticProofIdentities: [proofIdentity], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
     });
-    const [cashuOne, cashuTwo] = await Promise.all([
+    const cashuClaims = await Promise.all([
       database.cashu.claim(cashuRecord("cashu:one", "1".repeat(64))),
       database.cashu.claim(cashuRecord("cashu:two", "2".repeat(64))),
+      database.cashu.claim(cashuRecord("cashu:three", "3".repeat(64))),
+      database.cashu.claim(cashuRecord("cashu:four", "4".repeat(64))),
     ]);
-    expect([cashuOne, cashuTwo].filter((claim) => claim.claimed)).toHaveLength(1);
-    const cashuWinner = cashuOne.claimed ? cashuOne.record : cashuTwo.record;
+    expect(cashuClaims.filter((claim) => claim.claimed)).toHaveLength(1);
+    const cashuWinner = cashuClaims.find((claim) => claim.claimed)!.record;
+    expect(new Set(cashuClaims.map((claim) => claim.record.result.topUpId))).toEqual(new Set([cashuWinner.result.topUpId]));
+
+    // Hold the first client immediately after it has the session advisory
+    // lock. The other claims have demonstrably reached the same lock and stay
+    // pending past the old 250ms try-lock budget before the winner commits.
+    const firstLockAcquired = deferred<void>();
+    const contenderReachedLock = deferred<void>();
+    const releaseFirstLock = deferred<void>();
+    let advisoryLockCalls = 0;
+    const contendedPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
+      async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (sql.includes("pg_advisory_lock(")) {
+          advisoryLockCalls += 1;
+          if (advisoryLockCalls === 1) {
+            const result = await client.query<Row>(sql, values ? [...values] : undefined);
+            firstLockAcquired.resolve();
+            await releaseFirstLock.promise;
+            return { rows: result.rows };
+          }
+          if (advisoryLockCalls === 2) contenderReachedLock.resolve();
+        }
+        try { return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows }; }
+        catch (error) { if (error instanceof Error && "code" in error && error.code === "40001") error.message += ` [statement: ${sql.slice(0, 180)}]`; throw error; }
+      }, release() { client.release(); },
+    }; } };
+    const contendedDatabase = new PostgresFundingDatabase(contendedPool, { realm: "production-real", deadlineMs: 1_000 });
+    const contendedProof = "8".repeat(64);
+    const firstClaim = contendedDatabase.cashu.claim(cashuRecord("cashu:contended-one", "5".repeat(64), contendedProof));
+    await firstLockAcquired.promise;
+    const contendingClaims = ["two", "three", "four"].map((suffix, index) => contendedDatabase.cashu.claim(cashuRecord(`cashu:contended-${suffix}`, String(index + 6).repeat(64), contendedProof)));
+    const allContendedClaims = [firstClaim, ...contendingClaims];
+    let settledWhileLocked = 0;
+    const observedContendedClaims = allContendedClaims.map(async (claim) => { try { return await claim; } finally { settledWhileLocked += 1; } });
+    try {
+      await contenderReachedLock.promise;
+      await Bun.sleep(350);
+      expect(settledWhileLocked).toBe(0);
+    } finally {
+      releaseFirstLock.resolve();
+    }
+    const contendedResults = await Promise.all(observedContendedClaims);
+    expect(contendedResults.filter((claim) => claim.claimed)).toHaveLength(1);
+    const contendedWinner = contendedResults.find((claim) => claim.claimed)!.record;
+    expect(new Set(contendedResults.map((claim) => claim.record.result.topUpId))).toEqual(new Set([contendedWinner.result.topUpId]));
+
+    // PostgreSQL advisory locks are database-scoped. A development lock for
+    // the same proof must not delay a production claim in a separate realm.
+    const realmProof = "7".repeat(64);
+    const developmentRealmLock = `cashu-proof:development-test:${realmProof}`;
+    await pool.query("SELECT pg_advisory_lock(hashtextextended($1::text,$2::bigint))", [developmentRealmLock, "20261031"]);
+    try {
+      expect(await database.cashu.claim(cashuRecord("cashu:realm-isolated", "a".repeat(64), realmProof))).toMatchObject({ claimed: true, record: { result: { topUpId: "cashu:realm-isolated" } } });
+    } finally {
+      await pool.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [developmentRealmLock, "20261031"]);
+    }
+
+    // An unlock acknowledgement failure after COMMIT must evict the checked-out
+    // session without converting the acknowledged claim into a failed submit.
+    // The provider observes the durable claim before settlement and proves the
+    // bearer was not prematurely expired; exact replay must not settle or
+    // credit again.
+    let injectedUnlockFailure = true;
+    let poisonedReleaseError: Error | undefined;
+    const poisonedPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
+      async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (injectedUnlockFailure && sql.includes("pg_advisory_unlock(")) {
+          injectedUnlockFailure = false;
+          throw new Error("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
+        }
+        return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows };
+      }, release(error?: Error) { if (error) poisonedReleaseError = error; client.release(error); },
+    }; } };
+    const poisonedDatabase = new PostgresFundingDatabase(poisonedPool, { realm: "production-real", deadlineMs: 1_000 });
+    const poisonedPrincipal = { pubkey: "b".repeat(64) };
+    const poisonedAccountId = await accountIdForPrincipal(poisonedPrincipal);
+    await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [poisonedAccountId]);
+    const protectedMaterial: {
+      sealed: string[]; expired: string[];
+      seal(metadata: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array): Promise<{ id: string; payloadDigest: string }>;
+      expire(id: string): Promise<void>;
+    } = {
+      sealed: [], expired: [],
+      async seal(_: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array) {
+        const id = `protected:poisoned:${this.sealed.length + 1}`;
+        this.sealed.push(id);
+        return { id, payloadDigest: `${plaintext.byteLength}` };
+      },
+      async expire(id: string) { this.expired.push(id); },
+    };
+    const poisonedProvider = new FakeCashuSettlementPort();
+    poisonedProvider.nextSettlement({ status: "verified", externalReference: "mint-poisoned", settlementReference: "cashu-poisoned", verifiedAt: "2026-10-31T07:00:00.000Z" });
+    const originalSettle = poisonedProvider.settle.bind(poisonedProvider);
+    poisonedProvider.settle = async (request) => {
+      expect(protectedMaterial.expired).toEqual([]);
+      expect(await poisonedDatabase.cashu.find(request.topUpId)).toMatchObject({ protectedId: "protected:poisoned:1", result: { state: "verifying" } });
+      return originalSettle(request);
+    };
+    const poisonedCoordinator = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(CashuMintPolicySchema.parse(fixture.policies[0])), provider: poisonedProvider, vault: protectedMaterial, funding: new FundingService(poisonedDatabase.funding), repository: poisonedDatabase.cashu });
+    const poisonedSubmit = { principal: poisonedPrincipal, idempotencyKey: "cashu:poisoned-release", topUpId: "cashu:poisoned-release", amount: "21", maxFee: "0", unit: "sat", pmi: "bitcoin-cashu-v4-direct", token: new TextEncoder().encode("cashu-poisoned-release-token") };
+    expect(await poisonedCoordinator.submit(poisonedSubmit)).toMatchObject({ state: "credited", topUpId: poisonedSubmit.topUpId });
+    expect(poisonedReleaseError?.message).toBe("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
+    expect(await poisonedCoordinator.submit(poisonedSubmit)).toMatchObject({ state: "credited", topUpId: poisonedSubmit.topUpId });
+    expect(poisonedProvider.settleCalls).toBe(1);
+    expect(protectedMaterial.expired).toEqual(["protected:poisoned:1"]);
+    expect((await new FundingService(database.funding).status(poisonedPrincipal)).available).toBe("21");
+
+    const preCommitAckLoss = async (topUpId: string, acknowledgementSql: string, failure: string) => {
+      let injected = true;
+      let releaseError: Error | undefined;
+      const acknowledgementLossPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
+        async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+          if (injected && sql.includes(acknowledgementSql)) {
+            injected = false;
+            await client.query<Row>(sql, values ? [...values] : undefined);
+            throw new Error(failure);
+          }
+          return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows };
+        }, release(error?: Error) { if (error) releaseError = error; client.release(error); },
+      }; } };
+      const acknowledgementLossDatabase = new PostgresFundingDatabase(acknowledgementLossPool, { realm: "production-real", deadlineMs: 1_000 });
+      const sealed: string[] = [];
+      const expired: string[] = [];
+      const vault = {
+        async seal(_: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array) {
+          const id = `protected:ack-loss:${sealed.length + 1}`;
+          sealed.push(id);
+          return { id, payloadDigest: `${plaintext.byteLength}` };
+        },
+        async expire(id: string) { expired.push(id); },
+      };
+      const provider = new FakeCashuSettlementPort();
+      const coordinator = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(CashuMintPolicySchema.parse(fixture.policies[0])), provider, vault, funding: new FundingService(acknowledgementLossDatabase.funding), repository: acknowledgementLossDatabase.cashu });
+      const submit = { principal: poisonedPrincipal, idempotencyKey: topUpId, topUpId, amount: "21", maxFee: "0", unit: "sat", pmi: "bitcoin-cashu-v4-direct", token: new TextEncoder().encode(`cashu-${topUpId}`) };
+      await expect(coordinator.submit(submit)).rejects.toThrow(failure);
+      expect(releaseError?.message).toBe("PRODUCTION_ADVISORY_SESSION_STATE_UNKNOWN");
+      expect(provider.settleCalls).toBe(0);
+      expect(expired).toEqual(["protected:ack-loss:1"]);
+
+      provider.nextSettlement({ status: "verified", externalReference: `mint-${topUpId}`, settlementReference: `cashu-${topUpId}`, verifiedAt: "2026-10-31T07:00:00.000Z" });
+      const originalSettleAfterEviction = provider.settle.bind(provider);
+      provider.settle = async (request) => {
+        expect(expired).toEqual(["protected:ack-loss:1"]);
+        return originalSettleAfterEviction(request);
+      };
+      expect(await coordinator.submit(submit)).toMatchObject({ state: "credited", topUpId });
+      expect(provider.settleCalls).toBe(1);
+      expect(await acknowledgementLossDatabase.cashu.find(topUpId)).toMatchObject({ protectedId: "protected:ack-loss:2", result: { state: "credited" } });
+    };
+    await preCommitAckLoss("cashu:acquire-ack-loss", "pg_advisory_lock(", "FIXTURE_ADVISORY_LOCK_ACK_LOST");
+    await preCommitAckLoss("cashu:reset-ack-loss", "RESET lock_timeout", "FIXTURE_LOCK_TIMEOUT_RESET_ACK_LOST");
+
     await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data", outputDataDigest: "4".repeat(64) });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);
@@ -171,7 +333,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
 
     productionClient = await appPool.connect();
     try {
-      expect((await productionClient.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 3 });
+      expect((await productionClient.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 4 });
       await expect(productionClient.query("SELECT * FROM public.funding_accounts")).rejects.toThrow();
       await expect(productionClient.query("UPDATE production_real.ledger_entries SET amount=2 WHERE account_id=$1", [productionAccountId])).rejects.toThrow();
       await expect(productionClient.query("UPDATE production_real.uncertain_rail_operation_audit SET next_state='unknown'")).rejects.toThrow();

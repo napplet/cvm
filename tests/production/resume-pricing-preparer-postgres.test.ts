@@ -638,7 +638,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
           ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest,
             imageDigest: `sha256:${"a".repeat(64)}`, readinessProbeDigest: `sha256:${"b".repeat(64)}`, readyMonotonicMs: 100 } };
         readyWorkers.set(value.intentReference, ready);
-        await capacityJournal.claim(`capacity-intent:${createHash("sha256").update(value.intentReference).digest("hex")}`, hash(value),
+        await capacityJournal.claim(`capacity-intent:${createHash("sha256").update(value.intentReference).digest("hex")}`,
+          hash({ intentReference: value.intentReference, expectedSessionBindingDigest: value.expectedSessionBindingDigest, provider: fixtureProvider }),
           { ...value, reference, workerOperationId: `capacity-${capacityDigest.slice(0, 40)}`, provider: fixtureProvider, deadlineEpochMs: Date.parse(expiresAt) });
         throw new Error("WORKER_RESERVE_ACK_LOST");
       },
@@ -992,7 +993,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     // against the exact original native worker. It can only observe/reconcile
     // that record; create remains an explicit no-effect fixture denial.
     const mountedCapacity = createProductionReadyCapacity({ provider: "fly", workers: workerClients,
-      journal: new PostgresOperationJournal(pool, { namespace: "fixture-mounted-priced-capacity", scopeSha256: "7".repeat(64) }),
+      journal: capacityJournal,
       workerJournal: nativeWorkerJournal, image: `registry.example/worker@sha256:${"a".repeat(64)}`,
       toolchainSha256: mountedToolchain, flyRegion: "ams" });
     await mountedCapacity.prewarm({ intentReference: workspaceCapacityIntent.capacityIntentReference,

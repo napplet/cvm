@@ -253,6 +253,10 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
         compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
       const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });
+      await expect(v2Preparer.loadAuthority({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0,
+        expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" })).resolves.toMatchObject({
+        context: { accountId, sessionId, checkpointId, originalOperationId, originalCommandMaximum: retainedCommand.maximum },
+      });
       const preparedV2 = await v2Preparer.prepare({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
       if (preparedV2.status !== "quoted") throw new Error(`RETAINED_V2_QUOTE_REQUIRED:${preparedV2.code}`);
       const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
@@ -561,7 +565,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         expect(await checkpointResolver.resolvePricedRestore(v2Restore.metadata, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
         await expect(checkpointResolver.resolvePricedRestore({ ...v2Restore.metadata, leaseToken: "priced-resume-lease:foreign" }, workerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
       } else {
-        expect(await checkpointResolver.resolveCheckpointWorker({ accountId, sessionId, actionId: continuation.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0, workspaceLineage: `workspace:${sessionId}`, leaseToken: continuation.leaseToken, resumeClaim: continuation.allocationIntentReference }, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
+        expect(await checkpointResolver.resolveCheckpointWorker({ accountId, sessionId, actionId: continuation.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0, workspaceLineage: `workspace:${sessionId}`, leaseToken: continuation.leaseToken }, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
       }
     } catch (error) { throw new Error(`MOUNTED_${continuation.kind.toUpperCase()}_CHECKPOINT_RESOLUTION:${error instanceof Error ? error.message : "UNKNOWN"}`); }
     const mountedInstance = {

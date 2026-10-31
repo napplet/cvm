@@ -92,7 +92,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
       });
       const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), now });
       const retainedSubjects = new ProductionRetainedSubjectPreparer({
-        pool: recovered.pool, objectStore: input.artifactStore,
+        pool: recovered.pool, objectStore: input.artifactStore, journal: serviceJournals.checkpoint,
         kekPath: input.secrets.path("checkpoint.kekReference"), now,
       });
       const capacityJournal = serviceJournals.capacity;
@@ -145,8 +145,9 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
             /* These six subjects never allocate, fence, or restore a worker.
              * Opening has already cryptographically bound the archive; the
              * exact recovered registry/original lookup is the reattachment. */
-            await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            const binding = await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
             if (sha(value.archive) !== value.subject.payloadSha256) throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_PAYLOAD_REQUIRED");
+            await retainedSubjects.validateOpened({ checkpointId: binding.checkpointId, sessionId: value.expected.sessionId, ownerId: value.expected.ownerId }, value.subject, value.archive);
             return Object.freeze({ status: "reattached" as const });
           }
           const facts = await checkpointFacts(value.expected);
@@ -162,7 +163,12 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         },
         async observeReattach(value) {
           if (value.subject.kind !== "checkpoint") {
-            await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            const binding = await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            /* Reconciliation is also a proof operation: reopen exact bytes
+             * and compare them to cloned producer authority, never merely the
+             * registry projection. */
+            const archive = await openRetainedSubject({ crypto: retainedSubjectCrypto, objectStore: input.artifactStore, checkpointId: binding.checkpointId, accountId: binding.accountId, sessionId: value.expected.sessionId, actionId: binding.actionId, subject: value.subject });
+            await retainedSubjects.validateOpened({ checkpointId: binding.checkpointId, sessionId: value.expected.sessionId, ownerId: value.expected.ownerId }, value.subject, archive);
             return Object.freeze({ status: "reattached" as const });
           }
           const facts = await checkpointFacts(value.expected);

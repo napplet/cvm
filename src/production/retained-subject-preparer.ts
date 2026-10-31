@@ -7,7 +7,7 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accou
 import { DurabilitySubjectSchema } from "../resilience/fault-harness";
 import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
 import { createProductionDurabilitySubjectRegistry, type ProductionDurabilitySubject } from "./durability-registry";
-import { retainedSubjectCustodyId, sealRetainedSubject } from "./retained-subject-archive";
+import { retainedSubjectCustodyId, sealRetainedSubject, type RetainedSubjectJournal } from "./retained-subject-archive";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
@@ -30,6 +30,7 @@ export class ProductionRetainedSubjectPreparer {
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
     objectStore: ObjectStorePort;
+    journal: RetainedSubjectJournal;
     kekPath: string;
     readKekFile?: (path: string) => Promise<Uint8Array | string>;
     now?: () => number;
@@ -43,7 +44,7 @@ export class ProductionRetainedSubjectPreparer {
     const registry = createProductionDurabilitySubjectRegistry(this.#pool);
     await registry.register(binding.checkpoint);
     for (const original of await this.#originals(scope, binding)) {
-      const sealed = await sealRetainedSubject({ crypto: this.#crypto, objectStore: this.input.objectStore,
+      const sealed = await sealRetainedSubject({ crypto: this.#crypto, objectStore: this.input.objectStore, journal: this.input.journal,
         checkpointId: scope.checkpointId, accountId: binding.accountId, ownerId: scope.ownerId, sessionId: scope.sessionId,
         actionId: binding.actionId, retentionUntil: binding.retentionUntil, source: original });
       await registry.register({ ...sealed, checkpointId: scope.checkpointId, sessionId: scope.sessionId, actionId: binding.actionId });
@@ -51,6 +52,17 @@ export class ProductionRetainedSubjectPreparer {
     // This is the first read-only point visible to restore. A partial archive
     // is never returned as an inventory and cannot become certification input.
     await registry.inventory(scope);
+  }
+
+  /** Query-only cloned-authority proof for a retained original. Reopen is not
+   * enough: the archive bytes must still exactly match the producer record
+   * selected by its original owner/session/action/artifact/version fences. */
+  async validateOpened(raw: RetainedSubjectScope, subject: z.infer<typeof DurabilitySubjectSchema>, archive: Uint8Array): Promise<void> {
+    const scope = this.#scope(raw);
+    if (subject.kind === "checkpoint") throw new Error("RETAINED_SUBJECT_ORIGINAL_KIND_REQUIRED");
+    const binding = await this.#binding(scope);
+    const original = (await this.#originals(scope, binding)).find(value => value.kind === subject.kind);
+    if (!original || original.sourceIdentity !== subject.sourceIdentity || sha(original.bytes) !== subject.payloadSha256 || original.bytes.byteLength !== archive.byteLength || !Buffer.from(original.bytes).equals(Buffer.from(archive))) throw new Error("RETAINED_SUBJECT_ORIGINAL_BYTES_REQUIRED");
   }
 
   /** Starts exact expiry/erasure of every run-owned retained copy.  This never
@@ -66,14 +78,16 @@ export class ProductionRetainedSubjectPreparer {
       const custodyId = retainedSubjectCustodyId({ checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity });
       const stored = await this.#crypto.readSealed(custodyId);
       if (!stored || stored.ciphertextSha256 !== subject.object.checksum) throw new Error("RETAINED_SUBJECT_ERASURE_BINDING_REQUIRED");
+      const operationId = `retained-delete:${sha(canonicalJson({ checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity })).slice(0, 48)}`;
+      const intent = Object.freeze({ schemaVersion: "retained-subject-delete-v1", state: "pending", checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity, object: subject.object, keyReference: stored.keyReference });
+      const claimed = await this.input.journal.claim(operationId, sha(canonicalJson(intent)), intent);
+      if (!claimed.claimed) continue;
       const exact = await this.input.objectStore.readExact(subject.object);
       if (!exact || sha(exact) !== subject.object.checksum) throw new Error("RETAINED_SUBJECT_ERASURE_OBJECT_REQUIRED");
+      await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "tombstoned" });
       await this.input.objectStore.scheduleExactDeletion(subject.object, subject.retentionUntil);
       await this.#crypto.destroy(stored.keyReference);
       if (!await this.#crypto.isDestroyed(stored.keyReference)) throw new Error("RETAINED_SUBJECT_ERASURE_KEY_REQUIRED");
-      /* Scheduling is not deletion.  Preserve a durable tombstone until a
-       * query-only later observation proves this exact generation absent. */
-      await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "tombstoned" });
     }
   }
 
@@ -85,12 +99,12 @@ export class ProductionRetainedSubjectPreparer {
     let complete = true;
     for (const subject of subjects) {
       if (subject.kind === "checkpoint") continue;
-      if (subject.deletionState === "deleted") continue;
-      if (subject.deletionState !== "tombstoned") { complete = false; continue; }
       const custodyId = retainedSubjectCustodyId({ checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity });
-      const stored = await this.#crypto.readSealed(custodyId);
-      if (!stored || !await this.#crypto.isDestroyed(stored.keyReference) || await this.input.objectStore.readExact(subject.object)) { complete = false; continue; }
-      await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "deleted" });
+      const operationId = `retained-delete:${sha(canonicalJson({ checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity })).slice(0, 48)}`;
+      const intent = await this.input.journal.read<{ schemaVersion: string; checkpointId: string; kind: string; sourceIdentity: string; object: unknown; keyReference: string }>(operationId);
+      if (!intent || intent.value.schemaVersion !== "retained-subject-delete-v1" || intent.value.checkpointId !== scope.checkpointId || intent.value.kind !== subject.kind || intent.value.sourceIdentity !== subject.sourceIdentity || canonicalJson(intent.value.object) !== canonicalJson(subject.object)) { complete = false; continue; }
+      if (!await this.#crypto.isDestroyed(intent.value.keyReference) || await this.input.objectStore.readExact(subject.object)) { complete = false; continue; }
+      if (subject.deletionState !== "deleted") await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "deleted" });
     }
     return complete;
   }
@@ -157,7 +171,11 @@ export class ProductionRetainedSubjectPreparer {
        * projections.  The source identities bind the exact original rows to
        * owner/session/action/artifact/version fences already selected above. */
       const validation = Object.freeze({ artifact, promotion });
-      const attestation = Object.freeze({ intentId: publication.intent_id, ownerEventId, attestationEventId, observation: publication.attestation_observation });
+      const attestationEvent = z.object({ id: z.string().min(1).max(256) }).passthrough().parse(
+        typeof publication.attestation_observation === "string" ? JSON.parse(publication.attestation_observation) : publication.attestation_observation,
+      );
+      if (attestationEvent.id !== attestationEventId) throw new Error("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
+      const attestation = Object.freeze({ intentId: publication.intent_id, ownerEventId, attestationEventId, event: attestationEvent });
       return Object.freeze([
         { kind: "sealed_artifact", sourceIdentity: identity("artifact", artifact.reference), bytes: new Uint8Array(artifactBytes) },
         { kind: "validation_evidence", sourceIdentity: identity("validation", validation), bytes: jsonBytes(validation) },

@@ -4,6 +4,7 @@ import type { CheckpointCryptoPort } from "../continuity/checkpoint-envelope";
 import type { ImmutableObjectReference, ObjectStorePort } from "../continuity/object-store";
 import { canonicalJson } from "../promotion/schema";
 import { DurabilitySubjectSchema } from "../resilience/fault-harness";
+import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
@@ -17,6 +18,7 @@ export type RetainedSubjectCrypto = CheckpointCryptoPort & Readonly<{
   readSealed(checkpointId: string): Promise<Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array; ciphertextSha256: string; aadSha256: string; retentionUntil: string }> | undefined>;
   isDestroyed(keyReference: string): Promise<boolean>;
 }>;
+export type RetainedSubjectJournal = Pick<PostgresOperationJournal, "claim" | "read">;
 
 export type RetainedSubjectSource = Readonly<{
   kind: z.infer<typeof DurabilitySubjectSchema>["kind"];
@@ -42,6 +44,7 @@ function aad(input: Readonly<{ custodyId: string; checkpointId: string; kind: st
 export async function sealRetainedSubject(input: Readonly<{
   crypto: RetainedSubjectCrypto;
   objectStore: ObjectStorePort;
+  journal: RetainedSubjectJournal;
   checkpointId: string;
   accountId: string;
   ownerId: string;
@@ -58,13 +61,17 @@ export async function sealRetainedSubject(input: Readonly<{
   const sealed = await input.crypto.seal({ checkpointId: custodyId, plaintext: new Uint8Array(source.bytes), additionalData: associatedData, binding: { accountId, sessionId, actionId, operationId: `durability-archive:${custodyId}`, retentionUntil } });
   const stored = await input.crypto.readSealed(custodyId);
   if (!stored || stored.keyReference !== sealed.keyReference || stored.ciphertextSha256 !== sha(sealed.ciphertext) || stored.aadSha256 !== sha(associatedData) || stored.retentionUntil !== retentionUntil) throw new Error("RETAINED_SUBJECT_CUSTODY_READBACK_REQUIRED");
-  /* `seal` has committed the original operation id, nonce, ciphertext and
-   * checksum in checkpoint_crypto_records before this provider dispatch.  Its
-   * deterministic key is therefore a durable create intent, not a retry
-   * invention.  On a lost acknowledgement we observe that original key first;
-   * a replacement create is never issued. */
+  /* The crypto record retains original nonce/ciphertext, but it is not an
+   * external-effect fence.  Persist the exact object-write intent before the
+   * first provider dispatch. A caller that did not win this claim may only
+   * observe the original key; missing observation remains reconciliation
+   * pending and never licenses another create. */
   const key = `durability-subjects/${custodyId}/${stored.ciphertextSha256}`;
+  const operationId = `retained-object:${sha(canonicalJson({ checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity })).slice(0, 48)}`;
+  const intent = Object.freeze({ schemaVersion: "retained-subject-object-v1", state: "pending", checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity, key, checksum: stored.ciphertextSha256, keyReference: stored.keyReference, retentionUntil });
+  const claimed = await input.journal.claim(operationId, sha(canonicalJson(intent)), intent);
   const observed = await input.objectStore.observeExactByKey({ key, checksum: stored.ciphertextSha256 });
+  if (!claimed.claimed && !observed) throw new Error("RETAINED_SUBJECT_OBJECT_RECONCILIATION_PENDING");
   const object = observed ?? await input.objectStore.createImmutable({ key, bytes: new Uint8Array(stored.ciphertext) });
   if (object.checksum !== stored.ciphertextSha256) throw new Error("RETAINED_SUBJECT_OBJECT_BINDING_REQUIRED");
   return DurabilitySubjectSchema.parse({ kind: source.kind, sourceIdentity: source.sourceIdentity, object, payloadSha256, ownerId, retentionUntil, deletionState: "retained" });

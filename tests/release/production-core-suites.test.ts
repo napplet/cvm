@@ -31,12 +31,18 @@ test("tracer: native core construction refuses a wrapper-only control path befor
 test("private cohort and fault controls accept only the locked schedules", () => {
   const schedule = createWorkerBenchmarkSchedule(IDENTICAL_WORKER_COHORT_PROFILE);
   expect(schedule).toHaveLength(1000);
+  expect(IDENTICAL_WORKER_COHORT_PROFILE).toMatchObject({ acceptedFloor: 1000, forcedPoolHitFloor: 200, forcedPoolMissColdContentionFloor: 200, bootstrapReplicates: 200 });
+  expect(new Set(schedule.map(item => item.cohort))).toEqual(new Set(["pool_hit", "pool_miss", "cold", "step_load", "contention", "reclaim", "ambiguity", "cleanup", "failure"]));
   expect(schedule.slice(0, 200).every(item => item.cohort === "pool_hit")).toBe(true);
   expect(schedule.slice(200, 400).every(item => ["pool_miss", "cold", "contention"].includes(item.cohort))).toBe(true);
   for (const item of schedule) expect(CoreScheduledSampleSchema.safeParse({ id: item.id, cohort: item.cohort }).success).toBe(true);
   for (const invalid of [{ id: "benchmark-1001", cohort: "pool_hit" }, { id: "benchmark-1", cohort: "pool_miss" }, { id: "benchmark-1", cohort: "pool_hit", accepted: true }]) expect(CoreScheduledSampleSchema.safeParse(invalid).success).toBe(false);
   for (const schedule of D122_FAULT_MATRIX) expect(CoreControlPayloadSchemas["fault.inject"].safeParse({ schedule }).success).toBe(true);
   expect(CoreControlPayloadSchemas["fault.inject"].safeParse({ schedule: { ...D122_FAULT_MATRIX[0], replacement: true } }).success).toBe(false);
+  const regional = D122_FAULT_MATRIX.find(item => item.faultClass === "regional_ingress_loss")!;
+  expect(regional.certification).toBe("protected_live");
+  expect(CoreControlPayloadSchemas["fault.observe"].safeParse({ operationId: regional.input.operationId, sessionId: regional.initialState.sessionId }).success).toBe(true);
+  expect(CoreControlPayloadSchemas["fault.observe"].safeParse({ operationId: "operation:synthetic-region", sessionId: "session:synthetic-region" }).success).toBe(false);
 });
 
 test("restore protocol rejects same-instance restore and unbounded chunk requests", () => {

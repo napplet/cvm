@@ -783,6 +783,14 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const workspaceAcceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: workspacePreparer, now: () => now });
     const workspaceWorkers = new ProductionPricedContinuationWorkers({ pool, acceptance: workspaceAcceptance, capacity });
     await workspaceWorkers.assertReady();
+    let workspaceAuthority: Awaited<ReturnType<typeof workspacePreparer.loadAuthority>>;
+    try {
+      workspaceAuthority = await workspacePreparer.loadAuthority({ principal: { id: accountId }, sessionId: workspaceCommand.sessionId,
+        checkpointId: workspaceSealed.manifest.checkpointId, expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "prepare:workspace-native" });
+    } catch (error) {
+      throw new Error(`WORKSPACE_V2_AUTHORITY_REQUIRED:${error instanceof Error ? error.message : "UNKNOWN"}`);
+    }
+    expect(workspaceAuthority.context.toolchainId).toBe(workspaceToolchain);
     const workspaceQuote = await workspacePreparer.prepare({ principal: { id: accountId }, sessionId: workspaceCommand.sessionId,
       checkpointId: workspaceSealed.manifest.checkpointId, expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "prepare:workspace-native" });
     if (workspaceQuote.status !== "quoted") throw new Error(`EXPECTED_NATIVE_WORKSPACE_QUOTE:${workspaceQuote.code}`);

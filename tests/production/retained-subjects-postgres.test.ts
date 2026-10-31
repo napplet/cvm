@@ -183,7 +183,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const accountId = credited.accountId, sessionId = `session:${digest(canonicalJson({ accountId, key: "retained-reattach" })).slice(0, 24)}`, actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
     // Isolated pricing source records are registered through the same catalog
     // used by V2 preparation. They are not a quote, provider, or release claim.
-    const originalPricing = await resumePricingMaterial(now, "retained-profile", "500");
+    const originalPricing = await resumePricingMaterial(now, "retained-profile", "450");
     await registerProductionPricing({ pool, ...originalPricing });
     await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,'fixture:admission',$3,$4,0,'prepared')", [sessionId, accountId, originalPricing.profile.id, originalPricing.card.id]);
     await source.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:retained',$1,'fixture:admission',10,10,'active')", [accountId]);
@@ -220,9 +220,9 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const persistedArtifact = await new ProductionWorkerArtifactStore({ journal, objects, toolchainSha256: hex("toolchain") }).persist({ request: artifactRequest, accountId, ownerId: fixture.ownerId, bytes: fixture.artifact, scannerReportSha256: hex("scanner"), conformanceReportSha256: hex("conformance"), result: artifactResult });
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
-    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: digest(canonicalJson({ idea: "Build one focused retained-subject fixture." })), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "11", admissionReference: "fixture:admission" };
+    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: digest(canonicalJson({ idea: "Build one focused retained-subject fixture." })), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "10", admissionReference: "fixture:admission" };
     const retainedCommand = StartSessionCommandSchema.parse({ principal: { pubkey: fixture.ownerId }, admissionReference: pauseIntent.admissionReference,
-      idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: "11", policyVersion: pauseIntent.policyVersion,
+      idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: "10", policyVersion: pauseIntent.policyVersion,
       idea: "Build one focused retained-subject fixture." });
     // The source worker is paused because its immediately spendable balance
     // is exhausted. The later V2 acceptance still revalidates the original
@@ -249,7 +249,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       const resumeQuotes = new ProductionResumePricingQuotes(pool);
       const vertexJournal = new PostgresOperationJournal(pool, { namespace: "retained-subjects-vertex", scopeSha256: hex("vertex-scope") });
       const originalOperationId = `operation:${digest(canonicalJson({ accountId, key: pauseIntent.idempotencyKey, profile: pauseIntent.profileId })).slice(0, 24)}`;
-      await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), { accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: "1020" });
+      await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), { accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: "920" });
       const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
         compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
       const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });

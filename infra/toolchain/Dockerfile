@@ -97,7 +97,7 @@ RUN ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
     && cd /toolchain/boilerplate-template && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
     && chmod 0555 /toolchain/bin/busybox \
-    && mkdir -p /home/napplet /work /tmp \
+    && mkdir -p /workspace /run/napplet-cvm-jobs /home/napplet /tmp /var/tmp /work /run/lock /dev/shm \
     && chown 65532:65532 /home/napplet /work /tmp \
     && chmod -R go-w /toolchain \
     && command -v mount \

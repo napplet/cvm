@@ -21,12 +21,15 @@ if [ "${NAPPLET_CVM_NETWORK_NAMESPACE-}" != "1" ]; then
   command -v unshare >/dev/null 2>&1 || exit 126
   exec unshare --net -- env NAPPLET_CVM_NETWORK_NAMESPACE=1 "$0" "$@"
 fi
-# Docker gives this container a mount namespace.  Do not create a transient
-# nested mount namespace here: fixed-operation `put`/`status` calls must share
-# the same trusted job tmpfs.  Instead make the container namespace private
-# before changing it, so sealing the image base and adding scoped tmpfs mounts
-# cannot propagate outside this worker.
-mount --make-rprivate / || exit 126
+# The provider must create this worker with its own private mount namespace and
+# a read-only image root. Do not create a transient nested mount namespace:
+# fixed-operation `put`/`status` calls must share the same trusted job tmpfs.
+# A writable overlay is never repaired in-process; absent the native launch
+# boundary, fail before mounting or executing anything.
+ROOT_OPTIONS=$(findmnt -n -o OPTIONS --target /) || exit 126
+ROOT_PROPAGATION=$(findmnt -n -o PROPAGATION --target /) || exit 126
+case ",$ROOT_OPTIONS," in *,ro,*) ;; *) exit 126 ;; esac
+case "$ROOT_PROPAGATION" in private) ;; *) exit 126 ;; esac
 NET=/toolchain/bin/busybox
 [ -x "$NET" ] || exit 126
 "$NET" ip link set lo up || exit 126

@@ -8,10 +8,10 @@
   "transportBundleVersion": 4,
   "sealedArtifactVersion": 3,
   "cliSourceRecipe": "toolchains/recipes/napplet-cli-0.13.0-capabilities-source-build.json",
-  "inputManifestSha256": "b4e5ff08a831b5ef2aa6e990a29e332afe53408fe98f329814fd975faef42eec",
+  "inputManifestSha256": "d1bdb9fa0c3cb71c86b353eee1e6b92a98f82595ec1605a83eb17aaaa11931e1",
   "inputs": [
-    { "path": "infra/toolchain/capabilities.Dockerfile", "sha256": "fb7106dab8512cf9b355c079a84de806564ee3d9bb689c424c1544418383feee" },
-    { "path": "infra/toolchain/production-bootstrap.sh", "sha256": "dc15983d34216bd3e3dd51d4afb035b0382377f4e49911010611857e21eaea2b" },
+    { "path": "infra/toolchain/capabilities.Dockerfile", "sha256": "e3fec1117a8dad1649747bf250da395679589c10c7f1761cf78ccc64d0b5a34a" },
+    { "path": "infra/toolchain/production-bootstrap.sh", "sha256": "a0e8a81cd89870475cf475310770761c66ea851021b71fd55918b4b8a0d98d98" },
     { "path": "infra/toolchain/production-job.ts", "sha256": "297a79a82dfd436b5f22be6f5f7d287a821d07b7627c42635d5a3db53f1ff4d9" },
     { "path": "infra/toolchain/production-probe.ts", "sha256": "ccc598fdb69e538614f01ac3b4528ac445dfee363b36ab7a9e323d24ec06cfc7" },
     { "path": "infra/toolchain/production-worker.ts", "sha256": "45d4fb99fdfe5556b0f37ea47a13367d95ba2baf84e164c1cf7ca8316bb22347" },

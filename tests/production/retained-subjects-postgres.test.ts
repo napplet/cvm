@@ -49,6 +49,25 @@ import { ProductionPricedContinuationWorkers } from "../../src/production/priced
 import { resumePricingMaterial } from "../fixtures/resume-pricing";
 import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
 import { convertUsdMicrosToSats, maximumOperationCharge } from "../../src/model/price-card";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PostgresByteaObjectStoreAdapter } from "../../src/continuity/postgres-bytea-object-store";
+import { FileObjectKeyCustody, ObjectProducerBudgets, PerObjectFileCheckpointCrypto } from "../../src/production/object-retention-policy";
+import { NonGooglePostgresDriver } from "../../src/production/non-google-postgres";
+import { NonGoogleCoolifyDriver } from "../../src/production/non-google-coolify-driver";
+import { NonGoogleSigNozDriver } from "../../src/production/non-google-signoz-driver";
+import { NonGoogleFreshRestoreDriver, type NativeCommandRunner } from "../../src/production/non-google-fresh-restore-driver";
+import { NonGoogleNativeCoreDriverSet } from "../../src/production/non-google-native-core-drivers";
+import { createNonGoogleNativeCoreServices } from "../../src/production/non-google-core-services";
+import { createNativeProductionCoreSuiteAdapters } from "../../src/release/deployment/production-core-suite-adapters";
+import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
+import { createNonGoogleInvocationAuthorityVerifier } from "../../src/production/non-google-invocation-authority";
+import { createNonGoogleAuthorizationRequestV3 } from "../../src/release/contracts";
+import { openContextVmCertificationClient } from "../../src/release/deployment/contextvm-client";
+import { createAuthorizationRequest, createAuthorizationReceipt } from "../../src/release/authorization";
+import { PrivateKeySigner } from "@contextvm/sdk/signer";
+import { validateDurabilityInventory } from "../../src/resilience/fault-harness";
 
 /* This is deliberately an opt-in local integration test.  The source records,
  * funding account, provider receipt, and signed events below are explicit
@@ -63,6 +82,7 @@ function deferred<Value>() {
   const promise = new Promise<Value>(value => { resolve = value; });
   return { promise, resolve };
 }
+async function closePool(pool: Pool | undefined): Promise<void> { if (pool) await pool.end(); }
 const migrations = [
   "phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql",
   "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql",
@@ -748,6 +768,103 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     expect((await recovered.query("SELECT deletion_state FROM production_real.durability_subjects WHERE checkpoint_id=$1 AND kind='checkpoint'", [checkpointId])).rows).toEqual([{ deletion_state: "retained" }]);
     expect((await recovered.query("SELECT normalized_receipt FROM production_real.usage_receipts WHERE id='receipt:retained'")).rows).toEqual(originalRows.rows);
     expect((await recovered.query("SELECT e.event_json,ae.observation_json FROM production_real.publication_records p JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' WHERE p.intent_id='publication:retained'")).rows).toEqual(originalEvents.rows);
+    /* This is deliberately a second, isolated authority: it reuses only the
+     * already-verified original records, never the prior fixture's registry
+     * rows or object adapter. The native chain must materialize its own seven
+     * retained subjects into Postgres bytea storage before inventory can read. */
+    if (continuationKind === "legacy") {
+      const nativeNow = Date.now(), nativeCheckpointId = `checkpoint:native:${suffix}`;
+      const nativeManifest = { ...manifest, checkpointId: nativeCheckpointId, retentionUntil: new Date(nativeNow + retentionMs).toISOString() };
+      const nativeCheckpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal: new PostgresOperationJournal(pool, { namespace: "native-restore-source", scopeSha256: hex("native-restore-source") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => nativeNow });
+      const nativeSealed = await nativeCheckpoint.seal({ ...nativeManifest, archive });
+      const nativeDatabase = `retained_native_${suffix}`, nativeRole = role;
+      await closePool(runtime); runtime = undefined; await closePool(sourceRuntime); sourceRuntime = undefined; await closePool(source); source = undefined;
+      await admin.query(`CREATE DATABASE ${nativeDatabase} TEMPLATE ${sourceDatabase}`);
+      let nativeAdmin: Pool | undefined, nativeRuntime: Pool | undefined;
+      const roots = [await mkdtemp(join(tmpdir(), "cvm-native-restore-live-")), await mkdtemp(join(tmpdir(), "cvm-native-restore-copy-"))];
+      const previousImage = process.env.NAPPLET_TRUSTED_RESTORER_IMAGE;
+      try {
+        nativeAdmin = new Pool({ connectionString: connection("postgres", nativeDatabase), connectionTimeoutMillis: 2_000 });
+        await nativeAdmin.query(await Bun.file("migrations/phase-07/019_postgres_bytea_objects.sql").text());
+        await nativeAdmin.query(`GRANT napplet_production_object TO ${nativeRole}`);
+        nativeRuntime = new Pool({ connectionString: connection(nativeRole, nativeDatabase), connectionTimeoutMillis: 2_000 });
+        const nativePool = bindAccountingRealmPool(sqlPool(nativeRuntime), createAccountingRealm("production-real"));
+        const candidateSha256 = hex("native-restore-candidate"), topologySha256 = hex("native-restore-topology"), roleCostBoundSha256 = hex("native-restore-cost"), toolchainSha256 = hex("native-restore-toolchain");
+        const bytea = new PostgresByteaObjectStoreAdapter({ pool: nativePool, now: () => nativeNow, retentionUntil: () => new Date(nativeNow + retentionMs).toISOString(), producerBudget: ObjectProducerBudgets.retained_subject });
+        expect(await bytea.createImmutable({ key: nativeSealed.envelope.object.key, bytes: archive, originalOperationIdentity: hex("native-restore-checkpoint") })).toEqual(nativeSealed.envelope.object);
+        expect(await bytea.createImmutable({ key: artifactReference.key, bytes: fixture.artifact, originalOperationIdentity: hex("native-restore-artifact") })).toEqual(artifactReference);
+        const custody = new FileObjectKeyCustody({ roots });
+        let dumps = 0, losePrepareAck = true, prepareInserted = false;
+        const lossyPool: PostgresSqlPool = Object.freeze({ async connect() {
+          const client = await nativePool.connect();
+          return Object.freeze({ async query<Row extends Record<string, unknown>>(text: string, values?: readonly unknown[]) {
+            const result = await client.query<Row>(text, values);
+            if (text.includes("INSERT INTO production_real.release_operation_journal") && values?.some(value => typeof value === "string" && value === `non-google-core:restore:${candidateSha256}:${topologySha256}:prepare`)) prepareInserted = true;
+            if (text === "COMMIT" && prepareInserted && losePrepareAck) { losePrepareAck = false; prepareInserted = false; throw new Error("NATIVE_RESTORE_PREPARE_ACK_LOST"); }
+            return result;
+          }, release(error?: Error) { client.release(error); } });
+        } });
+        const nativeJournal = new PostgresOperationJournal(lossyPool, { namespace: `native-restore-${suffix}`, scopeSha256: topologySha256 });
+        const image = `registry.fixture/native@sha256:${candidateSha256}`;
+        const workerUnavailable = async (): Promise<never> => { throw new Error("NATIVE_RESTORE_FIXTURE_WORKER_UNAVAILABLE"); };
+        const workers = createWorkerDeploymentClients({ image, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, policyVersion: PRODUCTION_WORKER_POLICY.version, modalAppName: "native-restore-workers", modalTags: {}, journal: createPostgresWorkerOperationJournal(nativeJournal), modalSdk: { apps: { fromName: workerUnavailable }, images: { fromRegistry: workerUnavailable }, sandboxes: { create: workerUnavailable, findByName: workerUnavailable, fromId: workerUnavailable } }, fly: { async create(value) { return { status: "unknown" as const, operationId: value.operationId }; }, async observe() { return { status: "unknown" as const }; }, async terminate() { return { status: "blocked" as const }; }, async observeTermination() { return { status: "blocked" as const }; }, async exec() { return { status: "unknown" as const }; } } });
+        const capacity = createProductionReadyCapacity({ provider: "fly", workers, journal: nativeJournal, workerJournal: nativeJournal, image, toolchainSha256, flyRegion: "fixture", now: () => nativeNow });
+        const coolifyImage = `sha256:${hex("native-restorer-image")}`;
+        process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = coolifyImage;
+        const coolify = new NonGoogleCoolifyDriver({ baseOrigin: "https://coolify.fixture.invalid", serverUuid: "00000000-0000-4000-8000-000000000101", projectUuid: "00000000-0000-4000-8000-000000000102", environmentUuid: "00000000-0000-4000-8000-000000000103", postgres17Image: coolifyImage, restorerImage: coolifyImage, namePrefix: "native-restore", tokenPath: "/fixture/coolify-token" });
+        const runner: NativeCommandRunner = Object.freeze({ async run(command) {
+          const argv = [...command];
+          if (argv[0] !== "pg_dump") throw new Error("NATIVE_RESTORE_TRUSTED_DUMP_REQUIRED");
+          dumps++;
+          const file = argv.indexOf("--file"); if (file < 0 || !argv[file + 1]) throw new Error("NATIVE_RESTORE_DUMP_PATH_REQUIRED");
+          const hostPath = argv[file + 1]!, containerPath = `/tmp/native-${suffix}.dump`;
+          argv[file + 1] = containerPath;
+          const result = await docker(["exec", "-i", container, ...argv]);
+          await docker(["cp", `${container}:${containerPath}`, hostPath]);
+          await docker(["exec", "-i", container, "rm", "-f", containerPath]);
+          return Object.freeze({ exitCode: 0, stdout: new TextEncoder().encode(result), stderr: new Uint8Array() });
+        } });
+        const postgres = new NonGooglePostgresDriver({ host: "127.0.0.1", port: Number(port), database: nativeDatabase, user: nativeRole, passwordPath: "/fixture/native-postgres-password", ssl: false }, { async open() { return Object.freeze({ connect: nativePool.connect.bind(nativePool), end: async () => undefined }); } }, async () => "fixture-password");
+        const restore = new NonGoogleFreshRestoreDriver(coolify, { sourceDatabaseUrlPath: "/fixture/native-source-url", freshDatabaseUrlPath: "/fixture/native-fresh-url", archiveRoot: "/fixture/native-archive", trustedRestorerName: "native-restorer", expectedPostgresMajor: 17 }, runner, async path => {
+          if (path !== "/fixture/native-source-url") throw new Error("NATIVE_RESTORE_UNEXPECTED_SECRET");
+          return `postgresql://postgres@127.0.0.1:5432/${nativeDatabase}`;
+        });
+        const signoz = new NonGoogleSigNozDriver({ baseOrigin: "https://signoz.fixture.invalid", ingestionKeyPath: "/fixture/signoz-ingest", queryKeyPath: "/fixture/signoz-query", collectorConfigSha256: hex("native-signoz"), serviceName: "native-restore", queryTemplateVersion: "v1" });
+        const nativeScope = { checkpointId: nativeCheckpointId, sessionId, ownerId: fixture.ownerId, sourceAuthorityReference: `source:${nativeCheckpointId}` };
+        const drivers = new NonGoogleNativeCoreDriverSet({ candidateSha256, topologySha256, roleCostBoundSha256, journal: nativeJournal, capacity, postgres, coolify, signoz, restore, restoreScope: nativeScope, custodyRoots: roots, restorerCapabilitySha256: hex("native-restorer-capability") });
+        const services = createNonGoogleNativeCoreServices({ drivers });
+        const scopes = ["production.core"], effects = ["restore.inventory", "restore.prepare"];
+        const authorityRequest = await createNonGoogleAuthorizationRequestV3({ identity: { candidateSha256, sourceSha256: hex("native-source"), configSha256: hex("native-config"), toolchainSha256, topologySha256, failureDomainSha256: hex("native-domain"), retentionSha256: hex("native-retention"), cleanupSha256: hex("native-cleanup"), controllerStateSha256: hex("native-state") }, binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: hex("native-roles"), roleCostBoundSha256, scopesSha256: hex(canonicalJson(scopes)), effectsSha256: hex(canonicalJson(effects)) } });
+        const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]), costBytes = new TextEncoder().encode("native-restore-cost-artifact"), costSha256 = hex("native-cost-artifact");
+        const unsigned = { version: "non-google-invocation-envelope-v1" as const, issuerId: "fixture-root-1", issuedAtMs: nativeNow - 1, expiresAtMs: nativeNow + 60_000, request: authorityRequest, receipt: { kind: "release-authorization-receipt-v4" as const, version: 4 as const, requestSha256: authorityRequest.requestSha256, candidateSha256, topologySha256, providerGraphRevision: "non-google-v1" as const, roleInventorySha256: hex("native-roles"), roleCostBoundSha256, receiptSha256: hex("native-receipt") }, scopes, effects, costArtifactSha256: costSha256 };
+        const digestCost = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", costBytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+        const signed = Buffer.from(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(canonicalJson({ ...unsigned, costArtifactSha256: digestCost })))).buffer).toString("base64url");
+        const authority = await createNonGoogleInvocationAuthorityVerifier({ trustedIssuers: [{ issuerId: unsigned.issuerId, publicKeySpkiDer: new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey)) }], allowedScopes: scopes, allowedEffects: effects, costArtifact: { bytes: costBytes, sha256: digestCost }, now: () => nativeNow }).verify({ ...unsigned, costArtifactSha256: digestCost, signature: signed });
+        const contextRequest = await createAuthorizationRequest({ candidateSha256, topologySha256, effectPlanSha256: hex("native-context-effects"), controllerStateSha256: hex("native-context-state"), providerCapabilitiesSha256: hex("native-context-capabilities"), orderedEffects: [{ id: "contextvm-fixture", provider: "contextvm", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "collector-fixture", provider: "collector", operation: "verify_integration", estimatedCostMicros: 1 }], providerScopes: [{ provider: "contextvm", accountScopeSha256: hex("native-context-account"), projectScopeSha256: hex("native-context-project") }, { provider: "collector", accountScopeSha256: hex("native-context-account"), projectScopeSha256: hex("native-context-project") }], estimate: { currency: "USD", maximumMicros: 2, sourceId: "fixture", observedAtMs: nativeNow, freshUntilMs: nativeNow + 60_000 }, maximumRunDurationMs: 1_000, cleanupByMs: nativeNow + 10_000, evidenceRetentionDays: 30, artifactRetentionDays: 30, gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: [] }, expiresAtMs: nativeNow + 60_000 });
+        const contextSigner = new PrivateKeySigner("1".repeat(64));
+        const contextvm = await openContextVmCertificationClient({ certificationKeyReference: "nostr:native-restore-fixture", serverPubkey: "b".repeat(64), relays: ["wss://127.0.0.1:1"], signerBroker: { async resolveContextVmCertificationSigner() { return contextSigner; } }, journal: nativeJournal, candidateSha256, topologySha256, authorizationRequest: contextRequest, authorizationReceipt: await createAuthorizationReceipt(contextRequest), now: () => nativeNow, timeoutMs: 1_000 });
+        try {
+          const adapters = createNativeProductionCoreSuiteAdapters({ candidate: { id: candidateSha256, provider: "fly", image, sourceSha256: hex("native-source") }, services, contextvm, authority, requestSha256: authorityRequest.requestSha256 });
+          await expect(adapters.durability.inventory()).rejects.toThrow("NATIVE_RESTORE_PREPARE_ACK_LOST");
+          const subjects = validateDurabilityInventory(await adapters.durability.inventory());
+          expect(subjects).toHaveLength(7); expect(new Set(subjects.map(subject => subject.kind))).toEqual(new Set(["checkpoint", "sealed_artifact", "validation_evidence", "usage_receipt", "promotion_evidence", "owner_event", "attestation"]));
+          expect(dumps).toBe(1);
+          const prepareId = `restore:${candidateSha256}:${topologySha256}:prepare`;
+          const prepared = await nativeJournal.read(`non-google-core:${prepareId}`), job = await nativeJournal.read(`non-google-core:restorer-job:${prepareId}`);
+          expect(prepared?.value).toMatchObject({ state: "prepared", scope: nativeScope }); expect(job?.value).toMatchObject({ originalId: prepareId });
+          const backupCrypto = new PerObjectFileCheckpointCrypto({ pool: nativePool, custody, now: () => nativeNow }), stored = await backupCrypto.readSealed(`restore-backup:${candidateSha256.slice(0, 24)}`);
+          if (!stored || !job) throw new Error("NATIVE_RESTORE_BACKUP_ORIGINAL_REQUIRED");
+          const jobValue = job.value as { archive: { key: string; generation: number; checksum: string } };
+          const ciphertext = await bytea.readExact(jobValue.archive); if (!ciphertext) throw new Error("NATIVE_RESTORE_BACKUP_OBJECT_REQUIRED");
+          const plaintext = await backupCrypto.open({ keyReference: stored.keyReference, nonce: stored.nonce, ciphertext, additionalData: new TextEncoder().encode(JSON.stringify({ scope: nativeScope, binding: { candidateSha256, topologySha256 } })) });
+          expect(new TextDecoder().decode(plaintext.slice(0, 5))).toBe("PGDMP"); expect(jobValue.archive.key).not.toBe(nativeSealed.envelope.object.key);
+          plaintext.fill(0); ciphertext.fill(0);
+        } finally { await contextvm.close(); }
+      } finally {
+        if (previousImage === undefined) delete process.env.NAPPLET_TRUSTED_RESTORER_IMAGE; else process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = previousImage;
+        await nativeRuntime?.end(); await nativeAdmin?.end(); await admin.query(`DROP DATABASE IF EXISTS ${nativeDatabase}`).catch(() => undefined); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
+      }
+    }
     console.log(JSON.stringify({ retainedSubjectsPostgres: true, subjects: 7, freshClone: true, releaseEvidence: false }));
   } finally {
     await migration?.end(); await recovered?.end(); await runtime?.end(); await sourceRuntime?.end(); await source?.end(); await admin?.end();

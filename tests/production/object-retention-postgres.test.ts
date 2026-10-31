@@ -173,13 +173,16 @@ integration("trusted PostgreSQL 17 custom dumps are independently encrypted, gen
   const container = postgres17Container; if (!container) throw new Error("POSTGRES17_CLIENT_REQUIRED");
   const admin = new Pool({ connectionString });
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
-  const role = `restore_object_${suffix}`;
+  const role = `restore_object_${suffix}`, database = `restore_source_${suffix}`;
   const roots = [await mkdtemp(join(tmpdir(), "cvm-restore-live-")), await mkdtemp(join(tmpdir(), "cvm-restore-key-copy-"))];
   const priorImage = process.env.NAPPLET_TRUSTED_RESTORER_IMAGE;
+  let fixture: Pool | undefined;
   try {
-    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
-    await admin.query(`CREATE ROLE ${role} LOGIN`); await admin.query(`GRANT napplet_production_real TO ${role}`); await admin.query(`GRANT napplet_production_object TO ${role}`);
-    const runtime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${role}@`) });
+    await admin.query(`CREATE DATABASE ${database}`);
+    fixture = new Pool({ connectionString: connectionString!.replace(/\/postgres(?:\?.*)?$/u, `/${database}`) });
+    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await fixture.query(await Bun.file(`migrations/${file}`).text());
+    await fixture.query(`CREATE ROLE ${role} LOGIN`); await fixture.query(`GRANT napplet_production_real TO ${role}`); await fixture.query(`GRANT napplet_production_object TO ${role}`);
+    const runtime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${role}@`).replace(/\/postgres(?:\?.*)?$/u, `/${database}`) });
     try {
       const pool = sqlPool(runtime);
       const now = Date.parse("2030-01-01T00:00:00.000Z");
@@ -209,7 +212,7 @@ integration("trusted PostgreSQL 17 custom dumps are independently encrypted, gen
       const coolify = new NonGoogleCoolifyDriver({ baseOrigin: "https://coolify.fixture.invalid", serverUuid: "00000000-0000-4000-8000-000000000001", projectUuid: "00000000-0000-4000-8000-000000000002", environmentUuid: "00000000-0000-4000-8000-000000000003", postgres17Image: image, restorerImage: image, namePrefix: "restore-fixture", tokenPath: "/fixture/coolify-token" });
       const driver = new NonGoogleFreshRestoreDriver(coolify, { sourceDatabaseUrlPath: "/fixture/source-url", freshDatabaseUrlPath: "/fixture/fresh-url", archiveRoot: "/fixture/archive", trustedRestorerName: "trusted-restorer", expectedPostgresMajor: 17 }, runner, async path => {
         if (path !== "/fixture/source-url") throw new Error("FIXTURE_UNEXPECTED_SECRET");
-        return connectionString!;
+        return `postgresql://postgres@127.0.0.1:5432/${database}`;
       });
       const backup = await driver.captureCustomBackup();
       expect(dumps).toBe(1); expect(new TextDecoder().decode(backup.slice(0, 5))).toBe("PGDMP");
@@ -233,7 +236,7 @@ integration("trusted PostgreSQL 17 custom dumps are independently encrypted, gen
     } finally { await runtime.end(); }
   } finally {
     if (priorImage === undefined) delete process.env.NAPPLET_TRUSTED_RESTORER_IMAGE; else process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = priorImage;
-    await admin.query(`REVOKE napplet_production_real FROM ${role}`).catch(() => undefined); await admin.query(`REVOKE napplet_production_object FROM ${role}`).catch(() => undefined); await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
+    await fixture?.end(); await admin.query(`DROP DATABASE IF EXISTS ${database}`).catch(() => undefined); await admin.query(`REVOKE napplet_production_real FROM ${role}`).catch(() => undefined); await admin.query(`REVOKE napplet_production_object FROM ${role}`).catch(() => undefined); await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
     await admin.end(); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
   }
 }, 60_000);

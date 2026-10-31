@@ -25,7 +25,7 @@ const logPath = reportPath.replace(/\.json$/u, "") + ".log";
 // Local compatibility test needs mount permission for trusted bootstrap.
 // Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
 // This is deliberately not a production provider isolation certificate.
-const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--pids-limit", "256", "--security-opt", "apparmor=unconfined"];
+const resourceArgs = ["--read-only", "--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--pids-limit", "256", "--security-opt", "apparmor=unconfined"];
 const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`, `napplet-cvm-production-worker-legacy-restore-${run}`, `napplet-cvm-production-worker-restore-recovery-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
@@ -157,7 +157,7 @@ try {
   // tmpfs does not substitute for a cgroup pids limit, and an extra writable
   // mount must not be hidden by a same-device filesystem walk.
   const edgeAuditArgs = ["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "edge-audit", "--candidate-sha256", "d".repeat(64), "--topology-sha256", "e".repeat(64)];
-  const unboundedPids = await docker(["run", "--rm", "--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
+  const unboundedPids = await docker(["run", "--rm", "--read-only", "--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
   const writableEscape = await docker(["run", "--rm", ...resourceArgs, "--tmpfs", "/escape:size=65536,mode=0555", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, "--entrypoint", "/bin/sh", image, "-ec", `mkdir /escape/writable-child; chmod 0777 /escape/writable-child; exec /usr/local/bin/napplet-cvm-bootstrap /usr/local/bin/napplet-cvm-worker ${edgeAuditArgs.slice(2).map(arg => `'${arg}'`).join(" ")}`]);
   if (unboundedPids.status === 0 || writableEscape.status === 0) throw new Error("WORKER_EDGE_AUDIT_FALSE_POSITIVE");
   report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableDescendant: writableEscape.status };

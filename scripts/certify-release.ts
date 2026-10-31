@@ -1,4 +1,4 @@
-import { prepareReleaseWorkspace, ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
+import { inspectExistingHistoricalUsageRecovery, prepareReleaseWorkspace, ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
 import { CERTIFIER_CONFIG_SHA256_ENV, loadCertifierConfig } from "../src/certification/config";
@@ -158,15 +158,7 @@ async function hasBoundHistoricalUsageRecovery(input: Readonly<{
   workspace: string;
   receiptSha256?: string;
 }>): Promise<boolean> {
-  try {
-    const candidateSha256 = await releaseCandidateSha256(input.candidatePath);
-    const persisted = await new ReleaseCertificationController({ candidatePath: input.candidatePath, workspace: input.workspace }).status();
-    return persisted?.state.status === "billing_observing"
-      && persisted.state.candidate.candidateSha256 === candidateSha256
-      && (input.receiptSha256 === undefined || persisted.state.authorizationReceiptSha256 === input.receiptSha256.toLowerCase());
-  } catch {
-    return false;
-  }
+  return (await inspectExistingHistoricalUsageRecovery(input)) !== undefined;
 }
 
 /** Read-only verification is deliberately kept on the product CLI so the

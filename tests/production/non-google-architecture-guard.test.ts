@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -87,6 +87,25 @@ test("actual certification activation arguments close before workspace or provid
       expect(JSON.parse(result.stdout)).toEqual(closedRefusal);
       expect(result.stderr).toBe("");
     }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("ordinary activation leaves a fresh configured workspace absent", async () => {
+  const home = await mkdtemp(join(tmpdir(), "napplet-cvm-non-google-absence-home-"));
+  const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
+  const workspace = join(workspaceRoot, `non-google-absence-${crypto.randomUUID()}`);
+  await mkdir(workspaceRoot, { recursive: true });
+  try {
+    await expect(lstat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+    const result = await child(["--candidate", "toolchains/candidates/initial.json", "--request"], home, {
+      NAPPLET_CVM_RELEASE_WORKSPACE: workspace,
+    });
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual(closedRefusal);
+    expect(result.stderr).toBe("");
+    await expect(lstat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     await rm(home, { recursive: true, force: true });
   }

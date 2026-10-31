@@ -54,7 +54,8 @@ export class NonGoogleNativeCoreServices {
    * fresh-instance create after an ambiguous acknowledgement. */
   async reconcile(input: Readonly<{ authority: NonGoogleInvocationAuthority; requestSha256: string; operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
     assertNonGoogleInvocationAuthority(input.authority);
-    input.authority.assertOriginalObservation({ scope: "production.core", effect: input.kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, requestSha256: Digest.parse(input.requestSha256), roleCostBoundSha256: this.drivers.roleCostBoundSha256, originalRecorded: await this.#originalRecorded(input.kind, input.payload) });
+    const original = await this.#originalRecorded(input.kind, input.payload);
+    input.authority.assertOriginalObservation({ scope: "production.core", effect: input.kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, requestSha256: Digest.parse(input.requestSha256), roleCostBoundSha256: this.drivers.roleCostBoundSha256, originalRecorded: original.recorded, operationId: original.operationId, operationSha256: original.operationSha256 });
     switch (input.kind) {
       case "cohort.prepare":
       case "cohort.observe": return this.#admission.observe({ operationId: input.operationId, ...CoreControlPayloadSchemas["cohort.observe"].parse(input.payload) });
@@ -68,13 +69,12 @@ export class NonGoogleNativeCoreServices {
   #assertDispatch(input: Readonly<{ authority: NonGoogleInvocationAuthority; requestSha256: string; kind: CoreServiceControlKind }>): void {
     input.authority.assertDispatch({ scope: "production.core", effect: input.kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, requestSha256: Digest.parse(input.requestSha256), roleCostBoundSha256: this.drivers.roleCostBoundSha256 });
   }
-  async #originalRecorded(_kind: CoreServiceControlKind, _payload: unknown): Promise<boolean> {
+  async #originalRecorded(_kind: CoreServiceControlKind, _payload: unknown): Promise<Readonly<{ recorded: boolean; operationId?: string; operationSha256?: string }>> {
     const operationId = this.#domainOperation(_kind, _payload);
     /* This is an exact canonical-original probe, not a broad journal search;
      * observation authority is therefore never supplied by the caller. */
-    const client = await this.drivers.postgres.open();
-    try { return (await (await client.connect()).query("SELECT EXISTS (SELECT 1 FROM production_real.release_operation_journal WHERE operation_id=$1) AS recorded", [`non-google-core:${operationId}`])).rows[0]?.recorded === true; }
-    finally { await client.end(); }
+    const record = await this.drivers.journal.read(`non-google-core:${operationId}`);
+    return record ? Object.freeze({ recorded: true, operationId, operationSha256: record.identitySha256 }) : Object.freeze({ recorded: false });
   }
   #domainOperation(kind: CoreServiceControlKind, payload: unknown): string {
     switch (kind) {

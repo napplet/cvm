@@ -1013,9 +1013,14 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     await expect(runtime.query("UPDATE production_real.priced_continuation_finalizations SET request_sha256=$1", ["f".repeat(64)])).rejects.toThrow();
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.funding_outbox WHERE event_kind='priced_continuation_terminal'")).rows[0].count).toBe(1);
     expect(modelPosts).toBe(2); expect(nativeRestores).toBe(1);
-    const workspaceApiIntent = ProviderOperationIntentSchema.parse({ ...allocatingIntent, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId,
+    // Settlement/reconciliation uses the same immutable reduced V2 envelope
+    // that passed the provider-dispatch fence; it must not borrow the earlier
+    // fixture action's card/profile or maximum units.
+    const workspaceApiIntent = ProviderOperationIntentSchema.parse({ accountId, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId,
       operationId: workspaceClaim.operationId, providerRequestId: workspaceClaim.operationId, actionBudgetReference: workspaceClaim.actionBudgetReference,
-      requestFingerprint: workspaceClaim.fingerprint, expectedVersion: 1, prompt: workspaceCommand.revision });
+      requestFingerprint: workspaceClaim.fingerprint, expectedVersion: workspaceClaim.quote.context.expectedSessionVersion,
+      profileId: workspaceClaim.quote.pricing.profile.id, priceCardId: workspaceClaim.quote.pricing.card.id,
+      prompt: workspaceCommand.revision, maximumUnits: workspaceClaim.quote.pricing.profile.maximumUnits, selection: "unselected" });
     const noAdmission = async () => { throw new Error("UNEXPECTED_CORE_READMISSION"); };
     const workspaceCoreSettlement = createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion,
       journal: vertexJournal, resumeSettlements: workspaceAcceptance });

@@ -46,6 +46,8 @@ import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
 import { projectResumePricingQuote } from "../../src/continuity/resume-v2-contracts";
 import { ProductionPricedContinuationFinalizer } from "../../src/production/priced-continuation-finalizer";
 import { ProductionPricedContinuationRunner } from "../../src/production/priced-continuation-runner";
+import { ProductionPricedContinuationService } from "../../src/production/priced-continuation-service";
+import { loadProductionConfig } from "../../src/production/config";
 import { listProductionRetentionCandidates } from "../../src/production/checkpoint-retention";
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 import { ProductionPricedContinuationCleanup } from "../../src/production/priced-continuation-cleanup";
@@ -108,6 +110,23 @@ button.addEventListener('click', () => { count++; render(); if (runtimeHasDomain
 const realCounterFiles = directWorker
   ? [{ path: "src/main.ts", content: directCounterSource }, { path: "src/capabilities.json", content: '{"required":["storage"],"optional":[]}' }]
   : [{ path: "src/main.ts", content: realCounterSource }];
+
+function mountedPricedConfig(toolchainSha256: string, policyVersion: string) {
+  const digest = "a".repeat(64), image = `registry.example/worker@sha256:${digest}`;
+  return loadProductionConfig({
+    realm: "production-real", candidateSha256: digest, topologySha256: digest, projectId: "napplet-cvm-01", regions: ["us-central1", "europe-west1"],
+    cloudSql: { instanceReference: "sql:priced", database: "production_real", roleCredentialReference: "sql:role", restoreRecoveredRoleCredentialReference: "sql:recovered", restoreMigrationRoleCredentialReference: "sql:migration", migrationRevision: digest },
+    gcs: { bucket: "priced-fixture-bucket", location: "nam4", encryptionKeyReference: "gcs:key", migrationBackupKeyReference: "gcs:migration", retentionDays: 30 }, checkpoint: { kekReference: "checkpoint:kek" },
+    contextvm: { relay: "wss://relay.example", serviceKeyReference: "contextvm:key" }, certification: { authorizationRequestReference: "cert:request", authorizationReceiptReference: "cert:receipt", clientKeyReference: "cert:client", sessionMaterialReference: "cert:session", serverPubkey: "b".repeat(64) },
+    funding: { nwcConnectionReference: "funding:nwc", cashuConsentReference: "funding:cashu", protectedMaterialReference: "funding:protected", admissionReceiptReference: "funding:admission", statusCursorReference: "funding:cursor" },
+    vertex: { projectReference: "vertex:project", credentialReference: "vertex:credential", model: "gemini-4-argon", priceSnapshotSha256: digest },
+    worker: { selectedProvider: "fly", evidenceReference: "worker:evidence", modalAccessReference: "worker:modal", flyAccessReference: "worker:fly", image, toolchainSha256, policyVersion },
+    compatibleHost: { targetUrl: "https://host.example", targetSha256: digest, chromiumExecutable: "/usr/bin/chromium" },
+    publication: { cliSourceReference: "publication:cli", signerBrokerReference: "publication:broker", signerSessionKeyReference: "publication:session", attestationKeyReference: "publication:attestation", ownerPubkey: "c".repeat(64), uploadServer: "https://upload.example", uploadTargetReference: "publication:target", relays: ["wss://relay.example"] },
+    publicOrigins: { static: "https://static.example", preview: "https://preview.example", artifact: "https://artifact.example" }, policy: { artifactVersion: "fixture-policy", retentionDays: 30, liveGraceMs: 600_000 }, collector: { otlpEndpoint: "https://otlp.example", serviceName: "napplet-cvm-production" },
+    operator: { serviceAccount: "priced-runner@napplet-cvm-01.iam.gserviceaccount.com", privateControlAudience: "https://priced-control.run.app" }, image: { controlPlane: image, toolchainSha256 },
+  });
+}
 async function docker(args: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -835,9 +854,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }, { image: `registry.example/worker@sha256:${"a".repeat(64)}`,
         toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1", restoreRecoveryVersion: 1, clients: workerClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] }) : undefined;
+    const nativeObjects = new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient });
     const nativeBridge = () => new ProductionWorkerBridge({ resolver: new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion,
       capacityJournal, pricedContinuations: workerAuthority }), workers: workerClients, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
-      requestJournal: nativeRequestJournal, artifactStore: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }), toolchainSha256: directWorker ? "e".repeat(64) : workspaceToolchain,
+      requestJournal: nativeRequestJournal, artifactStore: nativeObjects, toolchainSha256: directWorker ? "e".repeat(64) : workspaceToolchain,
       ...(directRouter ? { jobRouter: directRouter, publication: { server: publicationServer } } : {}) });
     const cleanupCapacity = createProductionReadyCapacity({ provider: "fly", workers: workerClients, journal: capacityJournal, workerJournal: nativeWorkerJournal,
       image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: workspaceToolchain, flyRegion: "ams" });
@@ -886,7 +906,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     // resolver, while ordinary priced generation remains separately gated.
     const freshPricedResolver = new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion, capacityJournal });
     await expect(freshPricedResolver.resolvePricedRestore(restoredWorkspace.restore.metadata, resumedWorkerRequest)).resolves.toMatchObject({
-      accountId, ownerId: principal.pubkey, intentReference: expect.stringMatching(/^capacity-intent:/u), provider: "modal",
+      accountId, ownerId: principal.pubkey, intentReference: expect.stringMatching(/^capacity-intent:/u), provider: fixtureProvider,
     });
     await expect(freshPricedResolver.resolvePricedRestore({ ...restoredWorkspace.restore.metadata, leaseToken: "lease:foreign" }, resumedWorkerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
     expect(await nativeBridge().observePricedRestoreCheckpoint(restoredWorkspace.restore.metadata)).toMatchObject({ status: "restored" });
@@ -956,6 +976,15 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       fundedAdmission: new FundedAdmissionService({ funding: new FundingService(store), store, receiptAuthority: trustedAdmissionReceiptAuthority,
         capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
     const core = new MeteredGenerationService(coreOptions);
+    const mountedToolchain = directWorker ? "e".repeat(64) : workspaceToolchain;
+    const mountedRouter = new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
+      executables: [{ image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: mountedToolchain, clients: workerClients,
+        modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] });
+    const mountedService = await ProductionPricedContinuationService.create({ pool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
+      capacity: cleanupCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
+      requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
+      gateway, pricing: refreshedPricing });
+    await mountedService.runner.assertReady();
     const runnerInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority,
       restores: workspaceRestores(), generation: core, finalizer, cleanup: cleanup() };
     let failFirstRunnerTerminalWrite = true;

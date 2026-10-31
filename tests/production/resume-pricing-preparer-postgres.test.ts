@@ -1012,9 +1012,13 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const noAdmission = async () => { throw new Error("UNEXPECTED_CORE_READMISSION"); };
     const workspaceCoreSettlement = createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion,
       journal: vertexJournal, resumeSettlements: workspaceAcceptance });
+    let mountedSettlementError: unknown;
     const coreOptions = { store: metered, gateway, worker: nativeBridge(), artifactVerifier: nativeBridge(),
       proposalStore: new ProductionSourceProposalStore(pool), continuationCommands: checkpoint.pendingCommands, toolchainIdentity: workspaceClaim.quote.context.toolchainId,
-      settlement: { ...workspaceCoreSettlement, prepare: noAdmission },
+      settlement: { ...workspaceCoreSettlement, prepare: noAdmission, async finalize(input: Parameters<typeof workspaceCoreSettlement.finalize>[0]) {
+        try { return await workspaceCoreSettlement.finalize(input); }
+        catch (error) { mountedSettlementError = error; throw error; }
+      } },
       fundedAdmission: new FundedAdmissionService({ funding: new FundingService(store), store, receiptAuthority: trustedAdmissionReceiptAuthority,
         capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
     const core = new MeteredGenerationService(coreOptions);
@@ -1058,7 +1062,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     let mountedTerminalResult: unknown;
     try { mountedTerminalResult = await mountedService.resume(workspaceResume); }
     catch (error) { mountedTerminalError = error; }
-    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)};SQL:${mountedSql.slice(-12).map(sql => sql.replaceAll(/\s+/gu, " ").slice(0, 160)).join("|")}`);
+    if (failFirstMountedTerminalWrite) throw new Error(`MOUNTED_TERMINAL_WRITE_UNREACHED:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)};SETTLEMENT:${mountedSettlementError instanceof Error ? mountedSettlementError.message : "none"};POSTS:${modelPosts};SQL:${mountedSql.slice(-12).map(sql => sql.replaceAll(/\s+/gu, " ").slice(0, 160)).join("|")}`);
     if (!(mountedTerminalError instanceof Error) || mountedTerminalError.message !== "TERMINAL_PAUSE_WRITE_FAILED")
       throw new Error(`MOUNTED_TERMINAL_WRITE_OUTCOME_INVALID:${mountedTerminalError instanceof Error ? mountedTerminalError.message : canonicalJson(mountedTerminalResult)}`);
     expect(modelPosts).toBe(3);

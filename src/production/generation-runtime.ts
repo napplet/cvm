@@ -11,7 +11,7 @@ import { loadProductionConfig, type ProductionConfig } from "./config";
 import { SealedProductionGenerationFacade } from "./generation-facade";
 import { createMountedProductionFundingMaterial } from "./mounted-funding-material";
 import { createMountedProductionAuthorization } from "./mounted-authorization";
-import { openProductionPostgresPool } from "./postgres";
+import { openProductionPostgresPool, type ProductionPostgresConstructionTransport } from "./postgres";
 import { materializeProductionRuntimeDependencies } from "./runtime-dependencies";
 import { MountedProductionSecretMaterial } from "./secret-material";
 import { PostgresSqlFundingStore } from "../persistence/postgres-sql-funding-store";
@@ -44,8 +44,14 @@ export type ProductionGenerationRuntime = Readonly<{
 
 /** Concrete paid graph: mounted material, restricted SQL, original-operation
  * journals, then authenticated relay startup. There are no user callbacks. */
-export async function openProductionGenerationRuntime(input: Readonly<{ config: unknown; secrets?: MountedProductionSecretMaterial; now?: () => number }>): Promise<ProductionGenerationRuntime> {
-  const config = loadProductionConfig(input.config); const secrets = input.secrets ?? new MountedProductionSecretMaterial(config); const postgres = await openProductionPostgresPool(config, secrets);
+export async function openProductionGenerationRuntime(input: Readonly<{
+  config: unknown;
+  secrets?: MountedProductionSecretMaterial;
+  now?: () => number;
+  /** Explicit test-only I/O boundary; production config cannot select it. */
+  postgresConstructionTransport?: ProductionPostgresConstructionTransport;
+}>): Promise<ProductionGenerationRuntime> {
+  const config = loadProductionConfig(input.config); const secrets = input.secrets ?? new MountedProductionSecretMaterial(config); const postgres = await openProductionPostgresPool(config, secrets, input.postgresConstructionTransport);
   let relay: Awaited<ReturnType<typeof openContextVmRelayTransport>> | undefined; let funding: Awaited<ReturnType<typeof openProductionFunding>> | undefined;
   try {
     const materials = await createMountedProductionFundingMaterial({ config, secrets });

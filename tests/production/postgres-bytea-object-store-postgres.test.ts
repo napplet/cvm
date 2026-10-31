@@ -56,6 +56,7 @@ integration("immutable SQL objects use a restricted role, exact generations, and
     } finally { client.release(); }
   } finally {
     await runtime?.end();
+    await admin.query(`REVOKE napplet_production_object FROM ${role}`).catch(() => undefined);
     await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
     await admin.end();
   }

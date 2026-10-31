@@ -244,7 +244,7 @@ const HeldReasonSchema = z.enum(["attempt_limit", "credential_unavailable", "cre
 const AttemptSchema = z.object({
   attempt: z.number().int().min(1).max(8), state: z.enum(["dispatch_intent", "completed"]), atMs: z.number().int().positive(),
   startedAtMs: z.number().int().positive().optional(), finishedAtMs: z.number().int().positive().optional(),
-  disposition: z.enum(["passed", "non_zero_exit", "timeout", "output_overflow", "credential_unavailable", "credential_echo", "artifact_unavailable", "grant_expired"]).optional(),
+  disposition: z.enum(["passed", "non_zero_exit", "timeout", "output_overflow", "credential_unavailable", "credential_echo", "artifact_unavailable", "grant_expired", "dispatch_unknown"]).optional(),
   argvSha256: Digest, executableSha256: Digest, stdout: ArtifactReferenceSchema.optional(), stdoutSha256: Digest.optional(), stderrByteLength: z.number().int().nonnegative().optional(), stderrSha256: Digest.optional(), exitCode: z.number().int().nullable().optional(), terminationSignal: z.enum(["SIGTERM", "SIGKILL"]).optional(), envelopeSha256: Digest.optional(), rowIdentitiesSha256: Digest.optional(), coverage: z.literal("unknown").optional(), reason: HeldReasonSchema.optional(),
 }).strict();
 export const ModalBillingReportCaptureSchema = z.object({ status: z.literal("held"), reason: HeldReasonSchema, grantSha256: Digest, reportRequestSha256: Digest, observedMicros: z.string().regex(/^[0-9]+$/u).optional() }).strict();
@@ -296,9 +296,9 @@ async function finish(journal: ModalBillingReportJournal, current: Readonly<{ re
  * spend, or a customer invoice, so this collector always returns `held`. */
 export function createModalBillingReportCollector(input: Readonly<{
   executable: string; executableSha256: string; credentialReference: string; credentialReferenceSha256: string; credentialResolver: ModalBillingCredentialResolver;
-  journal: ModalBillingReportJournal; artifacts: ModalBillingArtifactStore; now?: () => number;
+  journal: ModalBillingReportJournal; artifacts: ModalBillingArtifactStore; artifactOrigin: string; now?: () => number;
 }>) {
-  if (!input.executable.startsWith("/") || !Digest.safeParse(input.executableSha256).success || !Digest.safeParse(input.credentialReferenceSha256).success || !/^secret\/[A-Za-z0-9][A-Za-z0-9_.:/-]{1,255}$/u.test(input.credentialReference)) throw new Error("MODAL_BILLING_COLLECTOR_CONFIGURATION_INVALID");
+  if (!input.executable.startsWith("/") || !Digest.safeParse(input.executableSha256).success || !Digest.safeParse(input.credentialReferenceSha256).success || !/^secret\/[A-Za-z0-9][A-Za-z0-9_.:/-]{1,255}$/u.test(input.credentialReference) || !/^[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9._/-]{1,1024}$/iu.test(input.artifactOrigin) || !input.artifactOrigin.endsWith("/")) throw new Error("MODAL_BILLING_COLLECTOR_CONFIGURATION_INVALID");
   const now = input.now ?? Date.now;
   const verify = (raw: unknown) => {
     const grant = verifyModalBillingObservationGrant(raw);
@@ -314,9 +314,18 @@ export function createModalBillingReportCollector(input: Readonly<{
     return finish(input.journal, current, Object.freeze({ ...intent, ...patch, state: "completed" as const, finishedAtMs: now() }), result);
   };
   const validArtifact = async (reference: ModalBillingArtifactReference, key: string, digest: string): Promise<Uint8Array | undefined> => {
-    if (reference.sha256 !== digest || !reference.uri.endsWith(`/${key}`) || !/^[1-9][0-9]{0,255}$/u.test(reference.generation)) return undefined;
+    if (reference.sha256 !== digest || reference.uri !== `${input.artifactOrigin}${key}` || !/^[1-9][0-9]{0,255}$/u.test(reference.generation)) return undefined;
     const bytes = await input.artifacts.readExact(reference).catch(() => undefined);
     return bytes && sha256(bytes) === digest ? bytes : undefined;
+  };
+  const derive = (bytes: Uint8Array, grant: ModalBillingObservationGrant) => {
+    try {
+      const rows = parseModalBillingReport(bytes);
+      const envelopeSha256 = sha256(canonicalJson(rows));
+      const rowIdentitiesSha256 = sha256(canonicalJson(rows.map(row => ({ object_id: row.object_id, interval_start: row.interval_start, resource: row.resource }))));
+      if (!validRows(rows, grant)) return { reason: "scope_mismatch" as const, envelopeSha256, rowIdentitiesSha256, coverage: "unknown" as const };
+      return { reason: "finality_unproven" as const, observedMicros: nonnegativeMicros(rows).toString(), envelopeSha256, rowIdentitiesSha256, coverage: "unknown" as const };
+    } catch { return { reason: "report_invalid" as const }; }
   };
   return Object.freeze({
     async recover(raw: unknown): Promise<ModalBillingReportCapture> {
@@ -328,9 +337,14 @@ export function createModalBillingReportCollector(input: Readonly<{
       const completed = current.record.attempts.at(-1);
       if (completed?.stdout) {
         const key = `modal-billing/${current.record.reportRequestSha256}/${completed.attempt}/stdout`;
-        if (!completed.stdoutSha256 || !await validArtifact(completed.stdout, key, completed.stdoutSha256)) return held(grant, "artifact_unavailable");
+        if (!completed.stdoutSha256) return held(grant, "artifact_unavailable");
+        const bytes = await validArtifact(completed.stdout, key, completed.stdoutSha256);
+        if (!bytes) return held(grant, "artifact_unavailable");
+        const derived = derive(bytes, grant), recomputed = held(grant, derived.reason, derived.reason === "finality_unproven" ? derived.observedMicros : undefined);
+        if (completed.disposition !== "passed" || completed.reason !== derived.reason || completed.coverage !== derived.coverage || completed.envelopeSha256 !== ("envelopeSha256" in derived ? derived.envelopeSha256 : undefined) || completed.rowIdentitiesSha256 !== ("rowIdentitiesSha256" in derived ? derived.rowIdentitiesSha256 : undefined) || !equal(current.record.result, recomputed)) return held(grant, "artifact_unavailable");
+        return recomputed;
       }
-      return current.record.result;
+      return held(grant, "artifact_unavailable");
     },
     async capture(raw: unknown): Promise<ModalBillingReportCapture> {
       const grant = verify(raw); const requested = initial(grant); const claimed = await input.journal.claim(requested);
@@ -355,7 +369,7 @@ export function createModalBillingReportCollector(input: Readonly<{
       if (!active(grant)) return complete(current, grant, { disposition: "grant_expired", reason: "grant_expired" }, held(grant, "grant_expired"));
       let child: ModalBillingChildResult;
       try { child = await runPinnedModalBillingReport({ executable: input.executable, executableSha256: input.executableSha256, environmentName: grant.environmentName, intervalStartMs: grant.intervalStartMs, intervalEndMs: grant.intervalEndMs, tagNames: Object.keys(grant.requiredTags).sort(), maximumStdoutBytes: grant.maximumStdoutBytes, maximumStderrBytes: grant.maximumStderrBytes, timeoutMs: grant.timeoutMs, credential }); }
-      catch { return complete(current, grant, { disposition: "non_zero_exit", reason: "child_failure" }, held(grant, "child_failure")); }
+      catch { return complete(current, grant, { disposition: "dispatch_unknown", reason: "child_failure" }, held(grant, "child_failure")); }
       const stderrByteLength = child.stderr.byteLength;
       const stderrSha256 = sha256(child.stderr);
       const stdoutText = new TextDecoder().decode(child.stdout);
@@ -371,13 +385,8 @@ export function createModalBillingReportCollector(input: Readonly<{
         if (!await validArtifact(stdout, key, rawSha256)) throw new Error("MODAL_BILLING_ARTIFACT_BINDING_INVALID");
       } catch { return complete(current, grant, { disposition: "artifact_unavailable", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "artifact_unavailable" }, held(grant, "artifact_unavailable")); }
       if (child.disposition !== "passed") return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "child_failure" }, held(grant, "child_failure"));
-      try {
-        const rows = parseModalBillingReport(child.stdout);
-        const envelopeSha256 = sha256(canonicalJson(rows)); const rowIdentitiesSha256 = sha256(canonicalJson(rows.map(row => ({ object_id: row.object_id, interval_start: row.interval_start, resource: row.resource }))));
-        if (!validRows(rows, grant)) return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, envelopeSha256, rowIdentitiesSha256, coverage: "unknown", reason: "scope_mismatch" }, held(grant, "scope_mismatch"));
-        const observedMicros = nonnegativeMicros(rows).toString();
-        return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, envelopeSha256, rowIdentitiesSha256, coverage: "unknown", reason: "finality_unproven" }, held(grant, "finality_unproven", observedMicros));
-      } catch { return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "report_invalid" }, held(grant, "report_invalid")); }
+      const derived = derive(child.stdout, grant);
+      return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, ...(derived.reason === "report_invalid" ? {} : { envelopeSha256: derived.envelopeSha256, rowIdentitiesSha256: derived.rowIdentitiesSha256, coverage: derived.coverage }), reason: derived.reason }, held(grant, derived.reason, derived.reason === "finality_unproven" ? derived.observedMicros : undefined));
     },
   });
 }

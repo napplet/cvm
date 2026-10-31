@@ -34,10 +34,10 @@ function immutableMemoryStore() {
     objects,
     async createImmutable(input: { key: string; bytes: Uint8Array; sha256: string }) {
       objects.set(`${input.key}:1`, new Uint8Array(input.bytes));
-      return { uri: `memory://${input.key}`, generation: "1", sha256: input.sha256 };
+      return { uri: `memory://origin/${input.key}`, generation: "1", sha256: input.sha256 };
     },
     async readExact(reference: { uri: string; generation: string; sha256: string }) {
-      const key = reference.uri.replace("memory://", "");
+      const key = reference.uri.replace("memory://origin/", "");
       return objects.get(`${key}:${reference.generation}`);
     },
   };
@@ -133,11 +133,11 @@ process.stdout.write(${JSON.stringify(mismatchedReport)});
 `);
     const raw = new Map<string, Uint8Array>();
     const store = {
-      async createImmutable(input: { key: string; bytes: Uint8Array; sha256: string }) { raw.set(`${input.key}:${input.sha256}`, new Uint8Array(input.bytes)); return { uri: `memory://${input.key}`, generation: "1", sha256: input.sha256 }; },
+      async createImmutable(input: { key: string; bytes: Uint8Array; sha256: string }) { raw.set(`${input.key}:${input.sha256}`, new Uint8Array(input.bytes)); return { uri: `memory://origin/${input.key}`, generation: "1", sha256: input.sha256 }; },
       async readExact(reference: { uri: string; generation: string; sha256: string }) { return [...raw.entries()].find(([key]) => key.endsWith(`:${reference.sha256}`))?.[1]; },
     };
     try {
-      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts: store, now: () => Date.now() });
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts: store, artifactOrigin: "memory://origin/", now: () => Date.now() });
       const result = await collector.capture(grant(executable.sha256));
       expect(result.status).toBe("held");
       expect(result.reason).toBe("scope_mismatch");
@@ -151,7 +151,7 @@ process.stdout.write(${JSON.stringify(report)});
 `);
     const artifacts = immutableMemoryStore();
     try {
-      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts, now: () => Date.now() });
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts, artifactOrigin: "memory://origin/", now: () => Date.now() });
       const approved = grant(executable.sha256);
       const first = await collector.capture(approved);
       const recovery = await collector.recover(approved);
@@ -173,7 +173,7 @@ process.stdout.write(${JSON.stringify(report)});
       async readExact() { return undefined; },
     };
     try {
-      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts, now: () => Date.now() });
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts, artifactOrigin: "memory://origin/", now: () => Date.now() });
       const result = await collector.capture(grant(executable.sha256));
       expect(result).toMatchObject({ status: "held", reason: "credential_echo" });
       expect(stored).toHaveLength(0);
@@ -189,7 +189,7 @@ process.stdout.write(${JSON.stringify(report)});
     try {
       const { grantSha256: _grantSha256, ...approved } = grant(executable.sha256);
       const signed = createModalBillingObservationGrant({ ...approved, expiresAtMs: clock + 1 });
-      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { resolves++; clock += 2; return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, now: () => clock });
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { resolves++; clock += 2; return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/", now: () => clock });
       const result = await collector.capture(signed);
       expect(result.reason).toBe("grant_expired");
       expect(resolves).toBe(1);
@@ -206,7 +206,7 @@ process.stdout.write(${JSON.stringify(report)});
     let resolves = 0;
     const journal = createMemoryModalBillingReportJournal(), artifacts = immutableMemoryStore();
     try {
-      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { resolves++; await Bun.sleep(20); return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts });
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { resolves++; await Bun.sleep(20); return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/" });
       const approved = grant(executable.sha256);
       const [first, second] = await Promise.all([collector.capture(approved), collector.capture(approved)]);
       expect([first.reason, second.reason]).toContain("dispatch_uncertain");
@@ -214,7 +214,7 @@ process.stdout.write(${JSON.stringify(report)});
       const crashJournal = createMemoryModalBillingReportJournal();
       const claimed = await crashJournal.claim({ schemaVersion: "modal-billing-report-journal-v2", grantSha256: approved.grantSha256, reportRequestSha256: first.reportRequestSha256, attempts: [] });
       await crashJournal.compareAndSet({ reportRequestSha256: first.reportRequestSha256, expectedRevision: claimed.revision, record: { ...claimed.record, attempts: [{ attempt: 1, state: "dispatch_intent", atMs: Date.now(), argvSha256: hex("argv"), executableSha256: executable.sha256 }] } });
-      const crashed = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { throw new Error("must not resolve"); } }, journal: crashJournal, artifacts });
+      const crashed = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { throw new Error("must not resolve"); } }, journal: crashJournal, artifacts, artifactOrigin: "memory://origin/" });
       await expect(crashed.recover(approved)).resolves.toMatchObject({ reason: "dispatch_uncertain" });
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
@@ -232,7 +232,7 @@ process.stdout.write(${JSON.stringify(report)});
           return { uri: "memory://outside-scope", generation: "0", sha256: input.sha256 };
         },
       };
-      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts: forged });
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts: forged, artifactOrigin: "memory://origin/" });
       await expect(collector.capture(grant(executable.sha256))).resolves.toMatchObject({ reason: "artifact_unavailable" });
       expect(objects.objects.size).toBe(1);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
@@ -246,5 +246,42 @@ process.stdout.write(${JSON.stringify(report)});
     });
     expect(ModalBillingReportJournalRecordSchema.parse(record)).toEqual(record);
     expect(() => ModalBillingReportJournalRecordSchema.parse({ ...record, attempts: [{ ...record.attempts[0], finishedAtMs: undefined }] })).toThrow("MODAL_BILLING_JOURNAL_AUDIT_INCOMPLETE");
+  });
+
+  test("recomputes recovery evidence and rejects forged result, row, and artifact-origin bindings", async () => {
+    const executable = await fixture(`#!/usr/bin/env bun
+process.stdout.write(${JSON.stringify(report)});
+`);
+    const journal = createMemoryModalBillingReportJournal(), artifacts = immutableMemoryStore();
+    try {
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/" });
+      const approved = grant(executable.sha256), captured = await collector.capture(approved);
+      const saved = await journal.read(captured.reportRequestSha256);
+      if (!saved?.record.result) throw new Error("CAPTURE_MISSING");
+      const completed = saved.record.attempts.at(-1);
+      if (!completed) throw new Error("ATTEMPT_MISSING");
+      await journal.compareAndSet({ reportRequestSha256: captured.reportRequestSha256, expectedRevision: saved.revision, record: { ...saved.record, attempts: [{ ...completed, envelopeSha256: hex("forged-envelope") }], result: { ...saved.record.result, observedMicros: "999999999" } } });
+      await expect(collector.recover(approved)).resolves.toMatchObject({ reason: "artifact_unavailable" });
+      const stale = await journal.read(captured.reportRequestSha256);
+      if (!stale) throw new Error("STALE_MISSING");
+      await journal.compareAndSet({ reportRequestSha256: captured.reportRequestSha256, expectedRevision: stale.revision, record: { ...stale.record, attempts: [{ ...stale.record.attempts[0]!, stdout: { ...stale.record.attempts[0]!.stdout!, uri: `memory://foreign/modal-billing/${captured.reportRequestSha256}/1/stdout`, generation: "2" } }] } });
+      await expect(collector.recover(approved)).resolves.toMatchObject({ reason: "artifact_unavailable" });
+    } finally { await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test("records a schema-valid unknown dispatch when the runner cannot start after intent", async () => {
+    const executable = await fixture(`#!/usr/bin/env bun
+process.stdout.write(${JSON.stringify(report)});
+`);
+    const journal = createMemoryModalBillingReportJournal(), artifacts = immutableMemoryStore();
+    try {
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { await rm(executable.executable, { force: true }); return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/" });
+      const approved = grant(executable.sha256), result = await collector.capture(approved);
+      expect(result.reason).toBe("child_failure");
+      const saved = await journal.read(result.reportRequestSha256);
+      expect(() => ModalBillingReportJournalRecordSchema.parse(saved?.record)).not.toThrow();
+      expect(saved?.record.attempts).toMatchObject([{ state: "completed", disposition: "dispatch_unknown" }]);
+      expect(artifacts.objects.size).toBe(0);
+    } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 });

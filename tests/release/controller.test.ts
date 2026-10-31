@@ -16,6 +16,29 @@ async function workspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "napplet-cvm-release-controller-"));
 }
 
+const contentDigest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
+
+async function replaceBoundOperationRecord(input: Readonly<{ root: string; operationId: string; mutate: (record: Record<string, unknown>) => Record<string, unknown> }>): Promise<string> {
+  const pointer = JSON.parse(await readFile(join(input.root, "current.json"), "utf8")) as Record<string, string>;
+  const state = JSON.parse(await readFile(join(input.root, "states", `${pointer.stateSha256}.json`), "utf8")) as Record<string, unknown>;
+  const operationIds = state.providerOperationIds as string[];
+  const recordDigests = [...(state.providerOperationRecordSha256s as string[])];
+  const index = operationIds.indexOf(input.operationId);
+  if (index < 0) throw new Error("TEST_OPERATION_MISSING");
+  const record = JSON.parse(await readFile(join(input.root, "provider-operation-records", `${recordDigests[index]}.json`), "utf8")) as Record<string, unknown>;
+  const { recordSha256: _recordSha256, ...recordBase } = input.mutate(record);
+  const nextRecordSha256 = contentDigest(recordBase);
+  await writeFile(join(input.root, "provider-operation-records", `${nextRecordSha256}.json`), `${canonicalJson({ ...recordBase, recordSha256: nextRecordSha256 })}\n`);
+  recordDigests[index] = nextRecordSha256;
+  const { stateSha256: _stateSha256, ...stateBase } = state;
+  const nextStateBase = { ...stateBase, providerOperationRecordSha256s: recordDigests };
+  const nextStateSha256 = contentDigest(nextStateBase);
+  await writeFile(join(input.root, "states", `${nextStateSha256}.json`), `${canonicalJson({ ...nextStateBase, stateSha256: nextStateSha256 })}\n`);
+  const pointerBase = { version: 1, stateSha256: nextStateSha256, candidateSha256: (state.candidate as Record<string, string>).candidateSha256! };
+  await writeFile(join(input.root, "current.json"), `${canonicalJson({ ...pointerBase, pointerSha256: contentDigest(pointerBase) })}\n`);
+  return nextRecordSha256;
+}
+
 async function observedCollector() {
   const digest = "c".repeat(64);
   return observeUploadedCollectorRegistryImage({
@@ -248,9 +271,9 @@ test("resource completion holds each original provider reservation until an actu
   expect(first.state.status).toBe("topology_ready");
   expect(applies).toHaveLength(RELEASE_PROVIDER_IDS.length);
 
-  const records = await Promise.all(first.state.providerOperationIds.map(async (operationId) => JSON.parse(await readFile(join(root, "provider-operations", `${operationId}.json`), "utf8"))));
+  const records = await Promise.all(first.state.providerOperationRecordSha256s!.map(async (recordSha256) => JSON.parse(await readFile(join(root, "provider-operation-records", `${recordSha256}.json`), "utf8"))));
   expect(records).toHaveLength(RELEASE_PROVIDER_IDS.length);
-  expect(records.every((record) => record.version === 2 && record.status === "completed" && record.billingStatus === "unknown" && record.actualCostMicros === null)).toBeTrue();
+  expect(records.every((record) => record.version === 3 && record.status === "completed" && record.billingStatus === "unknown" && record.actualCostMicros === null)).toBeTrue();
   expect(records.reduce((total, record) => total + record.reservedCostMicros, 0)).toBe(dryRun.authorizationRequest.maximumAuthorizedCostMicros);
   for (const record of records) {
     const effect = dryRun.authorizationRequest.orderedEffects.find((item) => item.id === record.operation.effectId && item.provider === record.operation.provider);
@@ -282,7 +305,7 @@ test("raw provider amounts cannot settle a held reservation", async () => {
   const records = await readdir(join(root, "provider-operations"));
   expect(records).toHaveLength(RELEASE_PROVIDER_IDS.length);
   const first = JSON.parse(await readFile(join(root, "provider-operations", records[0]!), "utf8"));
-  expect(first).toEqual(expect.objectContaining({ version: 2, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null }));
+  expect(first).toEqual(expect.objectContaining({ version: 3, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null, priorRecordSha256: null }));
 });
 
 test("a syntactically valid generic provider report cannot settle a held reservation", async () => {
@@ -313,7 +336,7 @@ test("a syntactically valid generic provider report cannot settle a held reserva
   await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_PROVIDER_COST_REPORT_TRANSPORT_UNAVAILABLE");
   const records = await readdir(join(root, "provider-operations"));
   const first = JSON.parse(await readFile(join(root, "provider-operations", records[0]!), "utf8"));
-  expect(first).toEqual(expect.objectContaining({ version: 2, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null }));
+  expect(first).toEqual(expect.objectContaining({ version: 3, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null, priorRecordSha256: null }));
 });
 
 test("ambiguous provider execution resumes by observing the original operation without protected evidence writes", async () => {
@@ -348,4 +371,70 @@ test("ambiguous provider execution resumes by observing the original operation w
   expect(modalApplies).toBe(1);
   expect(modalObserves).toBe(1);
   expect(protectedEvidenceWrites).toBe(0);
+});
+
+test("resume rederives each reservation and scope from the immutable authorization before provider calls", async () => {
+  for (const mutate of [
+    (record: Record<string, unknown>) => ({ ...record, reservedCostMicros: (record.reservedCostMicros as number) + 1 }),
+    (record: Record<string, unknown>) => ({ ...record, accountScopeSha256: "a".repeat(64) }),
+    (record: Record<string, unknown>) => ({ ...record, projectScopeSha256: "b".repeat(64) }),
+  ]) {
+    const root = await workspace();
+    const collectorImage = await observedCollector();
+    const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+    let resumedCalls = 0;
+    const registry = createReleaseProviderRegistry({
+      now: () => 1_000,
+      ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+        discoverCapabilities: async () => ({ capability: "available" as const }),
+        discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+        plan: async () => { resumedCalls += 1; return { status: "planned" as const, estimatedCostMicros: 1 }; },
+        apply: async (input: { operationId: string }) => provider === "modal" ? { status: "unknown" as const } : { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` },
+        observe: async (input: { operationId: string }) => { resumedCalls += 1; return { status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }; },
+        cleanup: async () => ({ status: "cleaned" as const }),
+      }])) as never,
+    });
+    const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+    await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
+    resumedCalls = 0;
+    const current = JSON.parse(await readFile(join(root, "current.json"), "utf8")) as { stateSha256: string };
+    const state = JSON.parse(await readFile(join(root, "states", `${current.stateSha256}.json`), "utf8")) as { providerOperationIds: string[]; providerOperationRecordSha256s: string[] };
+    const records = await Promise.all(state.providerOperationRecordSha256s.map(async (recordSha256) => JSON.parse(await readFile(join(root, "provider-operation-records", `${recordSha256}.json`), "utf8")) as Record<string, unknown>));
+    const modalIndex = records.findIndex((record) => (record.operation as { provider: string }).provider === "modal");
+    await replaceBoundOperationRecord({ root, operationId: state.providerOperationIds[modalIndex]!, mutate });
+    await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_COST_RESERVATION_INVALID");
+    expect(resumedCalls).toBe(0);
+  }
+});
+
+test("a forged persisted report is cleared on generic reconciliation and cannot become observed", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => provider === "modal" ? { status: "unknown" as const } : { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }), cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
+  const current = JSON.parse(await readFile(join(root, "current.json"), "utf8")) as { stateSha256: string };
+  const state = JSON.parse(await readFile(join(root, "states", `${current.stateSha256}.json`), "utf8")) as { providerOperationIds: string[]; providerOperationRecordSha256s: string[] };
+  const records = await Promise.all(state.providerOperationRecordSha256s.map(async (recordSha256) => JSON.parse(await readFile(join(root, "provider-operation-records", `${recordSha256}.json`), "utf8")) as Record<string, unknown>));
+  const index = records.findIndex((record) => (record.operation as { provider: string }).provider === "modal");
+  await replaceBoundOperationRecord({
+    root, operationId: state.providerOperationIds[index]!,
+    mutate: (record) => {
+      const operation = record.operation as { provider: string; operationId: string; candidateSha256: string; authorizationRequestSha256: string };
+      const observation = { version: 1, provider: operation.provider, operationId: operation.operationId, candidateSha256: operation.candidateSha256, authorizationRequestSha256: operation.authorizationRequestSha256, resourceIdentitySha256: "c".repeat(64), accountScopeSha256: record.accountScopeSha256, projectScopeSha256: record.projectScopeSha256, rawReportSha256: "d".repeat(64), intervalStartMs: 1, intervalEndMs: 2, observedAtMs: 2, actualCostMicros: 0 };
+      return { ...record, billingStatus: "observed", actualCostMicros: 0, costObservation: observation, costObservationSha256: contentDigest(observation) };
+    },
+  });
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
+  const modalRecord = JSON.parse(await readFile(join(root, "provider-operation-records", `${resumed.state.providerOperationRecordSha256s![index]}.json`), "utf8"));
+  expect(modalRecord).toEqual(expect.objectContaining({ billingStatus: "unknown", actualCostMicros: null, costObservation: null, costObservationSha256: null }));
 });

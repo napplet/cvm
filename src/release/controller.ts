@@ -107,10 +107,7 @@ type LegacyProviderOperationRecord = Readonly<{
   actualCostMicros: number;
   resourceIdentitySha256: string | null;
 }>;
-/** Version two deliberately keeps resource completion distinct from provider
- * billing.  The reservation is bound to the original authorization effect and
- * is held until a future report adapter records receipt-bound actual usage. */
-type CurrentProviderOperationRecord = Readonly<{
+type LegacyCurrentProviderOperationRecord = Readonly<{
   version: 2;
   operation: ReleaseProviderOperation;
   status: "pending" | "unknown" | "completed";
@@ -123,7 +120,26 @@ type CurrentProviderOperationRecord = Readonly<{
   projectScopeSha256: string;
   resourceIdentitySha256: string | null;
 }>;
-type ProviderOperationRecord = LegacyProviderOperationRecord | CurrentProviderOperationRecord;
+/** Version three keeps resource completion distinct from billing and appends
+ * every transition as a content-addressed record. The reservation is bound to
+ * the original authorization effect and held until a future report adapter
+ * records receipt-bound actual usage. */
+type CurrentProviderOperationRecord = Readonly<{
+  version: 3;
+  operation: ReleaseProviderOperation;
+  status: "pending" | "unknown" | "completed";
+  billingStatus: "unknown" | "observed";
+  reservedCostMicros: number;
+  actualCostMicros: number | null;
+  costObservation: ReleaseProviderCostObservation | null;
+  costObservationSha256: string | null;
+  accountScopeSha256: string;
+  projectScopeSha256: string;
+  resourceIdentitySha256: string | null;
+  priorRecordSha256: string | null;
+  recordSha256: string;
+}>;
+type ProviderOperationRecord = LegacyProviderOperationRecord | LegacyCurrentProviderOperationRecord | CurrentProviderOperationRecord;
 
 async function digest(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
@@ -500,6 +516,7 @@ export class ReleaseCertificationController {
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
 
     if (["topology_ready", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed"].includes(current.state.status) && current.state.deployedTopologySha256) {
+      await this.#assertStateOperationBindings(current.state, request);
       return { state: current.state, authorizationRequest: request, topology: await this.#readTopology(current.state.deployedTopologySha256) };
     }
     if (!["authorization_required", "receipt_valid", "bootstrap", "provisioning", "discovering_deployed", "observing"].includes(current.state.status)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
@@ -515,26 +532,43 @@ export class ReleaseCertificationController {
     })));
     if (operations.length !== RELEASE_PROVIDER_IDS.length || new Set(operations.map((operation) => operation.provider)).size !== RELEASE_PROVIDER_IDS.length) throw new Error("RELEASE_CONTROLLER_TOPOLOGY_INVALID");
 
+    const operationRecordSha256s: string[] = [];
     for (const operation of operations) {
+      const currentIndex = current.state.providerOperationIds.indexOf(operation.operationId);
+      const currentRecordSha256 = currentIndex >= 0 ? current.state.providerOperationRecordSha256s?.[currentIndex] : undefined;
+      if (currentRecordSha256) {
+        const existing = await this.#readOperationRecord(currentRecordSha256);
+        this.#assertOperationAuthorization(existing, operation, request);
+        operationRecordSha256s.push(existing.recordSha256);
+        continue;
+      }
       try {
-        const existing = await this.#readOperation(operation.operationId);
-        if (canonicalJson(existing.operation) !== canonicalJson(operation)) throw new Error("RELEASE_CONTROLLER_OPERATION_COLLISION");
+        const existing = await this.#readLegacyOperation(operation.operationId);
+        this.#assertOperationAuthorization(existing, operation, request);
+        if (existing.version !== 3) throw new Error("RELEASE_CONTROLLER_OPERATION_LEGACY_UNTRUSTED");
+        operationRecordSha256s.push(existing.recordSha256);
       } catch (error) {
-        if (error instanceof Error && error.message === "RELEASE_CONTROLLER_OPERATION_COLLISION") throw error;
+        if (error instanceof Error && (error.message === "RELEASE_CONTROLLER_OPERATION_COLLISION" || error.message === "RELEASE_CONTROLLER_OPERATION_LEGACY_UNTRUSTED" || error.message === "RELEASE_CONTROLLER_COST_RESERVATION_INVALID")) throw error;
         const effect = request.orderedEffects.find((item) => item.id === operation.effectId && item.provider === operation.provider);
         const scope = request.providerScopes.find((item) => item.provider === operation.provider);
         if (!effect || !scope || !Number.isSafeInteger(effect.estimatedCostMicros) || effect.estimatedCostMicros < 0) throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_INVALID");
-        await createOrVerify(join(this.#workspace, "provider-operations", `${operation.operationId}.json`), `${canonicalJson({ version: 2, operation, status: "pending", billingStatus: "unknown", reservedCostMicros: effect.estimatedCostMicros, actualCostMicros: null, costObservation: null, costObservationSha256: null, accountScopeSha256: scope.accountScopeSha256, projectScopeSha256: scope.projectScopeSha256, resourceIdentitySha256: null } satisfies ProviderOperationRecord)}\n`, "RELEASE_CONTROLLER_OPERATION_COLLISION");
+        const initial = await this.#appendOperation({ version: 3, operation, status: "pending", billingStatus: "unknown", reservedCostMicros: effect.estimatedCostMicros, actualCostMicros: null, costObservation: null, costObservationSha256: null, accountScopeSha256: scope.accountScopeSha256, projectScopeSha256: scope.projectScopeSha256, resourceIdentitySha256: null, priorRecordSha256: null });
+        await createOrVerify(join(this.#workspace, "provider-operations", `${operation.operationId}.json`), `${canonicalJson(initial)}\n`, "RELEASE_CONTROLLER_OPERATION_COLLISION");
+        operationRecordSha256s.push(initial.recordSha256);
       }
     }
     let state = current.state;
-    if (["authorization_required", "receipt_valid", "bootstrap"].includes(state.status)) state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
+    if (state.providerOperationRecordSha256s) {
+      if (state.providerOperationRecordSha256s.length !== operations.length || !state.providerOperationRecordSha256s.every((value, index) => value === operationRecordSha256s[index])) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+    }
+    if (["authorization_required", "receipt_valid", "bootstrap"].includes(state.status)) state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null, operationRecordSha256s);
 
     let totalCost = 0;
     let reservedCost = 0;
-    for (const operation of operations) {
-      const record = await this.#readOperation(operation.operationId);
-      const reservation = record.version === 2 ? record.reservedCostMicros : record.actualCostMicros;
+    for (const [index, operation] of operations.entries()) {
+      const record = await this.#currentOperation(state, operation, request);
+      if (record.version !== 3) throw new Error("RELEASE_CONTROLLER_OPERATION_LEGACY_UNTRUSTED");
+      const reservation = record.reservedCostMicros;
       reservedCost += reservation;
       if (reservedCost > receipt.maximumAuthorizedCostMicros) throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_EXCEEDED");
       if (record.status === "completed") { totalCost += record.actualCostMicros ?? 0; continue; }
@@ -555,40 +589,39 @@ export class ReleaseCertificationController {
         && record.resourceIdentitySha256 !== result.resourceIdentitySha256) {
         throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
       }
-      const billingPatch = record.version === 2 ? await this.#billingPatch(record, result) : undefined;
+      const billingPatch = await this.#billingPatch(record, result);
       if (result.status === "unknown" || result.status === "pending") {
-        const next: ProviderOperationRecord = record.version === 2
-          ? { ...record, status: "unknown", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 ?? null }
-          : { ...record, status: "unknown", resourceIdentitySha256: result.resourceIdentitySha256 ?? null };
-        await this.#writeOperation(next);
+        const { recordSha256, ...base } = record;
+        const next = await this.#appendOperation({ ...base, status: "unknown", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 ?? null, priorRecordSha256: recordSha256 });
+        operationRecordSha256s[index] = next.recordSha256;
+        state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((item) => item.operationId), null, null, operationRecordSha256s);
         throw new Error("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
       }
       if (result.status !== "applied" && result.status !== "completed") throw new Error("RELEASE_CONTROLLER_PROVIDER_BLOCKED");
       const actualCostMicros = result.actualCostMicros ?? 0;
       totalCost += actualCostMicros;
       if (totalCost > receipt.maximumAuthorizedCostMicros) {
-        const next: ProviderOperationRecord = record.version === 2
-          ? { ...record, status: "completed", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 ?? null }
-          : { ...record, status: "completed", resourceIdentitySha256: result.resourceIdentitySha256 ?? null };
-        await this.#writeOperation(next);
-        await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "COST_EXCEEDED");
+        const { recordSha256, ...base } = record;
+        const next = await this.#appendOperation({ ...base, status: "completed", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 ?? null, priorRecordSha256: recordSha256 });
+        operationRecordSha256s[index] = next.recordSha256;
+        await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "COST_EXCEEDED", operationRecordSha256s);
         throw new Error("RELEASE_CONTROLLER_COST_EXCEEDED");
       }
       if (!result.resourceIdentitySha256) throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
-      const next: ProviderOperationRecord = record.version === 2
-        ? { ...record, status: "completed", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256 }
-        : { ...record, status: "completed", resourceIdentitySha256: result.resourceIdentitySha256 };
-      await this.#writeOperation(next);
+      const { recordSha256, ...base } = record;
+      const next = await this.#appendOperation({ ...base, status: "completed", ...billingPatch, resourceIdentitySha256: result.resourceIdentitySha256, priorRecordSha256: recordSha256 });
+      operationRecordSha256s[index] = next.recordSha256;
+      state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((item) => item.operationId), null, null, operationRecordSha256s);
     }
 
-    state = await this.#advance(state, state.version === 2 ? "observing" : "discovering_deployed", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
+    state = await this.#advance(state, state.version === 2 ? "observing" : "discovering_deployed", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null, operationRecordSha256s);
     const discovered = await Promise.all(operations.map((operation) => input.registry.discover(operation.provider)));
     if (discovered.some((item) => item.capability !== "available" || item.authentication !== "authorized")) {
       await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "PROVIDER_UNAVAILABLE");
       throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
     }
     const resources = await Promise.all(operations.map(async (operation, index) => {
-      const record = await this.#readOperation(operation.operationId);
+      const record = await this.#currentOperation(state, operation, request);
       if (record.status !== "completed" || !record.resourceIdentitySha256) throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
       return {
         provider: operation.provider, operationId: operation.operationId, region: operation.region, desiredDigest: operation.desiredDigest,
@@ -701,7 +734,7 @@ export class ReleaseCertificationController {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
       throw new Error("RELEASE_CONTROLLER_FINALIZATION_INPUT_REQUIRED");
     }
-    await this.#assertCostsObserved(state.providerOperationIds, receipt.maximumAuthorizedCostMicros);
+    await this.#assertCostsObserved(state, request, receipt.maximumAuthorizedCostMicros);
     state = await this.#advanceLive(state, "finalizing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
     const finalization = await finalizeReleaseCertification({
       ...input.finalization,
@@ -720,11 +753,11 @@ export class ReleaseCertificationController {
     return { ...provisioned, state, materialized, protected: protectedRun, finalization };
   }
 
-  async #advance(prior: ReleaseControllerState, status: ReleaseControllerState["status"], authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
+  async #advance(prior: ReleaseControllerState, status: ReleaseControllerState["status"], authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"], providerOperationRecordSha256s = prior.providerOperationRecordSha256s): Promise<ReleaseControllerState> {
     const { stateSha256: _priorStateSha256, ...priorState } = prior;
     const next = await stateFor({
       ...priorState, status, priorStateSha256: prior.stateSha256, authorizationReceiptSha256,
-      providerOperationIds, deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
+      providerOperationIds, ...(providerOperationRecordSha256s ? { providerOperationRecordSha256s } : {}), deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
     });
     await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     await this.#writeCurrent(next);
@@ -758,44 +791,86 @@ export class ReleaseCertificationController {
     return { state, pointer: pointer.data };
   }
 
-  async #readOperation(operationId: string): Promise<ProviderOperationRecord> {
+  async #readLegacyOperation(operationId: string): Promise<ProviderOperationRecord> {
     let raw: unknown;
     try { raw = JSON.parse(await readFile(join(this.#workspace, "provider-operations", `${operationId}.json`), "utf8")); }
     catch { throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID"); }
     const schema = z.union([
       z.object({ version: z.literal(1), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), actualCostMicros: z.number().int().nonnegative(), resourceIdentitySha256: DigestSchema.nullable() }).strict(),
       z.object({ version: z.literal(2), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), billingStatus: z.enum(["unknown", "observed"]), reservedCostMicros: z.number().int().nonnegative(), actualCostMicros: z.number().int().nonnegative().nullable(), costObservation: ReleaseProviderCostObservationSchema.nullable(), costObservationSha256: DigestSchema.nullable(), accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema, resourceIdentitySha256: DigestSchema.nullable() }).strict(),
+      z.object({ version: z.literal(3), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), billingStatus: z.enum(["unknown", "observed"]), reservedCostMicros: z.number().int().nonnegative(), actualCostMicros: z.number().int().nonnegative().nullable(), costObservation: ReleaseProviderCostObservationSchema.nullable(), costObservationSha256: DigestSchema.nullable(), accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema, resourceIdentitySha256: DigestSchema.nullable(), priorRecordSha256: DigestSchema.nullable(), recordSha256: DigestSchema }).strict(),
     ]);
     const parsed = schema.safeParse(raw);
     if (!parsed.success || parsed.data.operation.operationId !== operationId) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+    if (parsed.data.version === 3 && parsed.data.recordSha256 !== await digest(withoutDigest(parsed.data, "recordSha256"))) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
     return parsed.data;
   }
 
-  async #writeOperation(record: ProviderOperationRecord): Promise<void> {
-    await writeFile(join(this.#workspace, "provider-operations", `${record.operation.operationId}.json`), `${canonicalJson(record)}\n`, "utf8");
+  async #appendOperation(record: Omit<CurrentProviderOperationRecord, "recordSha256">): Promise<CurrentProviderOperationRecord> {
+    const next = { ...record, recordSha256: await digest(record) } as CurrentProviderOperationRecord;
+    await createOrVerify(join(this.#workspace, "provider-operation-records", `${next.recordSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_OPERATION_RECORD_COLLISION");
+    return next;
   }
 
-  async #assertCostsObserved(operationIds: readonly string[], maximumAuthorizedCostMicros: number): Promise<void> {
-    let total = 0;
-    for (const operationId of operationIds) {
-      const record = await this.#readOperation(operationId);
-      if (record.version !== 2 || record.billingStatus !== "observed" || record.actualCostMicros === null || record.costObservation === null || record.costObservationSha256 === null) {
-        throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_UNOBSERVED");
-      }
-      if (record.costObservationSha256 !== await digest(record.costObservation)
-        || record.costObservation.provider !== record.operation.provider
-        || record.costObservation.operationId !== record.operation.operationId
-        || record.costObservation.candidateSha256 !== record.operation.candidateSha256
-        || record.costObservation.authorizationRequestSha256 !== record.operation.authorizationRequestSha256
-        || record.costObservation.resourceIdentitySha256 !== record.resourceIdentitySha256
-        || record.costObservation.accountScopeSha256 !== record.accountScopeSha256
-        || record.costObservation.projectScopeSha256 !== record.projectScopeSha256
-        || record.costObservation.actualCostMicros !== record.actualCostMicros) {
+  async #readOperationRecord(recordSha256: string): Promise<CurrentProviderOperationRecord> {
+    let raw: unknown;
+    try { raw = JSON.parse(await readFile(join(this.#workspace, "provider-operation-records", `${recordSha256}.json`), "utf8")); }
+    catch { throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID"); }
+    const record = await this.#readRecordValue(raw);
+    if (record.recordSha256 !== recordSha256) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+    if (record.priorRecordSha256) {
+      const prior = await this.#readOperationRecord(record.priorRecordSha256);
+      if (canonicalJson(prior.operation) !== canonicalJson(record.operation)) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+    }
+    return record;
+  }
+
+  async #readRecordValue(raw: unknown): Promise<CurrentProviderOperationRecord> {
+    const parsed = z.object({ version: z.literal(3), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), billingStatus: z.enum(["unknown", "observed"]), reservedCostMicros: z.number().int().nonnegative(), actualCostMicros: z.number().int().nonnegative().nullable(), costObservation: ReleaseProviderCostObservationSchema.nullable(), costObservationSha256: DigestSchema.nullable(), accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema, resourceIdentitySha256: DigestSchema.nullable(), priorRecordSha256: DigestSchema.nullable(), recordSha256: DigestSchema }).strict().safeParse(raw);
+    if (!parsed.success || parsed.data.recordSha256 !== await digest(withoutDigest(parsed.data, "recordSha256"))) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+    return parsed.data;
+  }
+
+  #assertOperationAuthorization(record: ProviderOperationRecord, operation: ReleaseProviderOperation, request: ReleaseAuthorizationRequest): void {
+    const effect = request.orderedEffects.find((item) => item.id === operation.effectId && item.provider === operation.provider && item.operation === operation.operation);
+    const scope = request.providerScopes.find((item) => item.provider === operation.provider);
+    if (!effect || !scope || canonicalJson(record.operation) !== canonicalJson(operation)) throw new Error("RELEASE_CONTROLLER_OPERATION_COLLISION");
+    if (record.version === 1) return;
+    if (record.reservedCostMicros !== effect.estimatedCostMicros
+      || record.accountScopeSha256 !== scope.accountScopeSha256
+      || record.projectScopeSha256 !== scope.projectScopeSha256) {
+      throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_INVALID");
+    }
+  }
+
+  async #currentOperation(state: ReleaseControllerState, operation: ReleaseProviderOperation, request: ReleaseAuthorizationRequest): Promise<ProviderOperationRecord> {
+    const index = state.providerOperationIds.indexOf(operation.operationId);
+    const recordSha256 = index >= 0 ? state.providerOperationRecordSha256s?.[index] : undefined;
+    const record = recordSha256 ? await this.#readOperationRecord(recordSha256) : await this.#readLegacyOperation(operation.operationId);
+    this.#assertOperationAuthorization(record, operation, request);
+    return record;
+  }
+
+  async #assertStateOperationBindings(state: ReleaseControllerState, request: ReleaseAuthorizationRequest): Promise<void> {
+    if (!state.providerOperationRecordSha256s || state.providerOperationRecordSha256s.length !== state.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_OPERATION_LEGACY_UNTRUSTED");
+    for (const [index, operationId] of state.providerOperationIds.entries()) {
+      const record = await this.#readOperationRecord(state.providerOperationRecordSha256s[index]!);
+      if (record.operation.operationId !== operationId) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+      this.#assertOperationAuthorization(record, record.operation, request);
+    }
+  }
+
+  async #assertCostsObserved(state: ReleaseControllerState, request: ReleaseAuthorizationRequest, _maximumAuthorizedCostMicros: number): Promise<void> {
+    if (!state.providerOperationRecordSha256s || state.providerOperationRecordSha256s.length !== state.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_UNOBSERVED");
+    for (const [index, operationId] of state.providerOperationIds.entries()) {
+      const record = await this.#readOperationRecord(state.providerOperationRecordSha256s[index]!);
+      if (record.operation.operationId !== operationId) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
+      this.#assertOperationAuthorization(record, record.operation, request);
+      if (record.billingStatus === "observed") throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_REPORT_TRANSPORT_UNAVAILABLE");
+      if (record.actualCostMicros !== null || record.costObservation !== null || record.costObservationSha256 !== null) {
         throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_OBSERVATION_INVALID");
       }
-      if (record.actualCostMicros > record.reservedCostMicros) throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_EXCEEDED");
-      total += record.actualCostMicros;
-      if (!Number.isSafeInteger(total) || total > maximumAuthorizedCostMicros) throw new Error("RELEASE_CONTROLLER_COST_EXCEEDED");
+      throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_UNOBSERVED");
     }
   }
 
@@ -819,7 +894,9 @@ export class ReleaseCertificationController {
     }>;
   }>): Promise<Pick<CurrentProviderOperationRecord, "billingStatus" | "actualCostMicros" | "costObservation" | "costObservationSha256">> {
     if (result.actualCostMicros === undefined && result.costObservation === undefined) {
-      return { billingStatus: record.billingStatus, actualCostMicros: record.actualCostMicros, costObservation: record.costObservation, costObservationSha256: record.costObservationSha256 };
+      /* A persisted self-report from an older/forged record never survives a
+       * generic reconciliation pass as actual billing evidence. */
+      return { billingStatus: "unknown", actualCostMicros: null, costObservation: null, costObservationSha256: null };
     }
     /* No generic registry result can establish actual billing. An authenticated
      * provider-report adapter must first persist and verify provider-returned
@@ -847,6 +924,7 @@ export class ReleaseCertificationController {
     catch { throw new Error("RELEASE_CONTROLLER_STATE_INVALID"); }
     const state = ReleaseControllerStateSchema.safeParse(raw);
     if (!state.success || state.data.stateSha256 !== stateSha256 || state.data.stateSha256 !== await digest(withoutDigest(state.data, "stateSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    if (state.data.providerOperationRecordSha256s && state.data.providerOperationRecordSha256s.length !== state.data.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     if (state.data.status === "discovering" && (state.data.priorStateSha256 !== null || state.data.authorizationRequestSha256 !== null)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     if (state.data.status === "authorization_required") {
       if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");

@@ -981,6 +981,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(reserves).toBe(2); expect(modelPosts).toBe(2);
     const finalizationMigration = await Bun.file("migrations/phase-07/013_production_priced_continuation_finalizations.sql").text();
     await admin.query(finalizationMigration); await admin.query(finalizationMigration);
+    const cleanupProofMigration = await Bun.file("migrations/phase-07/018_production_priced_continuation_cleanup_proofs.sql").text();
+    await admin.query(cleanupProofMigration); await admin.query(cleanupProofMigration);
     // This fixture seeds balances administratively instead of running a rail
     // credit. Create the clearing account that real verified credit creates.
     await admin.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES('treasury:clearing','sat') ON CONFLICT(account_id) DO NOTHING");
@@ -1273,16 +1275,43 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey)).toEqual(claimBeforeCleanup);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
     expect(await nativeWorkerRecords.read(workerOperationId)).toMatchObject({ resourceId: "fixture-workspace-machine", requestSha256: "c".repeat(64), state: "terminated" });
-    const cleanupKey = `priced-worker-cleanup:${hash({ accountId, claimReference: workspaceClaim.claimReference })}`;
-    const terminalProof = await cleanupJournal.read<Record<string, unknown>>(`${cleanupKey}:terminated:v2`);
-    if (!terminalProof) throw new Error("V2_TERMINAL_CLEANUP_PROOF_REQUIRED");
-    const forgedProof = { ...terminalProof.value, leaseToken: "lease:forged" };
-    const forgedCleanupJournal = new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup-forged", scopeSha256: "8".repeat(64) });
-    await forgedCleanupJournal.claim(`${cleanupKey}:terminated:v2`, hash(forgedProof), forgedProof);
-    const getsBeforeForgedTerminalProof = cleanupGets;
-    await expect(new ProductionPricedContinuationCleanup({ ...cleanupInput, journal: forgedCleanupJournal }).cleanup(accountId, workspaceResume.idempotencyKey))
+    const cleanupAdmin = admin;
+    if (!cleanupAdmin) throw new Error("CLEANUP_PROOF_ADMIN_REQUIRED");
+    const terminalProof = (await cleanupAdmin.query<{ proof_json: Record<string, unknown>; proof_sha256: string; proof_revision: number }>(`SELECT proof_json,proof_sha256,proof_revision
+      FROM production_real.priced_continuation_cleanup_proofs WHERE claim_reference=$1 AND account_id=$2`, [workspaceClaim.claimReference, accountId])).rows[0];
+    if (!terminalProof) throw new Error("SQL_TERMINAL_CLEANUP_PROOF_REQUIRED");
+    expect(terminalProof.proof_revision).toBe(1);
+    expect(terminalProof.proof_sha256).toBe(hash(terminalProof.proof_json));
+    const replaceTerminalProof = async (proof: Record<string, unknown>, proofSha256: string) => {
+      await cleanupAdmin.query("ALTER TABLE production_real.priced_continuation_cleanup_proofs DISABLE TRIGGER priced_cleanup_proof_guard");
+      try {
+        await cleanupAdmin.query("DELETE FROM production_real.priced_continuation_cleanup_proofs WHERE claim_reference=$1", [workspaceClaim.claimReference]);
+        await cleanupAdmin.query(`INSERT INTO production_real.priced_continuation_cleanup_proofs(claim_reference,account_id,proof_revision,proof_sha256,proof_json)
+          VALUES($1,$2,1,$3,$4::jsonb)`, [workspaceClaim.claimReference, accountId, proofSha256, canonicalJson(proof)]);
+      } finally { await cleanupAdmin.query("ALTER TABLE production_real.priced_continuation_cleanup_proofs ENABLE TRIGGER priced_cleanup_proof_guard"); }
+    };
+    for (const forgedProof of [
+      { ...terminalProof.proof_json, accountId: "account:foreign" },
+      { ...terminalProof.proof_json, sessionId: "session:foreign" },
+      { ...terminalProof.proof_json, leaseToken: "lease:forged" },
+    ]) {
+      await replaceTerminalProof(forgedProof, hash(forgedProof));
+      const getsBeforeForgedTerminalProof = cleanupGets;
+      const unrelatedJournal = new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup-forged", scopeSha256: "8".repeat(64) });
+      await expect(new ProductionPricedContinuationCleanup({ ...cleanupInput, journal: unrelatedJournal }).cleanup(accountId, workspaceResume.idempotencyKey))
+        .rejects.toThrow("PRICED_CLEANUP_PROOF_BINDING_DENIED");
+      expect(cleanupGets).toBe(getsBeforeForgedTerminalProof);
+      await replaceTerminalProof(terminalProof.proof_json, terminalProof.proof_sha256);
+    }
+    await replaceTerminalProof(terminalProof.proof_json, "0".repeat(64));
+    const getsBeforeForgedProofHash = cleanupGets;
+    await expect(new ProductionPricedContinuationCleanup({ ...cleanupInput,
+      journal: new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup-forged-hash", scopeSha256: "8".repeat(64) }) }).cleanup(accountId, workspaceResume.idempotencyKey))
       .rejects.toThrow("PRICED_CLEANUP_PROOF_BINDING_DENIED");
-    expect(cleanupGets).toBe(getsBeforeForgedTerminalProof);
+    expect(cleanupGets).toBe(getsBeforeForgedProofHash);
+    await replaceTerminalProof(terminalProof.proof_json, terminalProof.proof_sha256);
+    await expect(cleanupAdmin.query(`INSERT INTO production_real.priced_continuation_cleanup_proofs(claim_reference,account_id,proof_revision,proof_sha256,proof_json)
+      VALUES('claim:invalid-proof',$1,2,$2,$3::jsonb)`, [accountId, terminalProof.proof_sha256, canonicalJson(terminalProof.proof_json)])).rejects.toThrow();
     expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
     // A fresh public facade instance performs the terminal query/replay only:
     // it traverses the mounted runner but cannot redispatch the original model

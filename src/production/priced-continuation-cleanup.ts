@@ -24,6 +24,14 @@ const TerminalProofSchema = z.object({
   expectedSessionVersion: z.number().int().nonnegative(), expectedArtifactVersion: z.number().int().nonnegative(), pauseGeneration: z.number().int().positive(),
   cleanupKey: z.string().min(1), cleanupIdentitySha256: Digest, cleanupRevision: z.literal(1), binding: CleanupBindingSchema,
 }).strict();
+const TerminalProofContextSchema = TerminalProofSchema.pick({
+  claimReference: true, accountId: true, sessionId: true, checkpointId: true, actionId: true, operationId: true, leaseToken: true,
+  allocationIntentReference: true, capacityIntentReference: true, capacityReference: true, sessionBindingDigest: true,
+  expectedSessionVersion: true, expectedArtifactVersion: true, pauseGeneration: true, cleanupKey: true,
+}).strict();
+type TerminalProof = z.infer<typeof TerminalProofSchema>;
+type TerminalProofContext = z.infer<typeof TerminalProofContextSchema>;
+type TerminalProofRecord = Readonly<{ proof_json: unknown; proof_sha256: string; proof_revision: number }>;
 
 /** Paid terminal cleanup only. It never supplies abandonment/refund authority
  * or infers absence from missing SQL/native records. All queries and mutations
@@ -36,6 +44,39 @@ export class ProductionPricedContinuationCleanup {
     assertProductionReadyCapacity(input.capacity); assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.journal);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     this.#funding = new PostgresSqlFundingStore(this.#pool, { deadlineMs: 5000, maxAttempts: 4 });
+  }
+
+  #validateTerminalProof(row: TerminalProofRecord, context: TerminalProofContext): TerminalProof {
+    const proof = TerminalProofSchema.safeParse(row.proof_json);
+    if (!proof.success || row.proof_revision !== 1 || !Digest.safeParse(row.proof_sha256).success || row.proof_sha256 !== hash(proof.data)
+      || Object.entries(context).some(([field, value]) => proof.data[field as keyof TerminalProofContext] !== value))
+      throw new Error("PRICED_CLEANUP_PROOF_BINDING_DENIED");
+    return proof.data;
+  }
+
+  async #readTerminalProof(context: TerminalProofContext): Promise<TerminalProof | undefined> {
+    const client = await this.#pool.connect();
+    try {
+      const row = (await client.query<TerminalProofRecord>(`SELECT proof_json,proof_sha256,proof_revision
+        FROM production_real.priced_continuation_cleanup_proofs WHERE claim_reference=$1 AND account_id=$2`,
+      [context.claimReference, context.accountId])).rows[0];
+      return row ? this.#validateTerminalProof(row, context) : undefined;
+    } finally { client.release(); }
+  }
+
+  async #claimTerminalProof(context: TerminalProofContext, binding: z.infer<typeof CleanupBindingSchema>, cleanupIdentitySha256: string, cleanupRevision: number): Promise<TerminalProof> {
+    const proof = TerminalProofSchema.parse({ version: 2, ...context, cleanupIdentitySha256, cleanupRevision, binding });
+    const proofSha256 = hash(proof);
+    const client = await this.#pool.connect();
+    try {
+      await client.query(`INSERT INTO production_real.priced_continuation_cleanup_proofs(claim_reference,account_id,proof_revision,proof_sha256,proof_json)
+        VALUES($1,$2,1,$3,$4::jsonb) ON CONFLICT(claim_reference) DO NOTHING`, [context.claimReference, context.accountId, proofSha256, canonicalJson(proof)]);
+      const row = (await client.query<TerminalProofRecord>(`SELECT proof_json,proof_sha256,proof_revision
+        FROM production_real.priced_continuation_cleanup_proofs WHERE claim_reference=$1 AND account_id=$2`,
+      [context.claimReference, context.accountId])).rows[0];
+      if (!row) throw new Error("PRICED_CLEANUP_PROOF_READBACK_REQUIRED");
+      return this.#validateTerminalProof(row, context);
+    } finally { client.release(); }
   }
 
   async cleanup(accountId: string, idempotencyKey: string): Promise<Readonly<{ status: "cleaned" | "pending" | "blocked" }>> {
@@ -56,13 +97,12 @@ export class ProductionPricedContinuationCleanup {
     } finally { client.release(); }
     if (!owned || owned.session_id !== claim.sessionId) throw new Error("PRICED_CLEANUP_TERMINAL_REQUIRED");
     const key = `priced-worker-cleanup:${hash({ accountId, claimReference: claim.claimReference })}`;
-    const terminalKey = `${key}:terminated:v2`;
-    const context = {
+    const context = TerminalProofContextSchema.parse({
       claimReference: claim.claimReference, accountId, sessionId: claim.sessionId, checkpointId: claim.checkpointId,
       actionId: claim.actionId, operationId: claim.operationId, leaseToken: claim.leaseToken, allocationIntentReference: claim.allocationIntentReference,
       capacityIntentReference: owned.capacity_intent_reference, capacityReference: owned.capacity_reference, sessionBindingDigest: owned.session_binding_digest,
       expectedSessionVersion: Number(owned.expected_session_version), expectedArtifactVersion: Number(owned.expected_artifact_version), pauseGeneration: Number(owned.pause_generation), cleanupKey: key,
-    };
+    });
     const complete = async (binding: z.infer<typeof CleanupBindingSchema>): Promise<Readonly<{ status: "cleaned" }>> => {
       if (binding.claimReference !== context.claimReference || binding.accountId !== context.accountId || binding.capacityIntentReference !== context.capacityIntentReference
         || binding.capacityReference !== context.capacityReference || binding.sessionBindingDigest !== context.sessionBindingDigest) throw new Error("PRICED_CLEANUP_PROOF_BINDING_DENIED");
@@ -81,21 +121,11 @@ export class ProductionPricedContinuationCleanup {
       });
       return { status: "cleaned" };
     };
-    // A v2 termination proof contains the SQL-owned claim/session/lease tuple
-    // plus the immutable v1 native binding. It is sufficient for the terminal
-    // ledger/outbox tail, so replay must not query a provider-owned resource.
-    const terminalProof = await this.input.journal.read<unknown>(terminalKey);
-    if (terminalProof) {
-      const proof = TerminalProofSchema.safeParse(terminalProof.value);
-      if (!proof.success || terminalProof.revision !== 1 || terminalProof.identitySha256 !== hash(proof.data)
-        || proof.data.cleanupIdentitySha256.length !== 64 || proof.data.cleanupRevision !== 1
-        || Object.entries(context).some(([field, value]) => proof.data[field as keyof typeof context] !== value)) throw new Error("PRICED_CLEANUP_PROOF_BINDING_DENIED");
-      const cleanupProof = await this.input.journal.read<unknown>(key);
-      if (!cleanupProof || cleanupProof.revision !== proof.data.cleanupRevision
-        || cleanupProof.identitySha256 !== proof.data.cleanupIdentitySha256
-        || canonicalJson(cleanupProof.value) !== canonicalJson(proof.data.binding)) throw new Error("PRICED_CLEANUP_PROOF_BINDING_DENIED");
-      return complete(proof.data.binding);
-    }
+    // The SQL-owned proof is shared by standalone and mounted cleanup
+    // facades. A valid record is sufficient for the terminal ledger/outbox
+    // tail, so replay must not inspect a provider-owned resource.
+    const terminalProof = await this.#readTerminalProof(context);
+    if (terminalProof) return complete(terminalProof.binding);
     const capacity = await this.input.capacity.inspect({ intentReference: owned.capacity_intent_reference });
     if (!capacity || capacity.intentReference !== owned.capacity_intent_reference || capacity.reference !== owned.capacity_reference || capacity.expectedSessionBindingDigest !== owned.session_binding_digest)
       return { status: "blocked" };
@@ -132,8 +162,7 @@ export class ProductionPricedContinuationCleanup {
       if (observed.status !== "terminated") return { status: "pending" };
       await this.input.journal.claim(`${key}:terminated`, identity, binding);
     }
-    const terminalBinding = TerminalProofSchema.parse({ version: 2, ...context, cleanupIdentitySha256: identity, cleanupRevision: cleanupRecord.record.revision, binding });
-    await this.input.journal.claim(terminalKey, hash(terminalBinding), terminalBinding);
-    return complete(binding);
+    const terminal = await this.#claimTerminalProof(context, binding, identity, cleanupRecord.record.revision);
+    return complete(terminal.binding);
   }
 }

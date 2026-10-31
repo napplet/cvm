@@ -72,7 +72,7 @@ const migrations = [
   "phase-07/008_production_account_owners.sql", "phase-07/009_production_resume_pricing_quotes.sql",
   "phase-07/010_production_priced_continuations.sql", "phase-07/011_production_priced_continuation_workers.sql",
   "phase-07/012_production_priced_continuation_restores.sql", "phase-07/013_production_priced_continuation_finalizations.sql",
-  "phase-07/017_production_resume_pricing_quote_v2.sql",
+  "phase-07/017_production_resume_pricing_quote_v2.sql", "phase-07/018_production_priced_continuation_cleanup_proofs.sql",
   "development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql",
   "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql",
   "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql",

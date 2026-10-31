@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -52,7 +52,8 @@ export type ModalBillingCredentialResolver = Readonly<{
 
 type ReportDisposition = "passed" | "non_zero_exit" | "timeout" | "output_overflow";
 export type ModalBillingChildResult = Readonly<{
-  disposition: ReportDisposition; exitCode: number | null; argv: readonly string[]; stdout: Uint8Array; stderr: Uint8Array;
+  disposition: ReportDisposition; exitCode: number | null; terminationSignal?: "SIGTERM" | "SIGKILL"; argv: readonly string[]; stdout: Uint8Array; stderr: Uint8Array;
+  startedAtMs: number; finishedAtMs: number;
 }>;
 
 const sha256 = (value: string | Uint8Array | ArrayBuffer) => createHash("sha256").update(value instanceof ArrayBuffer ? new Uint8Array(value) : value).digest("hex");
@@ -170,13 +171,17 @@ function nonnegativeMicros(rows: readonly ModalBillingReportRow[]): bigint {
   }, 0n);
 }
 
-async function bounded(stream: ReadableStream<Uint8Array>, limit: number, terminate: () => void): Promise<Readonly<{ bytes: Uint8Array; overflowed: boolean }>> {
+async function bounded(stream: ReadableStream<Uint8Array>, limit: number, stopped: Promise<void>, terminate: () => void): Promise<Readonly<{ bytes: Uint8Array; overflowed: boolean }>> {
   const reader = stream.getReader(); const chunks: Uint8Array[] = []; let length = 0; let overflowed = false;
   try {
     while (true) {
-      const next = await reader.read(); if (next.done) break;
+      const next = await Promise.race([
+        reader.read().catch(() => ({ done: true, value: undefined })),
+        stopped.then(() => ({ done: true, value: undefined })),
+      ]);
+      if (next.done || !next.value) break;
       const remaining = limit - length;
-      if (next.value.byteLength > remaining) { if (remaining > 0) chunks.push(next.value.slice(0, remaining)); length = limit; overflowed = true; terminate(); await reader.cancel(); break; }
+      if (next.value.byteLength > remaining) { if (remaining > 0) chunks.push(next.value.slice(0, remaining)); length = limit; overflowed = true; terminate(); await reader.cancel().catch(() => undefined); break; }
       chunks.push(next.value); length += next.value.byteLength;
     }
   } finally { reader.releaseLock(); }
@@ -195,32 +200,61 @@ export async function runPinnedModalBillingReport(input: Readonly<{
   const executableBytes = new Uint8Array(await Bun.file(input.executable).arrayBuffer());
   if (sha256(executableBytes) !== input.executableSha256.toLowerCase()) throw new Error("MODAL_BILLING_EXECUTABLE_DIGEST_INVALID");
   const home = await mkdtemp(join(tmpdir(), "napplet-cvm-modal-billing-"));
+  const verifiedExecutable = join(home, "modal-verified");
   const argv = Object.freeze([input.executable, "environment", "billing", "report", input.environmentName, "--start", new Date(input.intervalStartMs).toISOString(), "--end", new Date(input.intervalEndMs).toISOString(), "--resolution", "h", "--tag-names", input.tagNames.join(","), "--show-resources", "--json"]);
   try {
-    const child = Bun.spawn([...argv], { cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: {
-      PATH: dirname(input.executable), HOME: home, MODAL_CONFIG_PATH: join(home, "modal.toml"), MODAL_LOGLEVEL: "WARNING", MODAL_TOKEN_ID: input.credential.tokenId, MODAL_TOKEN_SECRET: input.credential.tokenSecret,
+    /* Run a private copy of the bytes that were hashed.  The configured path
+     * is never executed after verification, so a replacement race cannot gain
+     * either of the dispatch credentials. */
+    await writeFile(verifiedExecutable, executableBytes, { mode: 0o700 });
+    await chmod(verifiedExecutable, 0o700);
+    const startedAtMs = Date.now();
+    const child = Bun.spawn([verifiedExecutable, ...argv.slice(1)], { cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true, env: {
+      PATH: dirname(verifiedExecutable), HOME: home, MODAL_CONFIG_PATH: join(home, "modal.toml"), MODAL_LOGLEVEL: "WARNING", MODAL_TOKEN_ID: input.credential.tokenId, MODAL_TOKEN_SECRET: input.credential.tokenSecret,
     } });
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill(); }, input.timeoutMs);
-    const [exitCode, stdout, stderr] = await Promise.all([child.exited, bounded(child.stdout, input.maximumStdoutBytes, () => child.kill()), bounded(child.stderr, input.maximumStderrBytes, () => child.kill())]).finally(() => clearTimeout(timer));
-    return Object.freeze({ disposition: timedOut ? "timeout" : stdout.overflowed || stderr.overflowed ? "output_overflow" : exitCode === 0 ? "passed" : "non_zero_exit", exitCode, argv, stdout: stdout.bytes, stderr: stderr.bytes });
+    let timedOut = false, signal: "SIGTERM" | "SIGKILL" | undefined, stop!: () => void;
+    const stopped = new Promise<void>(resolve => { stop = resolve; });
+    let stopping: Promise<void> | undefined;
+    const terminate = () => {
+      if (stopping) return;
+      stopping = (async () => {
+        signal = "SIGTERM";
+        try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+        await Promise.race([child.exited.then(() => undefined), Bun.sleep(50)]);
+        signal = "SIGKILL";
+        try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+        await Promise.race([child.exited.then(() => undefined), Bun.sleep(250)]);
+        stop();
+      })();
+    };
+    const timer = setTimeout(() => { timedOut = true; terminate(); }, input.timeoutMs);
+    const exit = Promise.race([child.exited, stopped.then(() => null)]);
+    const [exitCode, stdout, stderr] = await Promise.all([exit, bounded(child.stdout, input.maximumStdoutBytes, stopped, terminate), bounded(child.stderr, input.maximumStderrBytes, stopped, terminate)]).finally(() => clearTimeout(timer));
+    if (stopping) await stopping;
+    return Object.freeze({ disposition: timedOut ? "timeout" : stdout.overflowed || stderr.overflowed ? "output_overflow" : exitCode === 0 ? "passed" : "non_zero_exit", exitCode, ...(signal ? { terminationSignal: signal } : {}), argv, stdout: stdout.bytes, stderr: stderr.bytes, startedAtMs, finishedAtMs: Date.now() });
   } finally { await rm(home, { recursive: true, force: true }); }
 }
 
-type HeldReason = "attempt_limit" | "credential_unavailable" | "credential_echo" | "child_failure" | "report_invalid" | "scope_mismatch" | "finality_unproven" | "artifact_unavailable";
+type HeldReason = "attempt_limit" | "credential_unavailable" | "credential_echo" | "child_failure" | "report_invalid" | "scope_mismatch" | "finality_unproven" | "artifact_unavailable" | "grant_expired" | "dispatch_uncertain";
 /** stderr may contain credentials or configuration supplied to the CLI. It is
  * never persisted as a raw artifact: only its bounded byte count and digest
  * are retained for correlation, neither of which can reconstruct its bytes. */
 const ArtifactReferenceSchema = z.object({ uri: z.string().min(1).max(4_096), generation: z.string().min(1).max(256), sha256: Digest }).strict();
-const HeldReasonSchema = z.enum(["attempt_limit", "credential_unavailable", "credential_echo", "child_failure", "report_invalid", "scope_mismatch", "finality_unproven", "artifact_unavailable"]);
-const AttemptSchema = z.object({ attempt: z.number().int().min(1).max(8), atMs: z.number().int().positive(), disposition: z.enum(["passed", "non_zero_exit", "timeout", "output_overflow", "credential_unavailable", "credential_echo", "artifact_unavailable"]), stdout: ArtifactReferenceSchema.optional(), stderrByteLength: z.number().int().nonnegative().optional(), stderrSha256: Digest.optional(), reason: HeldReasonSchema }).strict();
+const HeldReasonSchema = z.enum(["attempt_limit", "credential_unavailable", "credential_echo", "child_failure", "report_invalid", "scope_mismatch", "finality_unproven", "artifact_unavailable", "grant_expired", "dispatch_uncertain"]);
+const AttemptSchema = z.object({
+  attempt: z.number().int().min(1).max(8), state: z.enum(["dispatch_intent", "completed"]), atMs: z.number().int().positive(),
+  startedAtMs: z.number().int().positive().optional(), finishedAtMs: z.number().int().positive().optional(),
+  disposition: z.enum(["passed", "non_zero_exit", "timeout", "output_overflow", "credential_unavailable", "credential_echo", "artifact_unavailable", "grant_expired"]).optional(),
+  argvSha256: Digest, executableSha256: Digest, stdout: ArtifactReferenceSchema.optional(), stdoutSha256: Digest.optional(), stderrByteLength: z.number().int().nonnegative().optional(), stderrSha256: Digest.optional(), exitCode: z.number().int().nullable().optional(), terminationSignal: z.enum(["SIGTERM", "SIGKILL"]).optional(), envelopeSha256: Digest.optional(), rowIdentitiesSha256: Digest.optional(), coverage: z.literal("unknown").optional(), reason: HeldReasonSchema.optional(),
+}).strict();
 export const ModalBillingReportCaptureSchema = z.object({ status: z.literal("held"), reason: HeldReasonSchema, grantSha256: Digest, reportRequestSha256: Digest, observedMicros: z.string().regex(/^[0-9]+$/u).optional() }).strict();
-export const ModalBillingReportJournalRecordSchema = z.object({ schemaVersion: z.literal("modal-billing-report-journal-v1"), grantSha256: Digest, reportRequestSha256: Digest, attempts: z.array(AttemptSchema).max(8), result: ModalBillingReportCaptureSchema.optional() }).strict().superRefine((value, context) => {
+export const ModalBillingReportJournalRecordSchema = z.object({ schemaVersion: z.literal("modal-billing-report-journal-v2"), grantSha256: Digest, reportRequestSha256: Digest, attempts: z.array(AttemptSchema).max(8), result: ModalBillingReportCaptureSchema.optional() }).strict().superRefine((value, context) => {
   if (value.attempts.some((attempt, index) => attempt.attempt !== index + 1)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_ATTEMPTS_INVALID" });
+  if (value.attempts.some((attempt, index) => attempt.state === "dispatch_intent" && index !== value.attempts.length - 1)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_INTENT_INVALID" });
   if (value.result && value.result.grantSha256 !== value.grantSha256 || value.result && value.result.reportRequestSha256 !== value.reportRequestSha256) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_RESULT_INVALID" });
 });
 type Attempt = Readonly<z.infer<typeof AttemptSchema>>;
-export type ModalBillingReportJournalRecord = Readonly<{ schemaVersion: "modal-billing-report-journal-v1"; grantSha256: string; reportRequestSha256: string; attempts: readonly Attempt[]; result?: ModalBillingReportCapture }>;
+export type ModalBillingReportJournalRecord = Readonly<{ schemaVersion: "modal-billing-report-journal-v2"; grantSha256: string; reportRequestSha256: string; attempts: readonly Attempt[]; result?: ModalBillingReportCapture }>;
 export type ModalBillingReportCapture = Readonly<z.infer<typeof ModalBillingReportCaptureSchema>>;
 export type ModalBillingReportJournal = Readonly<{
   claim(input: ModalBillingReportJournalRecord): Promise<Readonly<{ claimed: boolean; revision: number; record: ModalBillingReportJournalRecord }>>;
@@ -233,7 +267,7 @@ export type ModalBillingReportJournal = Readonly<{
 export function createMemoryModalBillingReportJournal(): ModalBillingReportJournal {
   const records = new Map<string, Readonly<{ revision: number; record: ModalBillingReportJournalRecord }>>();
   return Object.freeze({
-    async claim(record) { const previous = records.get(record.reportRequestSha256); if (previous) { if (!equal(previous.record, { ...previous.record, attempts: previous.record.attempts, result: previous.record.result }) || previous.record.grantSha256 !== record.grantSha256) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT"); return { claimed: false, ...previous }; } const saved = Object.freeze({ revision: 1, record: Object.freeze(record) }); records.set(record.reportRequestSha256, saved); return { claimed: true, ...saved }; },
+    async claim(record) { const previous = records.get(record.reportRequestSha256); if (previous) { if (previous.record.grantSha256 !== record.grantSha256 || previous.record.schemaVersion !== record.schemaVersion) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT"); return { claimed: false, ...previous }; } const saved = Object.freeze({ revision: 1, record: Object.freeze(record) }); records.set(record.reportRequestSha256, saved); return { claimed: true, ...saved }; },
     async read(request) { return records.get(request); },
     async compareAndSet(input) { const current = records.get(input.reportRequestSha256); if (!current || current.revision !== input.expectedRevision || current.record.grantSha256 !== input.record.grantSha256) return undefined; const saved = Object.freeze({ revision: current.revision + 1, record: Object.freeze(input.record) }); records.set(input.reportRequestSha256, saved); return saved; },
   });
@@ -243,11 +277,13 @@ function held(grant: ModalBillingObservationGrant, reason: HeldReason, observedM
   return Object.freeze({ status: "held", reason, grantSha256: grant.grantSha256, reportRequestSha256: reportRequestSha256(grant), ...(observedMicros === undefined ? {} : { observedMicros }) });
 }
 
-async function append(journal: ModalBillingReportJournal, current: Readonly<{ revision: number; record: ModalBillingReportJournalRecord }>, attempt: Attempt, result: ModalBillingReportCapture): Promise<ModalBillingReportCapture> {
-  const next = Object.freeze({ ...current.record, attempts: Object.freeze([...current.record.attempts, attempt]), result });
+async function finish(journal: ModalBillingReportJournal, current: Readonly<{ revision: number; record: ModalBillingReportJournalRecord }>, attempt: Attempt, result: ModalBillingReportCapture): Promise<ModalBillingReportCapture> {
+  const next = Object.freeze({ ...current.record, attempts: Object.freeze([...current.record.attempts.slice(0, -1), attempt]), result });
   const saved = await journal.compareAndSet({ reportRequestSha256: current.record.reportRequestSha256, expectedRevision: current.revision, record: next });
-  if (!saved) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
-  return saved.record.result ?? result;
+  if (saved) return saved.record.result ?? result;
+  const reloaded = await journal.read(current.record.reportRequestSha256);
+  if (reloaded?.record.result) return reloaded.record.result;
+  throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
 }
 
 /** Provider reports are evidence only. A successful parse does not establish
@@ -262,47 +298,81 @@ export function createModalBillingReportCollector(input: Readonly<{
   const verify = (raw: unknown) => {
     const grant = verifyModalBillingObservationGrant(raw);
     if (grant.cliExecutableSha256 !== input.executableSha256.toLowerCase() || grant.credentialReferenceSha256 !== input.credentialReferenceSha256.toLowerCase()) throw new Error("MODAL_BILLING_COLLECTOR_SCOPE_INVALID");
-    if (now() >= grant.expiresAtMs) throw new Error("MODAL_BILLING_GRANT_EXPIRED");
     return grant;
   };
-  const initial = (grant: ModalBillingObservationGrant): ModalBillingReportJournalRecord => Object.freeze({ schemaVersion: "modal-billing-report-journal-v1", grantSha256: grant.grantSha256, reportRequestSha256: reportRequestSha256(grant), attempts: Object.freeze([]) });
+  const active = (grant: ModalBillingObservationGrant) => now() < grant.expiresAtMs;
+  const initial = (grant: ModalBillingObservationGrant): ModalBillingReportJournalRecord => Object.freeze({ schemaVersion: "modal-billing-report-journal-v2", grantSha256: grant.grantSha256, reportRequestSha256: reportRequestSha256(grant), attempts: Object.freeze([]) });
+  const logicalArgv = (grant: ModalBillingObservationGrant) => Object.freeze([input.executable, "environment", "billing", "report", grant.environmentName, "--start", new Date(grant.intervalStartMs).toISOString(), "--end", new Date(grant.intervalEndMs).toISOString(), "--resolution", "h", "--tag-names", Object.keys(grant.requiredTags).sort().join(","), "--show-resources", "--json"]);
+  const complete = (current: Readonly<{ revision: number; record: ModalBillingReportJournalRecord }>, grant: ModalBillingObservationGrant, patch: Omit<z.infer<typeof AttemptSchema>, "attempt" | "state" | "atMs" | "argvSha256" | "executableSha256">, result: ModalBillingReportCapture) => {
+    const intent = current.record.attempts.at(-1);
+    if (!intent || intent.state !== "dispatch_intent") throw new Error("MODAL_BILLING_JOURNAL_INTENT_REQUIRED");
+    return finish(input.journal, current, Object.freeze({ ...intent, ...patch, state: "completed" as const, finishedAtMs: now() }), result);
+  };
+  const validArtifact = async (reference: ModalBillingArtifactReference, key: string, digest: string): Promise<Uint8Array | undefined> => {
+    if (reference.sha256 !== digest || !reference.uri.endsWith(`/${key}`) || !/^[1-9][0-9]{0,255}$/u.test(reference.generation)) return undefined;
+    const bytes = await input.artifacts.readExact(reference).catch(() => undefined);
+    return bytes && sha256(bytes) === digest ? bytes : undefined;
+  };
   return Object.freeze({
     async recover(raw: unknown): Promise<ModalBillingReportCapture> {
       const grant = verify(raw); const current = await input.journal.read(reportRequestSha256(grant));
       if (!current || current.record.grantSha256 !== grant.grantSha256) return held(grant, "artifact_unavailable");
-      return current.record.result ?? held(grant, "artifact_unavailable");
+      const pending = current.record.attempts.at(-1);
+      if (pending?.state === "dispatch_intent") return held(grant, "dispatch_uncertain");
+      if (!current.record.result) return held(grant, "artifact_unavailable");
+      const completed = current.record.attempts.at(-1);
+      if (completed?.stdout) {
+        const key = `modal-billing/${current.record.reportRequestSha256}/${completed.attempt}/stdout`;
+        if (!completed.stdoutSha256 || !await validArtifact(completed.stdout, key, completed.stdoutSha256)) return held(grant, "artifact_unavailable");
+      }
+      return current.record.result;
     },
     async capture(raw: unknown): Promise<ModalBillingReportCapture> {
       const grant = verify(raw); const requested = initial(grant); const claimed = await input.journal.claim(requested);
       let current = { revision: claimed.revision, record: claimed.record };
       if (current.record.grantSha256 !== grant.grantSha256 || current.record.reportRequestSha256 !== requested.reportRequestSha256) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
-      if (current.record.result?.reason === "finality_unproven" || current.record.attempts.length >= grant.maximumAttempts) return current.record.result ?? held(grant, "attempt_limit");
+      if (current.record.result) return current.record.result;
+      if (current.record.attempts.at(-1)?.state === "dispatch_intent") return held(grant, "dispatch_uncertain");
+      if (current.record.attempts.length >= grant.maximumAttempts) return held(grant, "attempt_limit");
       const attempt = current.record.attempts.length + 1;
+      const intent = Object.freeze({ attempt, state: "dispatch_intent" as const, atMs: now(), argvSha256: sha256(canonicalJson(logicalArgv(grant))), executableSha256: input.executableSha256.toLowerCase() });
+      const intentRecord = Object.freeze({ ...current.record, attempts: Object.freeze([...current.record.attempts, intent]) });
+      const intentSaved = await input.journal.compareAndSet({ reportRequestSha256: requested.reportRequestSha256, expectedRevision: current.revision, record: intentRecord });
+      if (!intentSaved) {
+        const reloaded = await input.journal.read(requested.reportRequestSha256);
+        return reloaded?.record.result ?? held(grant, "dispatch_uncertain");
+      }
+      current = intentSaved;
+      if (!active(grant)) return complete(current, grant, { disposition: "grant_expired", reason: "grant_expired" }, held(grant, "grant_expired"));
       let credential: Readonly<{ tokenId: string; tokenSecret: string }>;
       try { credential = await input.credentialResolver.resolve(input.credentialReference); }
-      catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "credential_unavailable", reason: "credential_unavailable" }), held(grant, "credential_unavailable")); }
+      catch { return complete(current, grant, { disposition: "credential_unavailable", reason: "credential_unavailable" }, held(grant, "credential_unavailable")); }
+      if (!active(grant)) return complete(current, grant, { disposition: "grant_expired", reason: "grant_expired" }, held(grant, "grant_expired"));
       let child: ModalBillingChildResult;
       try { child = await runPinnedModalBillingReport({ executable: input.executable, executableSha256: input.executableSha256, environmentName: grant.environmentName, intervalStartMs: grant.intervalStartMs, intervalEndMs: grant.intervalEndMs, tagNames: Object.keys(grant.requiredTags).sort(), maximumStdoutBytes: grant.maximumStdoutBytes, maximumStderrBytes: grant.maximumStderrBytes, timeoutMs: grant.timeoutMs, credential }); }
-      catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "non_zero_exit", reason: "child_failure" }), held(grant, "child_failure")); }
+      catch { return complete(current, grant, { disposition: "non_zero_exit", reason: "child_failure" }, held(grant, "child_failure")); }
       const stderrByteLength = child.stderr.byteLength;
       const stderrSha256 = sha256(child.stderr);
       const stdoutText = new TextDecoder().decode(child.stdout);
       const stderrText = new TextDecoder().decode(child.stderr);
       if (stdoutText.includes(credential.tokenId) || stdoutText.includes(credential.tokenSecret) || stderrText.includes(credential.tokenId) || stderrText.includes(credential.tokenSecret)) {
-        return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "credential_echo", stderrByteLength, stderrSha256, reason: "credential_echo" }), held(grant, "credential_echo"));
+        return complete(current, grant, { disposition: "credential_echo", stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "credential_echo" }, held(grant, "credential_echo"));
       }
+      if (!active(grant)) return complete(current, grant, { disposition: "grant_expired", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "grant_expired" }, held(grant, "grant_expired"));
       let stdout: ModalBillingArtifactReference | undefined;
+      const rawSha256 = sha256(child.stdout); const key = `modal-billing/${requested.reportRequestSha256}/${attempt}/stdout`;
       try {
-        const base = `modal-billing/${requested.reportRequestSha256}/${attempt}`;
-        stdout = await input.artifacts.createImmutable({ key: `${base}/stdout`, bytes: child.stdout, sha256: sha256(child.stdout) });
-      } catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "artifact_unavailable", stderrByteLength, stderrSha256, reason: "artifact_unavailable" }), held(grant, "artifact_unavailable")); }
-      if (child.disposition !== "passed") return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "child_failure" }), held(grant, "child_failure"));
+        stdout = await input.artifacts.createImmutable({ key, bytes: child.stdout, sha256: rawSha256 });
+        if (!await validArtifact(stdout, key, rawSha256)) throw new Error("MODAL_BILLING_ARTIFACT_BINDING_INVALID");
+      } catch { return complete(current, grant, { disposition: "artifact_unavailable", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "artifact_unavailable" }, held(grant, "artifact_unavailable")); }
+      if (child.disposition !== "passed") return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "child_failure" }, held(grant, "child_failure"));
       try {
         const rows = parseModalBillingReport(child.stdout);
-        if (!validRows(rows, grant)) return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "scope_mismatch" }), held(grant, "scope_mismatch"));
+        const envelopeSha256 = sha256(canonicalJson(rows)); const rowIdentitiesSha256 = sha256(canonicalJson(rows.map(row => ({ object_id: row.object_id, interval_start: row.interval_start, resource: row.resource }))));
+        if (!validRows(rows, grant)) return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, envelopeSha256, rowIdentitiesSha256, coverage: "unknown", reason: "scope_mismatch" }, held(grant, "scope_mismatch"));
         const observedMicros = nonnegativeMicros(rows).toString();
-        return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "finality_unproven" }), held(grant, "finality_unproven", observedMicros));
-      } catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "report_invalid" }), held(grant, "report_invalid")); }
+        return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, envelopeSha256, rowIdentitiesSha256, coverage: "unknown", reason: "finality_unproven" }, held(grant, "finality_unproven", observedMicros));
+      } catch { return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "report_invalid" }, held(grant, "report_invalid")); }
     },
   });
 }

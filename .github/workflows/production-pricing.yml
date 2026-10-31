@@ -66,6 +66,7 @@ jobs:
     timeout-minutes: 10
     env:
       NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: deny
+      NAPPLET_RUN_OPENAI_PUBLIC_SOURCE: "1"
     steps:
       - uses: actions/checkout@v4
         with:

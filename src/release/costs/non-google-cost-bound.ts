@@ -64,6 +64,8 @@ export type OpenAiResponsesUsage = z.infer<typeof UsageSchema>;
  * was (or was not) established; callers cannot turn an unbound quote into an
  * available accounting fact by choosing a provider label or clock. */
 const CostEvidenceSchema = z.object({
+  artifactReference: z.string().regex(/^evidence:[a-z0-9._:-]{3,255}$/u),
+  sourceKind: z.enum(["official_openai_model", "contextvm_transport_policy", "operator_homelab_policy", "operator_approval_policy", "unknown"]),
   sourceUrl: z.string().url().max(2048),
   sourceArtifactSha256: DigestSchema,
   sourceDocumentSha256: DigestSchema,
@@ -88,6 +90,7 @@ const SharedStandingFactSchema = z.object({ role: z.literal("explicit_approved_s
 const HeldFactSchema = z.object({ role: z.literal("unknown_held"), costType: CostTypeSchema, provider: z.string().min(3).max(128), status: z.literal("held"), holdReason: z.string().min(8).max(1024), evidence: CostEvidenceSchema }).strict();
 export const NonGoogleCostFactSchema = z.discriminatedUnion("role", [NativeFactSchema, ScopedZeroFactSchema, IncludedParentFactSchema, SharedStandingFactSchema, HeldFactSchema]);
 export type NonGoogleCostFact = z.infer<typeof NonGoogleCostFactSchema>;
+export type CostEvidenceArtifactResolver = Readonly<{ read(reference: string): Promise<Readonly<{ sourceUrl: string; bytes: Uint8Array }>> }>;
 
 function freeze<T>(value: T): T { return Object.freeze(value); }
 async function sha256(value: Uint8Array): Promise<string> { return Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer)).toString("hex"); }
@@ -103,34 +106,32 @@ const CapturedPricingDocumentSchema = z.object({
   freshUntilMs: z.number().int().positive(),
 }).strict();
 const MoneyPerMillionSchema = z.string().regex(/^\d+(?:\.\d{1,6})?$/u);
-const CapturedPriceRowSchema = z.object({
-  input_usd_per_million: MoneyPerMillionSchema,
-  cached_input_usd_per_million: MoneyPerMillionSchema,
-  output_usd_per_million: MoneyPerMillionSchema,
-  cache_write_usd_per_million: MoneyPerMillionSchema.optional(),
-}).strict();
-const CapturedPriceDocumentSchema = z.object({
-  schema: z.literal("openai-responses-pricing-capture-v1"),
-  currency: z.literal("USD"),
-  models: z.record(ModelSchema, CapturedPriceRowSchema),
-}).strict();
-
 function micros(value: string): number {
   const [whole, fraction = ""] = MoneyPerMillionSchema.parse(value).split(".");
   const parsed = BigInt(whole) * 1_000_000n + BigInt((fraction + "000000").slice(0, 6));
   if (parsed < 1n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OPENAI_PRICE_SOURCE_PRECISION_REJECTED");
   return Number(parsed);
 }
+function decodeHtml(value: string): string { return value.replace(/&(amp|lt|gt|quot|#39);/giu, (_all, entity: string) => ({ amp: "&", lt: "<", gt: ">", quot: "\"", "#39": "'" })[entity.toLowerCase()] ?? ""); }
+/** Parse only the three adjacent token-price cards emitted by the fixed,
+ * retained OpenAI model document.  The exact pinned snapshot must be present;
+ * a page redesign, a different model page, or an ambiguous extra card holds. */
+function parseOfficialHtml(bytes: Uint8Array, model: string) {
+  const html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  if (!/^\s*<!doctype html|^\s*<html\b/iu.test(html) || /\u0000/u.test(html)) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const modelCode = new RegExp(`<code[^>]*>\\s*${model.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*<\\/code>`, "u");
+  if (!modelCode.test(html)) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  const card = /<div>Input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Cached input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Output<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>/gu;
+  const matches = [...html.matchAll(card)];
+  if (matches.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const [input, cached, output] = matches[0]!.slice(1).map((value) => decodeHtml(value));
+  return { currency: "USD" as const, inputMicrosPerMillion: micros(input!), cachedInputMicrosPerMillion: micros(cached!), outputMicrosPerMillion: micros(output!) };
+}
 function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: string) {
   const parsed = CapturedPricingDocumentSchema.parse(document);
-  let payload: unknown;
-  try { payload = JSON.parse(new TextDecoder().decode(parsed.bytes)); }
-  catch { throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); }
-  const prices = CapturedPriceDocumentSchema.safeParse(payload);
-  if (!prices.success) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const row = prices.data.models[ModelSchema.parse(model)];
-  if (!row) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
-  return { document: parsed, currency: prices.data.currency, inputMicrosPerMillion: micros(row.input_usd_per_million), cachedInputMicrosPerMillion: micros(row.cached_input_usd_per_million), outputMicrosPerMillion: micros(row.output_usd_per_million), ...(row.cache_write_usd_per_million === undefined ? {} : { cacheWriteMicrosPerMillion: micros(row.cache_write_usd_per_million) }) };
+  const selectedModel = ModelSchema.parse(model);
+  try { return { document: parsed, ...parseOfficialHtml(parsed.bytes, selectedModel) }; }
+  catch (error) { if (error instanceof Error && /OPENAI_PRICE_SOURCE_(?:MODEL_HELD|PARSER_DRIFT|PRECISION_REJECTED)/u.test(error.message)) throw error; throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); }
 }
 
 /** A quote is derived only from a bounded fixed-origin capture. The parser is
@@ -140,8 +141,8 @@ export async function createOpenAiResponsesRateSnapshot(input: Readonly<{ docume
   const parsed = parseCapturedPrices(input.document, input.model);
   if (parsed.document.freshUntilMs <= parsed.document.observedAtMs) throw new Error("OPENAI_PRICE_SOURCE_STALE");
   const sourceDocumentSha256 = await sha256(parsed.document.bytes);
-  const quoteSha256 = await hashCanonical({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion, cacheWriteMicrosPerMillion: parsed.cacheWriteMicrosPerMillion });
-  return freeze(OpenAiResponsesRateSnapshotSchema.parse({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, sourceArtifactSha256: sourceDocumentSha256, quoteSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion, ...(parsed.cacheWriteMicrosPerMillion === undefined ? {} : { cacheWriteMicrosPerMillion: parsed.cacheWriteMicrosPerMillion }) }));
+  const quoteSha256 = await hashCanonical({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion });
+  return freeze(OpenAiResponsesRateSnapshotSchema.parse({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, sourceArtifactSha256: sourceDocumentSha256, quoteSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion }));
 }
 
 export function priceOpenAiResponsesUsage(input: Readonly<{ rate: OpenAiResponsesRateSnapshot; usage: OpenAiResponsesUsage }>): Readonly<{ status: "priced"; costMicros: number; inputChargeMicros: number; cachedInputChargeMicros: number; cacheWriteChargeMicros: number; outputChargeMicros: number }> | Readonly<{ status: "held"; reason: "cache_write_rate_unknown" }> {
@@ -163,21 +164,33 @@ export function createNonGoogleCostBound(input: Readonly<{ maximumChargeMicros: 
   if (facts.length !== NON_GOOGLE_COST_ROLES.length || facts.some((fact, index) => fact.role !== NON_GOOGLE_COST_ROLES[index])) throw new Error("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
   if (new Set(facts.map((fact) => fact.costType)).size !== facts.length) throw new Error("NON_GOOGLE_COST_TYPE_DUPLICATE");
   if (facts.some((fact) => fact.evidence.candidateSha256 !== candidateSha256)) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  for (const fact of facts) {
+    const kind = fact.evidence.sourceKind;
+    const expected = fact.role === "authoritative_native_usage" ? "official_openai_model"
+      : fact.role === "documented_scoped_zero" ? "contextvm_transport_policy"
+        : fact.role === "included_parent" ? "operator_homelab_policy"
+          : fact.role === "explicit_approved_shared_standing" ? "operator_approval_policy" : "unknown";
+    if (kind !== expected) throw new Error("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
+    if (kind === "official_openai_model" && fact.evidence.sourceUrl !== OPENAI_RESPONSES_PRICING_URL) throw new Error("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
+    if (kind !== "official_openai_model" && fact.evidence.sourceUrl === OPENAI_RESPONSES_PRICING_URL) throw new Error("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
+  }
   const heldCostTypes = facts.filter((fact): fact is z.infer<typeof HeldFactSchema> => fact.role === "unknown_held").map((fact) => fact.costType);
   return freeze({ schemaVersion: "non-google-cost-bound-v2" as const, maximumChargeMicros, candidateSha256, facts: freeze(facts), heldCostTypes: freeze(heldCostTypes) });
 }
 
 /** The admission path must call this immediately before asserting a bound. */
-export function assertNonGoogleCostBoundAuthorizable(input: Readonly<{ bound: ReturnType<typeof createNonGoogleCostBound>; candidateSha256: string; nowMs: number }>): void {
+export async function assertNonGoogleCostBoundAuthorizable(input: Readonly<{ bound: ReturnType<typeof createNonGoogleCostBound>; candidateSha256: string; nowMs: number; evidence: CostEvidenceArtifactResolver }>): Promise<void> {
   const candidateSha256 = DigestSchema.parse(input.candidateSha256);
   if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 1) throw new Error("NON_GOOGLE_COST_CLOCK_INVALID");
   if (input.bound.candidateSha256 !== candidateSha256) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
-  if (input.bound.heldCostTypes.length > 0) throw new Error("NON_GOOGLE_COST_BOUND_HELD");
   for (const fact of input.bound.facts) {
     if (fact.status !== "available") throw new Error("NON_GOOGLE_COST_BOUND_HELD");
     if (fact.evidence.freshUntilMs <= input.nowMs) throw new Error("NON_GOOGLE_COST_EVIDENCE_STALE");
     if (fact.evidence.candidateSha256 !== candidateSha256) throw new Error("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+    const artifact = await input.evidence.read(fact.evidence.artifactReference);
+    if (!(artifact.bytes instanceof Uint8Array) || artifact.sourceUrl !== fact.evidence.sourceUrl || await sha256(artifact.bytes) !== fact.evidence.sourceArtifactSha256 || fact.evidence.sourceArtifactSha256 !== fact.evidence.sourceDocumentSha256) throw new Error("NON_GOOGLE_COST_EVIDENCE_ARTIFACT_INVALID");
   }
+  if (input.bound.heldCostTypes.length > 0) throw new Error("NON_GOOGLE_COST_BOUND_HELD");
 }
 
 export function assertOpenAiUsageWithinApprovedMaximum(input: Readonly<{ usage: OpenAiResponsesUsage; maximumInputTokens: number; maximumOutputTokens: number }>): void {

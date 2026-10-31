@@ -18,20 +18,19 @@ import { OpenAiResponsesCandidateModelGateway } from "../../src/production/opena
 
 const hex = (character: string) => character.repeat(64);
 const now = 1_000_000;
-const source = new TextEncoder().encode(JSON.stringify({
-  schema: "openai-responses-pricing-capture-v1",
-  currency: "USD",
-  models: {
-    "gpt-4.1-2025-04-14": {
-      input_usd_per_million: "2.000000",
-      cached_input_usd_per_million: "0.200000",
-      output_usd_per_million: "8.000000",
-    },
-  },
-}));
+/** Verbatim pricing-card structure retained from the fixed public OpenAI
+ * gpt-4.1 model document.  The production capture retains the whole document;
+ * this bounded fixture preserves the source syntax and quoted values. */
+const source = new TextEncoder().encode(`<!doctype html><html><body>
+<code class="text-xs">gpt-4.1-2025-04-14</code>
+<div>Input</div><div class="text-2xl font-semibold">$2.00</div></div>
+<div class="card"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div>
+<div class="card"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
+</body></html>`);
 const document = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: source, observedAtMs: now - 1, freshUntilMs: now + 60_000 });
 
 const rate = async () => createOpenAiResponsesRateSnapshot({ document, model: "gpt-4.1-2025-04-14" });
+const publicSourceIntegration = process.env.NAPPLET_RUN_OPENAI_PUBLIC_SOURCE === "1" ? test : test.skip;
 
 test("the v2 inventory names every non-Google accounting role and never uses historic fixed sixteen-family facts", async () => {
   expect(NON_GOOGLE_COST_ROLES).toEqual([
@@ -43,34 +42,45 @@ test("the v2 inventory names every non-Google accounting role and never uses his
   ]);
   const candidateSha256 = hex("a");
   const nativeRate = await rate();
-  const evidence = (scope: string) => ({
-    sourceUrl: OPENAI_RESPONSES_PRICING_URL,
-    sourceArtifactSha256: nativeRate.sourceArtifactSha256,
-    sourceDocumentSha256: nativeRate.sourceDocumentSha256,
+  const artifacts = new Map<string, Readonly<{ sourceUrl: string; bytes: Uint8Array }>>();
+  const evidence = async (scope: string, sourceKind: "official_openai_model" | "contextvm_transport_policy" | "operator_homelab_policy" | "operator_approval_policy" | "unknown", sourceUrl: string) => {
+    const reference = `evidence:${sourceKind}`;
+    const bytes = sourceKind === "official_openai_model" ? source : new TextEncoder().encode(`${sourceKind}:${scope}`);
+    const digest = sourceKind === "official_openai_model" ? nativeRate.sourceDocumentSha256 : Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
+    artifacts.set(reference, { sourceUrl, bytes });
+    return {
+    artifactReference: reference,
+    sourceKind,
+    sourceUrl,
+    sourceArtifactSha256: digest,
+    sourceDocumentSha256: digest,
     observedAtMs: nativeRate.observedAtMs,
     freshUntilMs: nativeRate.freshUntilMs,
     currency: "USD" as const,
-    fx: { kind: "native_usd" as const, sourceDocumentSha256: nativeRate.sourceDocumentSha256, numerator: 1 as const, denominator: 1 as const },
+    fx: { kind: "native_usd" as const, sourceDocumentSha256: digest, numerator: 1 as const, denominator: 1 as const },
     unit: "usd-per-million-tokens",
     precision: 6,
     scope,
     candidateSha256,
-  });
+  }; };
   const bound = createNonGoogleCostBound({
     maximumChargeMicros: 10_000,
     candidateSha256,
     facts: [
-      { role: "authoritative_native_usage", costType: "model_api_usage", provider: "openai_responses", status: "available", rate: nativeRate, evidence: evidence("OpenAI Responses model generation for this candidate") },
-      { role: "documented_scoped_zero", costType: "contextvm_protocol", provider: "contextvm", status: "available", documentedScope: "public signed ContextVM event transport only", evidence: evidence("ContextVM signed event transport for this candidate") },
-      { role: "included_parent", costType: "database_authority", provider: "homelab_postgres", status: "available", parentCostType: "approved_homelab_service", evidence: evidence("PostgreSQL authority used for this candidate") },
-      { role: "explicit_approved_shared_standing", costType: "homelab_host", provider: "operator_homelab", status: "available", approvalReference: "D-141", evidence: evidence("Approved homelab standing for this candidate") },
-      { role: "unknown_held", costType: "funding_rail_fee", provider: "cashu", status: "held", holdReason: "account arrangement not verified", evidence: evidence("Funding fee evidence remains unavailable for this candidate") },
+      { role: "authoritative_native_usage", costType: "model_api_usage", provider: "openai_responses", status: "available", rate: nativeRate, evidence: await evidence("OpenAI Responses model generation for this candidate", "official_openai_model", OPENAI_RESPONSES_PRICING_URL) },
+      { role: "documented_scoped_zero", costType: "contextvm_protocol", provider: "contextvm", status: "available", documentedScope: "public signed ContextVM event transport only", evidence: await evidence("ContextVM signed event transport for this candidate", "contextvm_transport_policy", "https://docs.contextvm.org/") },
+      { role: "included_parent", costType: "database_authority", provider: "homelab_postgres", status: "available", parentCostType: "approved_homelab_service", evidence: await evidence("PostgreSQL authority used for this candidate", "operator_homelab_policy", "https://napplet-cvm.invalid/policy/homelab") },
+      { role: "explicit_approved_shared_standing", costType: "homelab_host", provider: "operator_homelab", status: "available", approvalReference: "D-141", evidence: await evidence("Approved homelab standing for this candidate", "operator_approval_policy", "https://napplet-cvm.invalid/policy/approval") },
+      { role: "unknown_held", costType: "funding_rail_fee", provider: "cashu", status: "held", holdReason: "account arrangement not verified", evidence: await evidence("Funding fee evidence remains unavailable for this candidate", "unknown", "https://napplet-cvm.invalid/policy/unknown") },
     ],
   });
   expect(bound.maximumChargeMicros).toBe(10_000);
   expect(bound.heldCostTypes).toEqual(["funding_rail_fee"]);
-  expect(() => assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, nowMs: now })).toThrow("NON_GOOGLE_COST_BOUND_HELD");
-  expect(() => assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256: hex("b"), nowMs: now })).toThrow("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  const resolver = { async read(reference: string) { const artifact = artifacts.get(reference); if (!artifact) throw new Error("MISSING_FIXTURE"); return artifact; } };
+  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, nowMs: now, evidence: resolver })).rejects.toThrow("NON_GOOGLE_COST_BOUND_HELD");
+  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256, nowMs: now, evidence: { async read(reference) { const artifact = await resolver.read(reference); return reference === "evidence:operator_homelab_policy" ? { ...artifact, bytes: new TextEncoder().encode("tampered") } : artifact; } } })).rejects.toThrow("NON_GOOGLE_COST_EVIDENCE_ARTIFACT_INVALID");
+  await expect(assertNonGoogleCostBoundAuthorizable({ bound, candidateSha256: hex("b"), nowMs: now, evidence: resolver })).rejects.toThrow("NON_GOOGLE_COST_CANDIDATE_MISMATCH");
+  expect(() => createNonGoogleCostBound({ maximumChargeMicros: 10_000, candidateSha256, facts: bound.facts.map((fact) => fact.role === "documented_scoped_zero" ? { ...fact, evidence: { ...fact.evidence, sourceKind: "official_openai_model" as const, sourceUrl: OPENAI_RESPONSES_PRICING_URL } } : fact) })).toThrow("NON_GOOGLE_COST_EVIDENCE_POLICY_MISMATCH");
   expect(() => createNonGoogleCostBound({ maximumChargeMicros: 1, candidateSha256, facts: [] })).toThrow("NON_GOOGLE_COST_ROLE_COVERAGE_REQUIRED");
 });
 
@@ -79,7 +89,7 @@ test("native token pricing charges input/cache/output once and holds unsupported
     rate: await rate(),
     usage: { inputTokens: 1_000_000, cachedInputTokens: 200_000, cacheWriteTokens: 0, outputTokens: 100_000, reasoningTokens: 80_000 },
   });
-  expect(priced).toMatchObject({ status: "priced", costMicros: 2_440_000 });
+  expect(priced).toMatchObject({ status: "priced", costMicros: 2_500_000 });
   expect(priced).not.toHaveProperty("reasoningChargeMicros");
   expect(priceOpenAiResponsesUsage({
     rate: await rate(),
@@ -96,8 +106,22 @@ test("non-Google catalog accepts only a fresh parsed source-bound model rate and
   } });
   expect(document).toMatchObject({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, observedAtMs: now });
   await expect(captureOpenAiResponsesPricingDocument({ now: () => now, fetch: async () => Response.redirect("https://example.test/", 302) })).rejects.toThrow("OPENAI_PRICE_SOURCE_RESPONSE_REJECTED");
-  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(JSON.stringify({ schema: "openai-responses-pricing-capture-v1", currency: "USD", models: {} })) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body>changed document</body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body><code>gpt-4.1-2025-04-14</code></body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
 });
+
+publicSourceIntegration("the retained fixed OpenAI HTML source reaches source-bound native receipt math", async () => {
+  const captured = await captureOpenAiResponsesPricingDocument({ fetch, freshnessMs: 60_000, timeoutMs: 20_000 });
+  const capturedRate = await createOpenAiResponsesRateSnapshot({ document: captured, model: "gpt-4.1-2025-04-14" });
+  expect(capturedRate).toMatchObject({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, inputMicrosPerMillion: 2_000_000, cachedInputMicrosPerMillion: 500_000, outputMicrosPerMillion: 8_000_000 });
+  const entries = new Map<string, unknown>();
+  const journal: OpenAiResponsesOperationJournal = { async claim(entry) { const previous = entries.get(entry.operationId); if (previous) return { claimed: false, entry: previous }; entries.set(entry.operationId, structuredClone(entry)); return { claimed: true, entry }; }, async read(operationId) { return entries.get(operationId); }, async write(entry) { entries.set(entry.operationId, structuredClone(entry)); } };
+  const native = new TextEncoder().encode(JSON.stringify({ id: "resp_source", model: capturedRate.model, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: '{"files":[]}' }] }], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 20, cache_write_tokens: 0 }, output_tokens: 10, output_tokens_details: { reasoning_tokens: 0 } } }));
+  const client = createOpenAiResponsesClient({ candidateSha256: hex("a"), credentialReference: "openai:api-key:production-reference", model: capturedRate.model, rate: capturedRate, maximumChargeMicros: 10_000_000, journal, port: { async create() { return { bytes: native }; }, async get() { return { bytes: native }; } } });
+  const gateway = new OpenAiResponsesCandidateModelGateway(client);
+  const result = await gateway.dispatch({ operationId: "operation:source-html", providerRequestId: "request:source-html", accountId: "account:fixture", sessionId: "session:fixture", actionId: "action:fixture", expectedVersion: 0, actionBudgetReference: "budget:fixture", profileId: "openai-responses-candidate", priceCardId: "openai-source-bound", requestFingerprint: hex("b"), prompt: "One focused counter", maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "200" }], selection: "unselected" }, new AbortController().signal);
+  expect(result).toMatchObject({ status: "completed", receipt: { model: "gpt-4.1-2025-04-14", usage: [{ dimension: "input_tokens", units: "100" }, { dimension: "cached_tokens", units: "20" }, { dimension: "output_tokens", units: "10" }, { dimension: "reasoning_tokens", units: "0" }] } });
+}, 30_000);
 
 test("versioned report v2 uses an opaque store identity rather than a forged gs URI", async () => {
   const bytes = new TextEncoder().encode("provider usage export");

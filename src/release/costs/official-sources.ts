@@ -17,7 +17,10 @@ export const BTC_USD_TICKER_URL = "https://api.exchange.coinbase.com/products/BT
 export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/model-garden/pricing";
 /** D-141 successor source. Capturing this public document does not verify an
  * API account, project, contract discount, or a model's availability. */
-export const OPENAI_RESPONSES_PRICING_URL = "https://developers.openai.com/api/docs/pricing";
+/** The model snapshot is a fixed, public, no-auth document.  Unlike the
+ * catalogue page it names the exact pinned model and carries its token-price
+ * cards in the retained HTML itself. */
+export const OPENAI_RESPONSES_PRICING_URL = "https://developers.openai.com/api/docs/models/gpt-4.1" as const;
 /** Only infrastructure is discoverable through Cloud Billing. Payment rails
  * are funding capital (and separately contracted fees); model prices come
  * from the Vertex model source, never an invented Cloud SKU selector. */

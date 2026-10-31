@@ -76,12 +76,18 @@ integration("Responses journal uses restricted PostgreSQL for concurrent claims,
     if (restoreCode !== 0) throw new Error(`POSTGRES_RESTORE_FAILED:${restoreError.slice(0, 300)}`);
     restored = new Pool({ connectionString: `postgresql://responses_journal_test@127.0.0.1:${port}/responses_restore`, connectionTimeoutMillis: 2_000 });
     const restoredJournal = createPostgresOpenAiResponsesOperationJournal(new PostgresOperationJournal(restored, { namespace: "openai:responses", scopeSha256: digest("a"), purpose: "openai-responses" }));
+    expect(() => new PostgresOperationJournal(restored, { namespace: "other:service", scopeSha256: digest("a"), purpose: "openai-responses" })).toThrow("OPENAI_RESPONSES_NAMESPACE_REQUIRED");
     expect(await client(restoredJournal).reconcileOriginal({ operationId: command.operationId })).toMatchObject({ status: "completed", responseId: "resp_pg17" });
     expect(posts).toBe(2);
     const restricted = await restored.connect();
     try {
       await expect(restricted.query("DELETE FROM production_real.release_operation_journal")).rejects.toThrow();
       await expect(restricted.query("UPDATE production_real.release_operation_journal SET revision=revision+2")).rejects.toThrow();
+      expect((await restricted.query("SELECT * FROM production_real.release_operation_journal WHERE namespace='other:service'")).rows).toEqual([]);
+      await expect(restricted.query("SELECT * FROM production_real.release_operation_audit")).rejects.toThrow();
+      await expect(restricted.query("TRUNCATE production_real.release_operation_journal")).rejects.toThrow();
+      await expect(restricted.query("UPDATE production_real.release_operation_journal SET identity_sha256='b' WHERE operation_id='operation:pg17'")).rejects.toThrow();
+      await expect(restricted.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES('other:service',$1,'other-op',$2,'{}'::jsonb)", [digest("a"), digest("b")])).rejects.toThrow();
       await expect(restricted.query("SELECT * FROM production_real.funding_accounts")).rejects.toThrow();
     } finally { restricted.release(); }
   } finally {

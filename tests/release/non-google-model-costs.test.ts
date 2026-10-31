@@ -21,12 +21,12 @@ const now = 1_000_000;
 /** Verbatim pricing-card structure retained from the fixed public OpenAI
  * gpt-4.1 model document.  The production capture retains the whole document;
  * this bounded fixture preserves the source syntax and quoted values. */
-const source = new TextEncoder().encode(`<!doctype html><html><body>
+const source = new TextEncoder().encode(`<!doctype html><html><body><article data-openai-model="gpt-4.1-2025-04-14">
 <code class="text-xs">gpt-4.1-2025-04-14</code>
 <div>Input</div><div class="text-2xl font-semibold">$2.00</div></div>
 <div class="card"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div>
 <div class="card"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
-</body></html>`);
+</article></body></html>`);
 const document = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: source, observedAtMs: now - 1, freshUntilMs: now + 60_000 });
 
 const rate = async () => createOpenAiResponsesRateSnapshot({ document, model: "gpt-4.1-2025-04-14" });
@@ -113,10 +113,12 @@ test("non-Google catalog accepts only a fresh parsed source-bound model rate and
   expect(document).toMatchObject({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, observedAtMs: now });
   await expect(captureOpenAiResponsesPricingDocument({ now: () => now, fetch: async () => Response.redirect("https://example.test/", 302) })).rejects.toThrow("OPENAI_PRICE_SOURCE_RESPONSE_REJECTED");
   await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body>changed document</body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
-  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body><code>gpt-4.1-2025-04-14</code></body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode("<!doctype html><html><body><code>gpt-4.1-2025-04-14</code></body></html>") }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
   const otherCards = '<code>other-2025-04-14</code><div>Input</div><div>$1.00</div></div><div><div>Cached input</div><div>$0.10</div></div><div><div>Output</div><div>$2.00</div></div>';
-  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body><code>gpt-4.1-2025-04-14</code>${otherCards}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body>${new TextDecoder().decode(source)}${otherCards}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body><code>gpt-4.1-2025-04-14</code>${otherCards}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body>${new TextDecoder().decode(source)}${new TextDecoder().decode(source)}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const navigationSelectedOtherHeading = `<!doctype html><html><body><nav><code>gpt-4.1-2025-04-14</code></nav><article data-openai-model="other-2025-04-14"><h2>other-2025-04-14</h2><div>Input</div><div>$1.00</div></div><div><div>Cached input</div><div>$0.10</div></div><div><div>Output</div><div>$2.00</div></div></article></body></html>`;
+  await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(navigationSelectedOtherHeading) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
 });
 
 publicSourceIntegration("the retained fixed OpenAI HTML source reaches source-bound native receipt math", async () => {

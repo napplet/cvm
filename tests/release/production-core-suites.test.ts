@@ -113,6 +113,39 @@ test("a lost retained-object create acknowledgement never grants a second create
   expect(creates).toBe(1);
 });
 
+test("an expired retained-object reconciliation erases only its original uncertain custody", async () => {
+  const objects = new DeterministicObjectStore();
+  const source = new TextEncoder().encode("original-expiry-barrier-bytes");
+  const deadline = Date.parse("2030-01-01T00:00:00.000Z");
+  let now = deadline - 1, creates = 0, loseAck = true, advanceAfterObservation = false, destroyed = false;
+  const ciphertext = new Uint8Array(source).reverse();
+  const checksum = new Bun.CryptoHasher("sha256").update(ciphertext).digest("hex");
+  let aadSha256 = "", retentionUntil = "";
+  const crypto = {
+    async seal(input: { plaintext: Uint8Array; additionalData: Uint8Array; binding?: { retentionUntil: string } }) {
+      aadSha256 = new Bun.CryptoHasher("sha256").update(input.additionalData).digest("hex"); retentionUntil = input.binding!.retentionUntil;
+      return { keyReference: "key:expiry", nonce: new Uint8Array(12), ciphertext };
+    },
+    async open() { return new Uint8Array(source); },
+    async destroy() { destroyed = true; },
+    async isDestroyed() { return destroyed; },
+    async readSealed() { return { keyReference: "key:expiry", nonce: new Uint8Array(12), ciphertext, ciphertextSha256: checksum, aadSha256, retentionUntil }; },
+  };
+  const objectStore = {
+    async createImmutable(value: { key: string; bytes: Uint8Array }) { creates++; const reference = await objects.createImmutable(value); if (loseAck) { loseAck = false; throw new Error("CREATE_ACK_LOST"); } return reference; },
+    async observeExactByKey(value: { key: string; checksum: string }) { const observed = await objects.observeExactByKey(value); if (advanceAfterObservation) now = deadline; return observed; },
+    readExact: objects.readExact.bind(objects), scheduleExactDeletion: objects.scheduleExactDeletion.bind(objects),
+  };
+  const records = new Map<string, { identitySha256: string; value: unknown }>();
+  const journal = { async claim<T>(operationId: string, identitySha256: string, value: T) { const prior = records.get(operationId); if (!prior) records.set(operationId, { identitySha256, value }); return { claimed: !prior, record: { operationId, identitySha256, revision: 1, value } }; }, async read<T>(_operationId: string): Promise<undefined> { return undefined; } };
+  const request = { crypto, objectStore, journal, checkpointId: "checkpoint", accountId: "account", ownerId: "owner", sessionId: "session", actionId: "action", retentionUntil: new Date(deadline).toISOString(), source: { kind: "validation_evidence" as const, sourceIdentity: "validation:expiry-original", bytes: source }, now: () => now };
+  await expect(sealRetainedSubject(request)).rejects.toThrow("CREATE_ACK_LOST");
+  advanceAfterObservation = true;
+  await expect(sealRetainedSubject(request)).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+  expect(creates).toBe(1);
+  expect(destroyed).toBe(true);
+});
+
 test("restore cleans the fresh instance after a failed subject and blocks unconfirmed cleanup", async () => {
   for (const cleanupFails of [false, true]) {
     let cleanups = 0;

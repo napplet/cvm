@@ -11,6 +11,13 @@ const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*
 const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const bytes = (value: unknown) => new TextEncoder().encode(canonicalJson(value));
 
+function assertRetentionFuture(retentionUntil: string, clock: () => number): void {
+  const retentionAtMs = Date.parse(retentionUntil), now = clock();
+  if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
+    throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+  }
+}
+
 /** Mounted checkpoint crypto already supports server-derived companion custody
  * identities (pending commands).  This narrow extension keeps those custody
  * identities separate from source and workspace identities. */
@@ -58,14 +65,21 @@ export async function sealRetainedSubject(input: Readonly<{
 }>): Promise<z.infer<typeof DurabilitySubjectSchema>> {
   const source = Source.parse(input.source);
   const checkpointId = Identity.parse(input.checkpointId), accountId = z.string().min(1).parse(input.accountId), ownerId = Identity.parse(input.ownerId), sessionId = Identity.parse(input.sessionId), actionId = Identity.parse(input.actionId);
+  const clock = input.now ?? Date.now;
+  assertRetentionFuture(input.retentionUntil, clock);
   const retentionAtMs = Date.parse(input.retentionUntil);
-  const now = (input.now ?? Date.now)();
-  if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
-    throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
-  }
   const retentionUntil = new Date(retentionAtMs).toISOString();
   const payloadSha256 = sha(source.bytes), custodyId = retainedSubjectCustodyId({ checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity });
   const associatedData = aad({ custodyId, checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity, sourceVersion: payloadSha256, accountId, ownerId, sessionId, actionId, retentionUntil, payloadSha256 });
+  const cleanupExpiredCustody = async (stored: Readonly<{ keyReference: string; ciphertextSha256: string }>) => {
+    // Once an earlier in-window effect exists, expiry may only reconcile its
+    // exact identity and erase it. This path never constructs a replacement
+    // intent/object or extends retention.
+    const observed = await input.objectStore.observeExactByKey({ key, checksum: stored.ciphertextSha256 });
+    if (observed) await input.objectStore.scheduleExactDeletion({ key, generation: observed.generation, checksum: observed.checksum }, retentionUntil);
+    await input.crypto.destroy(stored.keyReference);
+    if (!await input.crypto.isDestroyed(stored.keyReference)) throw new Error("RETAINED_SUBJECT_ERASURE_KEY_REQUIRED");
+  };
   const sealed = await input.crypto.seal({ checkpointId: custodyId, plaintext: new Uint8Array(source.bytes), additionalData: associatedData, binding: { accountId, sessionId, actionId, operationId: `durability-archive:${custodyId}`, retentionUntil } });
   const stored = await input.crypto.readSealed(custodyId);
   if (!stored || stored.keyReference !== sealed.keyReference || stored.ciphertextSha256 !== sha(sealed.ciphertext) || stored.aadSha256 !== sha(associatedData) || stored.retentionUntil !== retentionUntil) throw new Error("RETAINED_SUBJECT_CUSTODY_READBACK_REQUIRED");
@@ -77,11 +91,19 @@ export async function sealRetainedSubject(input: Readonly<{
   const key = `durability-subjects/${custodyId}/${stored.ciphertextSha256}`;
   const operationId = `retained-object:${sha(canonicalJson({ checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity })).slice(0, 48)}`;
   const intent = Object.freeze({ schemaVersion: "retained-subject-object-v1", state: "pending", checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity, key, checksum: stored.ciphertextSha256, keyReference: stored.keyReference, retentionUntil });
+  try { assertRetentionFuture(retentionUntil, clock); }
+  catch (error) { await cleanupExpiredCustody(stored); throw error; }
   const claimed = await input.journal.claim(operationId, sha(canonicalJson(intent)), intent);
+  try { assertRetentionFuture(retentionUntil, clock); }
+  catch (error) { await cleanupExpiredCustody(stored); throw error; }
   const observed = await input.objectStore.observeExactByKey({ key, checksum: stored.ciphertextSha256 });
   if (!claimed.claimed && !observed) throw new Error("RETAINED_SUBJECT_OBJECT_RECONCILIATION_PENDING");
+  try { assertRetentionFuture(retentionUntil, clock); }
+  catch (error) { await cleanupExpiredCustody(stored); throw error; }
   const object = observed ?? await input.objectStore.createImmutable({ key, bytes: new Uint8Array(stored.ciphertext) });
   if (object.checksum !== stored.ciphertextSha256) throw new Error("RETAINED_SUBJECT_OBJECT_BINDING_REQUIRED");
+  try { assertRetentionFuture(retentionUntil, clock); }
+  catch (error) { await cleanupExpiredCustody(stored); throw error; }
   return DurabilitySubjectSchema.parse({ kind: source.kind, sourceIdentity: source.sourceIdentity, object, payloadSha256, ownerId, retentionUntil, deletionState: "retained" });
 }
 

@@ -111,6 +111,15 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
       const wrappedDek = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapNonce as BufferSource, additionalData: canonicalBytes({ checkpointId, bindingSha256 }) as BufferSource }, kek, dekBytes as BufferSource));
       const ciphertextSha256 = sha256(ciphertext);
       const keyReference = `checkpoint-key:${checkpointId}:${sha256(wrappedDek).slice(0, 24)}`;
+      // Retained-subject callers can wait on the mounted KEK after the outer
+      // controller admitted their deadline. Do not insert new custody after
+      // that wait has crossed the same retention fence.
+      if (binding.operationId.startsWith("durability-archive:")) {
+        const retentionAtMs = Date.parse(binding.retentionUntil), now = this.#now();
+        if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
+          throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+        }
+      }
       const stored = await this.#insert({ checkpointId, keyReference, binding, bindingSha256, plaintextSha256, aadSha256, ciphertextSha256, nonce, wrapNonce, wrappedDek, ciphertext });
       return this.#replay(stored, bindingSha256, plaintextSha256, aadSha256);
     } finally { dekBytes.fill(0); }

@@ -9,7 +9,10 @@ const State = z.enum(["tombstoned", "deleted"]);
 
 export type ProductionDurabilitySubject = z.infer<typeof DurabilitySubjectSchema> & Readonly<{ checkpointId: string; sessionId: string; actionId: string }>;
 export type DurabilitySubjectRegistry = Readonly<{
-  register(subject: ProductionDurabilitySubject): Promise<void>;
+  /** `assertRetentionFuture` is supplied by the controller's injected clock.
+   * It runs after acquiring the SQL connection and immediately before a new
+   * registry insert; the SQL predicate below independently fences DB time. */
+  register(subject: ProductionDurabilitySubject, input?: Readonly<{ assertRetentionFuture?: () => void }>): Promise<void>;
   inventory(input: Readonly<{ checkpointId: string; sessionId: string; ownerId: string }>): Promise<readonly z.infer<typeof DurabilitySubjectSchema>[]>;
   markDeletion(input: Readonly<{ checkpointId: string; kind: z.infer<typeof Kind>; objectGeneration: number; objectChecksum: string; state: z.infer<typeof State> }>): Promise<void>;
 }>;
@@ -24,16 +27,24 @@ export function createProductionDurabilitySubjectRegistry(pool: PostgresSqlPool)
     finally { client.release(); }
   };
   return Object.freeze({
-    async register(raw) {
+    async register(raw, input = {}) {
       const subject = DurabilitySubjectSchema.parse({ kind: raw.kind, sourceIdentity: raw.sourceIdentity, object: raw.object, payloadSha256: raw.payloadSha256, ownerId: raw.ownerId, retentionUntil: raw.retentionUntil, deletionState: raw.deletionState });
       if (subject.deletionState !== "retained") throw new Error("PRODUCTION_DURABILITY_SUBJECT_INITIAL_RETAINED_REQUIRED");
       subject.retentionUntil = new Date(subject.retentionUntil).toISOString();
       const checkpointId = Identity.parse(raw.checkpointId); const sessionId = Identity.parse(raw.sessionId); const actionId = Identity.parse(raw.actionId);
-      const inserted = await query("INSERT INTO production_real.durability_subjects(checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until,deletion_state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(checkpoint_id,kind) DO NOTHING RETURNING checkpoint_id", [checkpointId, subject.kind, subject.sourceIdentity, subject.object.key, subject.object.generation, subject.object.checksum, subject.payloadSha256, subject.ownerId, sessionId, actionId, subject.retentionUntil, subject.deletionState]);
+      const client = await pool.connect();
+      let inserted: { rows: readonly Record<string, unknown>[] };
+      try {
+        // A connection acquisition can outlive the controller's deadline.
+        // Recheck the injected controller clock before issuing a new write.
+        input.assertRetentionFuture?.();
+        inserted = await client.query<Record<string, unknown>>("INSERT INTO production_real.durability_subjects(checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until,deletion_state) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12 WHERE clock_timestamp() < $11::timestamptz ON CONFLICT(checkpoint_id,kind) DO NOTHING RETURNING checkpoint_id", [checkpointId, subject.kind, subject.sourceIdentity, subject.object.key, subject.object.generation, subject.object.checksum, subject.payloadSha256, subject.ownerId, sessionId, actionId, subject.retentionUntil, subject.deletionState]);
+      } finally { client.release(); }
       if (inserted.rows.length) return;
       const existing = (await query<Record<string, unknown>>("SELECT checkpoint_id,kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,session_id,action_id,retention_until::text AS retention_until,deletion_state FROM production_real.durability_subjects WHERE checkpoint_id=$1 AND kind=$2", [checkpointId, subject.kind])).rows[0];
       const actual = existing && DurabilitySubjectSchema.safeParse({ kind: existing.kind, sourceIdentity: existing.source_identity, object: { key: existing.object_key, generation: Number(existing.object_generation), checksum: existing.object_checksum }, payloadSha256: existing.payload_sha256, ownerId: existing.owner_id, retentionUntil: new Date(String(existing.retention_until)).toISOString(), deletionState: existing.deletion_state });
-      if (!actual?.success || existing?.checkpoint_id !== checkpointId || existing?.session_id !== sessionId || existing?.action_id !== actionId || JSON.stringify(actual.data) !== JSON.stringify(subject)) throw new Error("PRODUCTION_DURABILITY_SUBJECT_CONFLICT");
+      if (!existing) throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+      if (!actual?.success || existing.checkpoint_id !== checkpointId || existing.session_id !== sessionId || existing.action_id !== actionId || JSON.stringify(actual.data) !== JSON.stringify(subject)) throw new Error("PRODUCTION_DURABILITY_SUBJECT_CONFLICT");
     },
     async inventory(input) {
       const checkpointId = Identity.parse(input.checkpointId); const sessionId = Identity.parse(input.sessionId); const ownerId = Identity.parse(input.ownerId);

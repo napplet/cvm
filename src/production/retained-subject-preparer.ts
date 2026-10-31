@@ -45,21 +45,21 @@ export class ProductionRetainedSubjectPreparer {
 
   async prepare(raw: RetainedSubjectScope): Promise<void> {
     const scope = this.#scope(raw), binding = await this.#binding(scope);
-    // Check the authoritative deadline before touching the retained registry,
-    // crypto custody, or object store. Expiry paths are observation-only.
-    const retentionAtMs = Date.parse(binding.retentionUntil);
-    const now = (this.input.now ?? Date.now)();
-    if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
-      throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
-    }
+    // Every write/dispatch fence below is rechecked after its preceding
+    // awaits. Expiry paths can observe or erase original effects, never add a
+    // registry row, custody record, intent, or object after the deadline.
+    this.#assertRetentionFuture(binding.retentionUntil);
     await assertProductionRetainedSubjectSchema(this.#pool);
+    this.#assertRetentionFuture(binding.retentionUntil);
     const registry = createProductionDurabilitySubjectRegistry(this.#pool);
-    await registry.register(binding.checkpoint);
+    await registry.register(binding.checkpoint, { assertRetentionFuture: () => this.#assertRetentionFuture(binding.retentionUntil) });
     for (const original of await this.#originals(scope, binding)) {
+      this.#assertRetentionFuture(binding.retentionUntil);
       const sealed = await sealRetainedSubject({ crypto: this.#crypto, objectStore: this.input.objectStore, journal: this.input.journal,
         checkpointId: scope.checkpointId, accountId: binding.accountId, ownerId: scope.ownerId, sessionId: scope.sessionId,
         actionId: binding.actionId, retentionUntil: binding.retentionUntil, source: original, now: this.input.now });
-      await registry.register({ ...sealed, checkpointId: scope.checkpointId, sessionId: scope.sessionId, actionId: binding.actionId });
+      this.#assertRetentionFuture(binding.retentionUntil);
+      await registry.register({ ...sealed, checkpointId: scope.checkpointId, sessionId: scope.sessionId, actionId: binding.actionId }, { assertRetentionFuture: () => this.#assertRetentionFuture(binding.retentionUntil) });
     }
     // This is the first read-only point visible to restore. A partial archive
     // is never returned as an inventory and cannot become certification input.
@@ -132,6 +132,13 @@ export class ProductionRetainedSubjectPreparer {
 
   #scope(raw: RetainedSubjectScope): RetainedSubjectScope {
     return Object.freeze({ checkpointId: Identity.parse(raw.checkpointId), sessionId: Identity.parse(raw.sessionId), ownerId: Digest.parse(raw.ownerId) });
+  }
+
+  #assertRetentionFuture(retentionUntil: string): void {
+    const retentionAtMs = Date.parse(retentionUntil), now = (this.input.now ?? Date.now)();
+    if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
+      throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    }
   }
 
   async #binding(scope: RetainedSubjectScope): Promise<Binding> {

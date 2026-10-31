@@ -11,7 +11,7 @@ import { PostgresOperationJournal } from "../../src/release/deployment/postgres-
 import { ProductionCheckpointCoordinator } from "../../src/production/checkpoint-coordinator";
 import { ProductionRetainedSubjectPreparer } from "../../src/production/retained-subject-preparer";
 import { createProductionDurabilitySubjectRegistry } from "../../src/production/durability-registry";
-import { retainedSubjectCustodyId } from "../../src/production/retained-subject-archive";
+import { retainedSubjectCustodyId, sealRetainedSubject } from "../../src/production/retained-subject-archive";
 import { MountedKekCheckpointCrypto } from "../../src/production/checkpoint-crypto";
 import { GcsObjectStoreAdapter, type ObjectStorePort, type VersionedObjectClientPort } from "../../src/continuity/object-store";
 import type { CheckpointSealRequest } from "../../src/continuity/checkpoint-envelope";
@@ -42,6 +42,11 @@ const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : 
 const digest = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const hex = (value: string) => digest(value);
 const wire = <Value>(value: Value): Value => JSON.parse(JSON.stringify(value)) as Value;
+function deferred<Value>() {
+  let resolve!: (value: Value | PromiseLike<Value>) => void;
+  const promise = new Promise<Value>(value => { resolve = value; });
+  return { promise, resolve };
+}
 const migrations = [
   "phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql",
   "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql",
@@ -251,6 +256,133 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     };
     const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore: effects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const scope = { checkpointId, sessionId, ownerId: fixture.ownerId };
+    const retentionDeadline = now + retentionMs;
+    // Barrier 1: the schema assertion itself is an await. If it reaches the
+    // exact deadline, the registry connection may be acquired but must never
+    // issue a new checkpoint registry insert.
+    let schemaVerified = false;
+    const schemaBarrierPool: PostgresSqlPool = {
+      async connect() {
+        if (schemaVerified) now = retentionDeadline;
+        const client = await pool.connect();
+        return {
+          async query<Row extends Record<string, unknown>>(text: string, values?: readonly unknown[]) {
+            const result = await client.query<Row>(text, values);
+            if (text.includes("checkpoint_crypto_audit_sequence_seq")) schemaVerified = true;
+            return result;
+          },
+          release() { client.release(); },
+        };
+      },
+    };
+    now = retentionDeadline - 1;
+    const schemaBarrierPreparer = new ProductionRetainedSubjectPreparer({ pool: schemaBarrierPool, objectStore: effects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
+    await expect(schemaBarrierPreparer.prepare(scope)).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(Number((await runtime.query("SELECT count(*)::int AS count FROM production_real.durability_subjects WHERE checkpoint_id=$1", [checkpointId])).rows[0]!.count)).toBe(0);
+
+    // Barriers 2 and 3 exercise the actual mounted crypto/SQL journal while
+    // pausing only fixture transports. The first crosses the KEK wait before
+    // crypto custody insertion; the second crosses an existing custody read
+    // before an object-intent claim.
+    const barrierRetention = new Date(retentionDeadline).toISOString();
+    const cryptoSource = { kind: "validation_evidence" as const, sourceIdentity: "barrier:crypto", bytes: new TextEncoder().encode("barrier crypto original") };
+    const cryptoCustody = retainedSubjectCustodyId({ checkpointId, kind: cryptoSource.kind, sourceIdentity: cryptoSource.sourceIdentity });
+    const kekGate = deferred<string>();
+    const cryptoDeadline = new MountedKekCheckpointCrypto({ pool, kekPath: "/fixture/kek", readFile: async () => kekGate.promise, now: () => now });
+    now = retentionDeadline - 1;
+    const pendingCrypto = sealRetainedSubject({ crypto: cryptoDeadline, objectStore: objects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: cryptoSource, now: () => now });
+    now = retentionDeadline;
+    kekGate.resolve(kek);
+    await expect(pendingCrypto).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(await cryptoDeadline.readSealed(cryptoCustody)).toBeUndefined();
+
+    const readSource = { kind: "usage_receipt" as const, sourceIdentity: "barrier:crypto-read", bytes: new TextEncoder().encode("barrier crypto read original") };
+    const readCustody = retainedSubjectCustodyId({ checkpointId, kind: readSource.kind, sourceIdentity: readSource.sourceIdentity });
+    const readOperation = `retained-object:${digest(canonicalJson({ checkpointId, kind: readSource.kind, sourceIdentity: readSource.sourceIdentity })).slice(0, 48)}`;
+    const mountedCrypto = new MountedKekCheckpointCrypto({ pool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
+    const readStarted = deferred<void>(), readGate = deferred<void>();
+    const readBarrierCrypto = {
+      seal: (value: Parameters<typeof mountedCrypto.seal>[0]) => mountedCrypto.seal(value),
+      open: (value: Parameters<typeof mountedCrypto.open>[0]) => mountedCrypto.open(value),
+      destroy: (keyReference: string) => mountedCrypto.destroy(keyReference),
+      isDestroyed: (keyReference: string) => mountedCrypto.isDestroyed(keyReference),
+      async readSealed(id: string) {
+        const value = await mountedCrypto.readSealed(id);
+        if (id === readCustody) { readStarted.resolve(); await readGate.promise; }
+        return value;
+      },
+    };
+    now = retentionDeadline - 1;
+    const pendingRead = sealRetainedSubject({ crypto: readBarrierCrypto, objectStore: objects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: readSource, now: () => now });
+    await readStarted.promise;
+    now = retentionDeadline;
+    readGate.resolve();
+    await expect(pendingRead).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(await mountedCrypto.isDestroyed((await mountedCrypto.readSealed(readCustody))?.keyReference ?? "checkpoint-key:missing")).toBe(true);
+    expect(await journal.read(readOperation)).toBeUndefined();
+
+    const journalSource = { kind: "owner_event" as const, sourceIdentity: "barrier:journal", bytes: new TextEncoder().encode("barrier journal original") };
+    const journalCustody = retainedSubjectCustodyId({ checkpointId, kind: journalSource.kind, sourceIdentity: journalSource.sourceIdentity });
+    const journalOperation = `retained-object:${digest(canonicalJson({ checkpointId, kind: journalSource.kind, sourceIdentity: journalSource.sourceIdentity })).slice(0, 48)}`;
+    const journalCrypto = new MountedKekCheckpointCrypto({ pool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
+    let journalBarrierCreates = 0;
+    const journalClaimed = deferred<void>(), journalGate = deferred<void>();
+    const journalBarrier = {
+      async claim<T>(operationId: string, identitySha256: string, value: T) {
+        const result = await journal.claim(operationId, identitySha256, value);
+        journalClaimed.resolve(); await journalGate.promise;
+        return result;
+      },
+      read: journal.read.bind(journal),
+    };
+    const journalBarrierObjects: ObjectStorePort = {
+      async createImmutable(value) { journalBarrierCreates++; return objects.createImmutable(value); },
+      observeExactByKey: value => objects.observeExactByKey(value), readExact: value => objects.readExact(value),
+      scheduleExactDeletion: (value, deadline) => objects.scheduleExactDeletion(value, deadline),
+    };
+    now = retentionDeadline - 1;
+    const pendingJournal = sealRetainedSubject({ crypto: journalCrypto, objectStore: journalBarrierObjects, journal: journalBarrier, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: journalSource, now: () => now });
+    await journalClaimed.promise;
+    now = retentionDeadline;
+    journalGate.resolve();
+    await expect(pendingJournal).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(journalBarrierCreates).toBe(0);
+    expect(await journal.read(journalOperation)).toBeDefined();
+    expect(await journalCrypto.isDestroyed((await journalCrypto.readSealed(journalCustody))?.keyReference ?? "checkpoint-key:missing")).toBe(true);
+
+    // Barrier 5: an original immutable create can be ambiguous. On a retry
+    // that crosses expiry after exact observation, the archive reconciles and
+    // erases that original only; it cannot dispatch a replacement create.
+    const uncertainSource = { kind: "promotion_evidence" as const, sourceIdentity: "barrier:uncertain", bytes: new TextEncoder().encode("barrier uncertain original") };
+    const uncertainCustody = retainedSubjectCustodyId({ checkpointId, kind: uncertainSource.kind, sourceIdentity: uncertainSource.sourceIdentity });
+    const uncertainCrypto = new MountedKekCheckpointCrypto({ pool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
+    let uncertainCreates = 0, loseUncertainAck = true, pauseObserved = false;
+    const observedStarted = deferred<void>(), observedGate = deferred<void>();
+    const uncertainObjects: ObjectStorePort = {
+      async createImmutable(value) { uncertainCreates++; const object = await objects.createImmutable(value); if (loseUncertainAck) { loseUncertainAck = false; throw new Error("OBJECT_ACK_LOST"); } return object; },
+      async observeExactByKey(value) {
+        const object = await objects.observeExactByKey(value);
+        if (pauseObserved) { pauseObserved = false; observedStarted.resolve(); await observedGate.promise; }
+        return object;
+      },
+      readExact: value => objects.readExact(value),
+      scheduleExactDeletion: (value, deadline) => objects.scheduleExactDeletion(value, deadline),
+    };
+    now = retentionDeadline - 1;
+    await expect(sealRetainedSubject({ crypto: uncertainCrypto, objectStore: uncertainObjects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: uncertainSource, now: () => now })).rejects.toThrow("OBJECT_ACK_LOST");
+    pauseObserved = true;
+    const pendingUncertain = sealRetainedSubject({ crypto: uncertainCrypto, objectStore: uncertainObjects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: uncertainSource, now: () => now });
+    await observedStarted.promise;
+    now = retentionDeadline;
+    observedGate.resolve();
+    await expect(pendingUncertain).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(uncertainCreates).toBe(1);
+    const uncertainStored = await uncertainCrypto.readSealed(uncertainCustody);
+    if (!uncertainStored) throw new Error("BARRIER_UNCERTAIN_CUSTODY_REQUIRED");
+    expect(await uncertainCrypto.isDestroyed(uncertainStored.keyReference)).toBe(true);
+    const uncertainKey = `durability-subjects/${uncertainCustody}/${uncertainStored.ciphertextSha256}`;
+    expect(await objects.observeExactByKey({ key: uncertainKey, checksum: uncertainStored.ciphertextSha256 })).toBeUndefined();
+    now = retentionDeadline - retentionMs;
     const createsBeforeExpiry = createCalls;
     now += retentionMs;
     await expect(preparer.prepare(scope)).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");

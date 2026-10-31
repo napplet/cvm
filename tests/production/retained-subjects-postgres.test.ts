@@ -291,7 +291,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       fly: { create: noModal, observe: noModal, terminate: noModal, observeTermination: noModal,
         async exec(value) {
           const [, action, archiveDigest, index, data] = value.command;
-          if (action === "fence") { mountedFences++; return { status: "completed" as const, exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: workspaceJobId, fenceSha256: archiveDigest }) }; }
+          if (action === "fence") { mountedFences++; return { status: "completed" as const, exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: workspaceJobId, fenceSha256: index }) }; }
           if (action === "restore-put") { uploadedArchive = new Uint8Array(Buffer.from(data ?? "", "base64")); return { status: "completed" as const, exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: archiveDigest, chunk: Number(index), sha256: digest(uploadedArchive) }) }; }
           if (action === "restore") { mountedRestores++; if (lostRestoreAck) { lostRestoreAck = false; throw new Error("FIXTURE_RESTORE_ACK_LOST"); } }
           if (action === "restore-status" || action === "restore") { mountedObservations++; const bytes = uploadedArchive ?? archive; return { status: "completed" as const, exitCode: 0, stdout: JSON.stringify({ state: "restored", archiveSha256: digest(bytes), toolchainSha256: config.worker.toolchainSha256, sourceSha256: digest(canonicalJson(workspaceSource.files)), artifactFilesSha256: digest(canonicalJson(workspaceArtifact.files)), workspacePath: "/workspace/restored" }) }; }

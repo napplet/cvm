@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalJson } from "../promotion/schema";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const ProviderSchema = z.enum(["cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"]);
@@ -66,6 +67,64 @@ export const AuthoritativeUsageReportEnvelopeSchema = z.object({
   observedAtMs: z.number().int().nonnegative(),
 }).strict();
 export type AuthoritativeUsageReportEnvelope = z.infer<typeof AuthoritativeUsageReportEnvelopeSchema>;
+
+async function sha256(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  return Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
+}
+
+/** A grant is controller-created immutable authority, never a caller supplied
+ * report configuration.  Its two digests deliberately bind both the limited
+ * query permission and the one deterministic provider report job. */
+export async function createBillingObservationGrant(input: Omit<BillingObservationGrant, "grantSha256" | "reportRequestSha256">): Promise<BillingObservationGrant> {
+  const reportRequestSha256 = await sha256({
+    version: 1,
+    origin: input.allowedReportOrigin,
+    collectorSha256: input.collectorSha256,
+    originalScope: input.originalScope,
+    projectId: input.projectId,
+    detailedExportTable: input.detailedExportTable,
+    location: input.location,
+    maximumBytesBilled: input.maximumBytesBilled,
+    reportQueryMaximumCostMicros: input.reportQueryMaximumCostMicros,
+    reportQueryPriceSourceSha256: input.reportQueryPriceSourceSha256,
+    reportQueryMicrosPerByteNumerator: input.reportQueryMicrosPerByteNumerator,
+    reportQueryMicrosPerByteDenominator: input.reportQueryMicrosPerByteDenominator,
+    expiresAtMs: input.expiresAtMs,
+  });
+  const grantSha256 = await sha256({ ...input, reportRequestSha256 });
+  return BillingObservationGrantSchema.parse({ ...input, reportRequestSha256, grantSha256 });
+}
+
+/** Reject a syntactically valid but caller-forged grant before any report
+ * transport can run. */
+export async function verifyBillingObservationGrant(value: unknown): Promise<BillingObservationGrant> {
+  const grant = BillingObservationGrantSchema.parse(value);
+  const rebuilt = await createBillingObservationGrant({
+    version: grant.version,
+    originalScope: grant.originalScope,
+    allowedReportOrigin: grant.allowedReportOrigin,
+    projectId: grant.projectId,
+    detailedExportTable: grant.detailedExportTable,
+    location: grant.location,
+    maximumBytesBilled: grant.maximumBytesBilled,
+    reportQueryMaximumCostMicros: grant.reportQueryMaximumCostMicros,
+    reportQueryPriceSourceSha256: grant.reportQueryPriceSourceSha256,
+    reportQueryMicrosPerByteNumerator: grant.reportQueryMicrosPerByteNumerator,
+    reportQueryMicrosPerByteDenominator: grant.reportQueryMicrosPerByteDenominator,
+    collectorSha256: grant.collectorSha256,
+    expiresAtMs: grant.expiresAtMs,
+  });
+  if (rebuilt.grantSha256 !== grant.grantSha256 || rebuilt.reportRequestSha256 !== grant.reportRequestSha256) throw new Error("BILLING_OBSERVATION_GRANT_INVALID");
+  return grant;
+}
+
+export async function createAuthoritativeUsageReportEnvelope(input: Omit<AuthoritativeUsageReportEnvelope, "rawReportSha256"> & Readonly<{ rawReport: unknown }>): Promise<AuthoritativeUsageReportEnvelope> {
+  const { rawReport, ...base } = input;
+  const rawReportSha256 = await sha256(rawReport);
+  if (base.rawArtifact.sha256 !== rawReportSha256) throw new Error("AUTHORITATIVE_USAGE_ARTIFACT_DIGEST_INVALID");
+  return AuthoritativeUsageReportEnvelopeSchema.parse({ ...base, rawReportSha256 });
+}
 
 /** BigQuery NUMERIC values remain strings until this bounded conversion. A
  * non-micro USD fraction is intentionally held rather than rounded. */

@@ -101,7 +101,7 @@ export { ReleaseAuthorizationRequestSchema };
 export type { ReleaseAuthorizationRequest };
 
 export const RELEASE_LIVE_CONTROLLER_STATES = [
-  "receipt_valid", "bootstrap", "provisioning", "observing", "materializing",
+  "receipt_valid", "bootstrap", "provisioning", "observing", "billing_observing", "materializing",
   "protected_suite_running", "finalizing", "cleaning", "blocked", "completed",
 ] as const;
 
@@ -111,7 +111,7 @@ export const ReleaseControllerStateSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]),
   status: z.enum([
     "initialized", "discovering", "authorization_required", "provisioning", "discovering_deployed", "topology_ready",
-    "receipt_valid", "bootstrap", "observing", "materializing", "protected_suite_running", "finalizing", "cleaning",
+    "receipt_valid", "bootstrap", "observing", "billing_observing", "materializing", "protected_suite_running", "finalizing", "cleaning",
     "blocked", "completed",
   ]),
   candidate: CandidateIdentitySchema,

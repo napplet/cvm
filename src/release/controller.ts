@@ -952,7 +952,7 @@ export class ReleaseCertificationController {
     if (state.status === "topology_ready") {
       state = await this.#advanceLive(state, "materializing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
     }
-    if (state.status !== "materializing" && state.status !== "protected_suite_running" && state.status !== "finalizing" && state.status !== "cleaning" && state.status !== "completed") {
+    if (state.status !== "billing_observing" && state.status !== "materializing" && state.status !== "protected_suite_running" && state.status !== "finalizing" && state.status !== "cleaning" && state.status !== "completed") {
       throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     }
 
@@ -1011,7 +1011,17 @@ export class ReleaseCertificationController {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
       throw new Error("RELEASE_CONTROLLER_FINALIZATION_INPUT_REQUIRED");
     }
-    await this.#assertCostsObserved(state, request, receipt.maximumAuthorizedCostMicros);
+    try {
+      await this.#assertCostsObserved(state, request, receipt.maximumAuthorizedCostMicros);
+    } catch (error) {
+      // Provider resource completion is not a bill. Preserve every completed
+      // original operation and hold in a resumable state for the internal,
+      // report-only collector rather than allowing finalization or promotion.
+      if (state.status !== "billing_observing") {
+        await this.#advanceLive(state, "billing_observing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+      }
+      throw error;
+    }
     state = await this.#advanceLive(state, "finalizing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
     const finalization = await finalizeReleaseCertification({
       ...input.finalization,
@@ -1040,7 +1050,7 @@ export class ReleaseCertificationController {
     return this.#commitStateTransition(prior.stateSha256, next);
   }
 
-  async #advanceLive(prior: ReleaseControllerState, status: Extract<ReleaseControllerState["status"], "receipt_valid" | "bootstrap" | "materializing" | "protected_suite_running" | "finalizing" | "cleaning" | "completed" | "blocked">, authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
+  async #advanceLive(prior: ReleaseControllerState, status: Extract<ReleaseControllerState["status"], "receipt_valid" | "bootstrap" | "billing_observing" | "materializing" | "protected_suite_running" | "finalizing" | "cleaning" | "completed" | "blocked">, authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
     const { stateSha256: _priorStateSha256, ...priorState } = prior;
     const next = await stateFor({
       ...priorState, version: 2, status, priorStateSha256: prior.stateSha256, authorizationReceiptSha256,

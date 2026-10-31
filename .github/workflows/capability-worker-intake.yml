@@ -7,7 +7,8 @@ on:
       - "toolchains/locks/capabilities-worker/**"
       - "toolchains/locks/capabilities-cli/**"
       - "toolchains/overlays/capabilities-template/**"
-      - "toolchains/recipes/capabilities-worker-profile.json"
+      - "toolchains/recipes/capabilities-worker-profile*.json"
+      - "toolchains/recipes/capabilities-worker-current.json"
       - "src/worker-adapters/**"
       - "src/production/**"
       - "src/funding/**"
@@ -17,6 +18,7 @@ on:
       - "src/publication/**"
       - "src/release/deployment/**"
       - "scripts/test-production-worker.ts"
+      - "scripts/generate-capabilities-worker-profile.ts"
       - "scripts/test-direct-publication.ts"
       - "scripts/audit-direct-preview-dependencies.ts"
       - "tests/fixtures/direct-worker-notes/**"
@@ -48,6 +50,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Strict supervisor and validation-harness types with the pinned compiler
         run: bunx --package typescript@5.9.3 tsc --noEmit --skipLibCheck --strict --target ES2022 --module ESNext --moduleResolution bundler --types bun infra/toolchain/production-job.ts infra/toolchain/production-worker.ts scripts/test-production-worker.ts
+      - name: Verify the deterministic unpromoted source profile
+        run: bun scripts/generate-capabilities-worker-profile.ts --verify
       - name: Direct metadata contracts and original operation recovery
         run: bun test tests/release/direct-worker-protocol.test.ts tests/release/direct-preview-dependency-audit.test.ts tests/release/postgres-operation-journal.test.ts tests/production/direct-artifact-verifier.test.ts --timeout 120000
       - name: Build the distinct unselected direct profile on native AMD64

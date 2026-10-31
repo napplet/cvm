@@ -75,7 +75,24 @@ async function main(): Promise<void> {
       funding: { ...fixture.config.funding, nwcConnectionReference: "nwc:fixture-connection", cashuConsentReference: "cashu:fixture-policy" },
       vertex: { ...fixture.config.vertex, credentialReference: "gcp:adc:fixture", priceSnapshotSha256: sha256(JSON.stringify(quote)) },
     });
-    const record = materializeMountedProductionSessionRecord({ config, measured: fixture.measured });
+    const controlDeployment = {
+      region: "us-central1", serviceName: "release-control", imageReference: config.image.controlPlane,
+      revisionName: "release-control-001", secretReferences: [{ name: "RUNTIME_CONFIG", secret: "release-runtime-config", version: "1" }], concurrency: 8,
+    };
+    const collectorDeployment = {
+      region: "us-central1", serviceName: "release-collector", imageReference: fixture.measured.serverControls.telemetry.deployment.imageReference,
+      revisionName: "release-collector-001", secretReferences: [{ name: "COLLECTOR_CONFIG", secret: "release-collector-config", version: "1" }], concurrency: 8,
+    };
+    const record = materializeMountedProductionSessionRecord({ config, measured: {
+      ...fixture.measured,
+      googleControls: {
+        accountScopeSha256: fixture.accountScopeSha256,
+        cloudRun: controlDeployment,
+        cloudSql: { tier: "db-custom-2-8192", privateNetwork: "projects/napplet-cvm-01/global/networks/release-private", storageGb: 20, authorityInstanceId: "release-sql" },
+        gcs: { encryptionKeyReference: "gcs:key" },
+        collector: { endpointReference: "collector/release", deployment: collectorDeployment },
+      },
+    } });
     const secrets = new MountedProductionSecretMaterial(config, { root: mount });
     const nwcPolicy = {
       version: "fixture-v1", activeFrom: new Date(nowMs - 60_000).toISOString(), activeUntil: null,

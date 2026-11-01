@@ -50,6 +50,8 @@ export class LocalPublication {
   #active = new Map<string, Promise<unknown>>();
   #previews = new Map<string, Promise<string>>();
   origin = "";
+  /** Loopback Blossom listener, for a deployment's public reverse proxy. */
+  get localOrigin(): string { return this.#localOrigin; }
   private constructor(private readonly options: Options) {}
   static async open(options: Options) {
     const service = new LocalPublication(options);

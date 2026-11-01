@@ -1,6 +1,6 @@
-import type { createDevelopmentFunding } from "../../scripts/dev-funding";
+import type { ServiceFunding } from "../service/funding";
 
-type DevelopmentFunding = Awaited<ReturnType<typeof createDevelopmentFunding>>;
+type DevelopmentFunding = Pick<ServiceFunding, "database" | "lightning">;
 
 /**
  * Development-only NWC settlement observer. It has no ledger authority: it

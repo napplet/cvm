@@ -4,14 +4,15 @@ import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { PostgresSqlClient, PostgresSqlPool } from "../src/persistence/postgres-sql-funding-store";
 import { Wallet, getEncodedToken } from "@cashu/cashu-ts";
-import { finalizeEvent, nip04, nip47, Relay, verifyEvent } from "nostr-tools";
+import { nwcRequest as serviceNwcRequest } from "../src/service/nwc";
+import { SERVICE_MIGRATIONS, applyCanonicalMigrations, canonicalMigrations } from "../src/service/migrations";
 
 const root = resolve(import.meta.dir, "..");
 const composeFile = resolve(root, "infra/dev-payments/compose.yaml");
 export type DevPayments = { version: 1; developmentOnly: true; mintUrl: string; secondaryMintUrl: string; relayUrl: string; hubUrl: string; nwcUri: string; cashuToken: string; databaseUrl: string; fundingKey: string };
 
 type DevelopmentPool = PostgresSqlPool & Pick<PostgresSqlClient, "query"> & { end(): Promise<void> };
-export const DEVELOPMENT_MIGRATIONS = Object.freeze(["phase-03/001_funding.sql", "phase-03/003_cashu_custody_and_identities.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql", "development/012_remix_imports.sql", "development/013_publication_tracking.sql", "development/014_request_cost_history.sql", "development/015_revision_restore.sql", "development/016_usage_evidence.sql"] as const);
+export const DEVELOPMENT_MIGRATIONS = SERVICE_MIGRATIONS;
 // pg has no bundled declarations; expose only the application's existing SQL
 // port plus pool lifecycle, without changing the approved package manifest.
 const { Pool } = createRequire(import.meta.url)("pg") as { Pool: new (options: Record<string, unknown>) => DevelopmentPool };
@@ -21,39 +22,9 @@ export function createDevelopmentPool(databaseUrl: string): DevelopmentPool {
   return new Pool({ connectionString: databaseUrl, ssl: false, connectionTimeoutMillis: 2000, query_timeout: 5000, max: 10 });
 }
 
-/** Real encrypted NIP-47 request over the local relay; never used by production. */
+/** Real encrypted NIP-47 request over the local relay only. */
 export async function nwcRequest(uri: string, method: string, params: Record<string, unknown> = {}, callerSignal?: AbortSignal): Promise<any> {
-  const connection = nip47.parseConnectionString(uri);
-  const endpoint = new URL(connection.relay);
-  if (endpoint.protocol !== "ws:" || endpoint.hostname !== "127.0.0.1" || endpoint.username || endpoint.password || !/^[0-9a-f]{64}$/.test(connection.secret) || !/^[0-9a-f]{64}$/.test(connection.pubkey)) throw new Error("DEV_NWC_REQUIRES_LOOPBACK");
-  const signal = AbortSignal.any([AbortSignal.timeout(20_000), ...(callerSignal ? [callerSignal] : [])]);
-  const secret = Uint8Array.from(Buffer.from(connection.secret, "hex"));
-  const relay = new Relay(connection.relay);
-  try {
-    signal.throwIfAborted();
-    const event = finalizeEvent({ kind: 23194, created_at: Math.floor(Date.now() / 1000), tags: [["p", connection.pubkey]], content: await nip04.encrypt(secret, connection.pubkey, JSON.stringify({ method, params })) }, secret);
-    await relay.connect({ abort: signal, timeout: 5000 });
-    return await new Promise((resolve, reject) => {
-      const abort = () => { sub.close(); reject(new Error(`NWC_ABORTED:${method}`)); };
-      const sub = relay.subscribe([{ kinds: [23195], authors: [connection.pubkey], "#e": [event.id] }], {
-        async onevent(response) {
-          try {
-            if (!verifyEvent(response)) throw new Error("NWC_SIGNATURE_INVALID");
-            const decoded = JSON.parse(await nip04.decrypt(secret, connection.pubkey, response.content));
-            if (decoded.result_type !== method) throw new Error("NWC_RESULT_TYPE_INVALID");
-            if (decoded.error) throw new Error(`NWC_ERROR:${decoded.error.code}`);
-            resolve(decoded.result);
-          } catch (error) { reject(error); }
-          finally { signal.removeEventListener("abort", abort); sub.close(); }
-        },
-        oneose() {
-          relay.publish(event).catch(() => { signal.removeEventListener("abort", abort); sub.close(); reject(new Error("DEV_NWC_PUBLISH_FAILED")); });
-        },
-      });
-      signal.addEventListener("abort", abort, { once: true });
-      if (signal.aborted) abort();
-    });
-  } finally { relay.close(); secret.fill(0); }
+  return serviceNwcRequest(uri, method, params, callerSignal, "loopback");
 }
 
 async function privateJson(path: string, value: unknown) {
@@ -75,38 +46,15 @@ async function localSecret(path: string): Promise<string> {
 }
 
 export async function expectedDevelopmentMigrations(): Promise<Array<Readonly<{ name: string; sha256: string; sql: string }>>> {
-  return Promise.all(DEVELOPMENT_MIGRATIONS.map(async (name) => {
-    const sql = await readFile(resolve(root, "migrations", name), "utf8");
-    return Object.freeze({ name, sha256: new Bun.CryptoHasher("sha256").update(sql).digest("hex"), sql });
-  }));
+  return [...await canonicalMigrations()];
 }
 
-/** Development-only migration runner. Checksums prevent silent schema drift on reuse. */
+/** Development database: the canonical service migration sequence. */
 async function migrate(databaseUrl: string) {
   const pool = createDevelopmentPool(databaseUrl);
   try {
     await waitUntil(async () => !!await pool.query("SELECT 1"), "postgres");
-    const client = await pool.connect();
-    try {
-      await client.query("SELECT pg_advisory_lock(7351051)");
-      await client.query("CREATE TABLE IF NOT EXISTS development_migrations (name text PRIMARY KEY, sha256 text NOT NULL)");
-      for (const migration of await expectedDevelopmentMigrations()) {
-        const prior = await client.query("SELECT sha256 FROM development_migrations WHERE name=$1", [migration.name]);
-        if (prior.rows.length) {
-          if (prior.rows[0].sha256 !== migration.sha256) throw new Error(`DEV_MIGRATION_CHANGED:${migration.name}`);
-          continue;
-        }
-        await client.query("BEGIN");
-        try {
-          await client.query(migration.sql.replace(/^(?:BEGIN|COMMIT);\s*$/gm, ""));
-          await client.query("INSERT INTO development_migrations(name,sha256) VALUES ($1,$2)", [migration.name, migration.sha256]);
-          await client.query("COMMIT");
-        } catch (error) { await client.query("ROLLBACK"); throw error; }
-      }
-    } finally {
-      await client.query("SELECT pg_advisory_unlock(7351051)").catch(() => undefined);
-      client.release();
-    }
+    await applyCanonicalMigrations(pool);
   } finally { await pool.end(); }
 }
 

@@ -109,6 +109,22 @@ services:
     volumes:
       - ${NAPPLET_CVM_ROOT}/data/test-mint:/data
       - ${NAPPLET_CVM_ROOT}/secrets/test_mint_key:/run/secrets/napplet-cvm/test_mint_key:ro
+  test-mint-2:
+    <<: *restart
+    profiles: [test-rails]
+    image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
+    command: poetry run mint
+    environment:
+      MINT_BACKEND_BOLT11_SAT: FakeWallet
+      MINT_LISTEN_HOST: 0.0.0.0
+      MINT_LISTEN_PORT: "3338"
+      MINT_DATABASE: /data/mint
+      FAKEWALLET_BRR: "true"
+      FAKEWALLET_DELAY_INCOMING_PAYMENT: "0"
+    entrypoint: ["sh", "-c", "export MINT_PRIVATE_KEY=$$(cat /run/secrets/napplet-cvm/test_mint_2_key) && exec \"$$@\"", "--"]
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/data/test-mint-2:/data
+      - ${NAPPLET_CVM_ROOT}/secrets/test_mint_2_key:/run/secrets/napplet-cvm/test_mint_2_key:ro
   test-wallet:
     <<: *restart
     profiles: [test-rails]

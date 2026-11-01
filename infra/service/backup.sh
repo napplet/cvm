@@ -24,7 +24,7 @@ compose exec -T postgres psql -U napplet_cvm -d napplet_cvm -Atc "
   SELECT table_name || '|' || (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM public.%I', table_name), false, true, '')))[1]::text
   FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY 1" > "${WORK}/counts.tsv"
 test -s "${WORK}/database.dump" && test -s "${WORK}/counts.tsv"
-tar -C "${ROOT}/data" -cf "${WORK}/storage.tar" storage $(cd "${ROOT}/data" && ls -d test-mint test-wallet 2>/dev/null || true)
+tar -C "${ROOT}/data" -cf "${WORK}/storage.tar" storage $(cd "${ROOT}/data" && ls -d test-mint test-mint-2 test-wallet 2>/dev/null || true)
 tar -C "${ROOT}" -cf "${WORK}/state.tar" config secrets deployed.json
 STATUS="$(compose exec -T cvm bun -e "const r=await fetch('http://127.0.0.1:8080/health'); console.log(await r.text())" 2>/dev/null || echo '{}')"
 PUBKEY="$(compose exec -T cvm cat /var/lib/napplet-cvm/service-pubkey 2>/dev/null || true)"

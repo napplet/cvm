@@ -25,7 +25,9 @@ if (import.meta.main) {
   catch (error) {
     // Error codes only; mounted secrets never appear in diagnostics.
     const message = error instanceof Error ? error.message : "SERVICE_START_FAILED";
-    console.error(JSON.stringify({ ready: false, error: /^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? message : "SERVICE_START_FAILED", ...(error instanceof Error && error.name === "ZodError" ? { detail: "SERVICE_CONFIG_SCHEMA_INVALID" } : {}) }));
+    // Validation errors report issue paths and codes only, never values.
+    const issues = error instanceof Error && error.name === "ZodError" ? (error as unknown as { issues: Array<{ path: PropertyKey[]; code: string }> }).issues.slice(0, 8).map((issue) => `${issue.path.map(String).join(".")}:${issue.code}`) : undefined;
+    console.error(JSON.stringify({ ready: false, error: /^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? message : "SERVICE_START_FAILED", ...(issues ? { validation: issues } : {}) }));
     process.exit(1);
   }
 }

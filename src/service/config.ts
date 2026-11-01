@@ -32,7 +32,8 @@ export const ServiceConfigSchema = z.object({
   storage: z.object({ adapter: z.literal("filesystem"), root: absolute }).strict(),
   funding: z.object({
     nwc: z.object({ adapter: z.literal("nip47-receive-only") }).strict(),
-    cashu: z.object({ mintPolicyVersion: z.string().regex(/^[a-z0-9][a-z0-9.-]{2,63}$/u), mints: z.array(z.object({ url: https, route: z.string().url().optional() }).strict()).min(1).max(8) }).strict(),
+    cashu: z.object({ mintPolicyVersion: z.string().regex(/^[a-z0-9][a-z0-9.-]{2,63}$/u), /** The Cashu mint policy requires at least two independent mints. */
+    mints: z.array(z.object({ url: https, route: z.string().url().optional() }).strict()).min(2).max(8) }).strict(),
     reserveSat: z.string().regex(/^[1-9][0-9]{0,8}$/u).default("3750"),
   }).strict(),
   model: z.object({

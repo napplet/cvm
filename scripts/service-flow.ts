@@ -142,7 +142,8 @@ try {
     check(status.status === "ok", "FLOW_STATUS", status);
     report.timeline = status.session.timeline?.map((item: { stage: string }) => item.stage);
     const preview = await client.preview({ sessionId: sessionResult.sessionId, artifactId: sessionResult.artifactId });
-    check(preview?.state === "ready" && typeof preview.previewUrl === "string", "FLOW_PREVIEW", preview);
+    const ready = (value: { status?: string; state?: string } | undefined) => (value?.status ?? value?.state) === "ready";
+    check(ready(preview) && typeof preview.previewUrl === "string", "FLOW_PREVIEW", preview);
     const previewUrl = new URL(preview.previewUrl);
     check(previewUrl.origin !== origin, "FLOW_PREVIEW_ORIGIN_NOT_SEPARATE", previewUrl.origin);
     const shell = await fetch(previewUrl, { signal: AbortSignal.timeout(20_000) });
@@ -172,9 +173,9 @@ try {
     const stranger = await connect(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"));
     try {
       const foreignStatus = await stranger.sessionStatus(sessionResult.sessionId).catch((error: Error) => ({ status: error.message }));
-      const foreignPreview = await stranger.preview({ sessionId: sessionResult.sessionId, artifactId: revised.artifactId }).catch((error: Error) => ({ state: error.message }));
-      check(foreignStatus.status !== "ok" && foreignPreview.state !== "ready", "FLOW_OWNERSHIP_LEAK", { foreignStatus, foreignPreview });
-      report.ownership = { foreignStatus: foreignStatus.status, foreignPreview: foreignPreview.state };
+      const foreignPreview = await stranger.preview({ sessionId: sessionResult.sessionId, artifactId: revised.artifactId }).catch((error: Error) => ({ status: error.message }));
+      check(foreignStatus.status !== "ok" && !ready(foreignPreview) && !foreignPreview.previewUrl, "FLOW_OWNERSHIP_LEAK", { foreignStatus, foreignPreview });
+      report.ownership = { foreignStatus: foreignStatus.status, foreignPreview: foreignPreview.status ?? foreignPreview.state };
     } finally { await stranger.close(); }
 
     // 8. Publication through the napplet CLI upload contract, signed by the user,
@@ -220,7 +221,7 @@ try {
     const status = await client.sessionStatus(prior.sessionId);
     check(status.status === "ok", "FLOW_REOPEN_STATUS", status);
     const preview = await client.preview({ sessionId: prior.sessionId, artifactId: prior.artifactId });
-    check(preview?.state === "ready", "FLOW_REOPEN_PREVIEW", preview);
+    check((preview?.status ?? preview?.state) === "ready", "FLOW_REOPEN_PREVIEW", preview);
     const target = await fetch(new URL("__kehto/target.html", preview.previewUrl), { signal: AbortSignal.timeout(20_000) });
     check(target.ok, "FLOW_REOPEN_PREVIEW_UNREACHABLE", target.status);
     check((await balance(client)).available === now.available && !events.some((event) => event.stage === "model"), "FLOW_REOPEN_CHARGED_OR_CALLED_MODEL", events);

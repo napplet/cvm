@@ -69,6 +69,9 @@ services:
       dockerfile: infra/service/Dockerfile
       args: { NAPPLET_CVM_REVISION: "${NAPPLET_CVM_REVISION}" }
     init: true
+    # Resolver for the service's outbound names (relays, mints, wallet relay,
+    # model API, its own public origins). Set per host in compose.env.
+    dns: ["${NAPPLET_CVM_DNS:?set NAPPLET_CVM_DNS in compose.env}"]
     shm_size: 1gb
     stop_grace_period: 30s
     depends_on:

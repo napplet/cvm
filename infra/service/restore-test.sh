@@ -33,6 +33,7 @@ NAPPLET_CVM_ROOT=${RROOT}
 NAPPLET_CVM_PROJECT=${PROJECT}
 NAPPLET_CVM_BIND=${BIND}
 NAPPLET_CVM_REVISION=${REVISION}
+NAPPLET_CVM_DNS=$(sed -n "s/^NAPPLET_CVM_DNS=//p" "${LIVE_ROOT}/compose.env")
 ENV
 REALM="$(jq -r .realm "${RROOT}/config/service.json")"
 PROFILE=(); [[ "${REALM}" == test ]] && PROFILE=(--profile test-rails)

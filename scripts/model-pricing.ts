@@ -62,7 +62,8 @@ const usdPerBtc = last.replace(/(\.\d*?)0+$/u, "$1").replace(/\.$/u, "");
 const input = satsPerToken(prices.inputUsdPerMillion, usdPerBtc);
 const output = satsPerToken(prices.outputUsdPerMillion, usdPerBtc);
 const source = (url: string, sha256: string) => ({ url, capturedBytesSha256: sha256, observedAt: observedAt.toISOString(), effectiveAt: observedAt.toISOString(), freshUntil });
-const maximumInputTokens = "48000";
+// The authoring guidance alone is ~61 KB; the request guard compares bytes to tokens.
+const maximumInputTokens = "128000";
 const maximumOutputTokens = "24000";
 const cardBody = {
   kind: "source_attributed_provider", provider: "openai_responses", currency: "sat", rounding: "ceil",

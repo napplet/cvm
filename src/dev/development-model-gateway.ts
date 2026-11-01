@@ -94,7 +94,10 @@ export class DevelopmentModelGateway implements ModelGateway {
       const stored = await this.store.persist({ intent, provider: "openai_responses", model: this.#configured.model, proposal: generated });
       await this.store.recordProviderObservation({ intent, providerResponseId: native.id, receipt, sourceProposalReference: stored.proposal.reference });
       return ModelDispatchObservationSchema.parse({ status: "completed", receipt, sourceProposalReference: stored.proposal.reference });
-    } catch {
+    } catch (error) {
+      // Operator diagnostic: a bounded error code only, never prompt, output or credentials.
+      const code = error instanceof Error ? (/^[A-Z][A-Z0-9_:]{2,80}$/u.test(error.message) ? error.message : error.name) : "UNKNOWN";
+      console.error(JSON.stringify({ event: "model_dispatch_error", operationId: intent.operationId, code, receiptKnown: !!knownReceipt }));
       if (knownReceipt) return ModelDispatchObservationSchema.parse({ status: "failed", receipt: knownReceipt });
       return ModelDispatchObservationSchema.parse({ status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: signal.aborted ? "aborted" : "uncertain_acceptance", provenance: { protectedEvidenceReference: `openai:response:unknown:${intent.operationId}` } });
     }

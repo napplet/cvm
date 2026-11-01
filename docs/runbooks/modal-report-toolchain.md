@@ -1,3 +1,5 @@
+> **Historical — do not follow.** Describes the withdrawn Google Cloud/hosted-worker production path. The current deployment, backup, restore and rollback procedure is [service deployment](service-deployment.md).
+
 # Optional Modal report toolchain
 
 The normal mounted Modal selector remains disabled. This image does not prove account eligibility, least-privilege RBAC, currency, original resource mapping, report coverage or finality. It grants no report or resource authority and is not selected by the current private deployment.

@@ -1,3 +1,5 @@
+> **Historical — do not follow.** Describes the withdrawn Google Cloud/hosted-worker production path. The current deployment, backup, restore and rollback procedure is [service deployment](service-deployment.md).
+
 # Cloud Run resource profile and certification quantities
 
 The native Google deployment request uses one project-owned profile for the control and Collector services:1 vCPU,512MiB memory,3 minimum/maximum instances, instance-based CPU allocation and no startup CPU boost. It sets the maximum at both service and revision levels. Mounted input cannot raise these fields. The returned service must match the declared profile before the original operation can become completed/owned; changed CPU, RAM, scaling mode, missing limits or added GPU limits remain unknown. The API's omitted false boolean representation is accepted only with the explicit matching resource limits.

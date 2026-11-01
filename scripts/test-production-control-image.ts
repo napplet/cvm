@@ -129,7 +129,7 @@ try {
     modalEvidence = observed.modalEvidence;
   }
   const boot = await command(["run", "--name", bootName, ...restrictions, image]);
-  if (boot.code !== 1 || !boot.stderr.includes("PRODUCTION_CONFIG_MOUNT_UNAVAILABLE")) throw new Error(`CONTROL_IMAGE_BOOT_NOT_FAIL_CLOSED:${boot.stderr.slice(0, 500)}`);
+  if (boot.code !== 1 || !boot.stderr.includes("SERVICE_MOUNT_UNAVAILABLE:/etc/napplet-cvm/service.json")) throw new Error(`CONTROL_IMAGE_BOOT_NOT_FAIL_CLOSED:${boot.stderr.slice(0, 500)}`);
 } finally {
   for (const name of names) {
     await command(["rm", "--force", name]);

@@ -23,7 +23,9 @@ REVISION="${NAPPLET_CVM_RESTORE_REVISION:-$(jq -r .revision "${BACKUP}/manifest.
 compose() { docker compose -p "${PROJECT}" --env-file "${RROOT}/compose.env" -f "${RROOT}/current/infra/service/compose.yaml" "$@"; }
 if [[ -f "${RROOT}/compose.env" ]]; then compose --profile test-rails down -v --remove-orphans >/dev/null 2>&1 || true; fi
 rm -rf -- "${RROOT}"
-install -d -m 0700 "${RROOT}" "${RROOT}/data" "${RROOT}/data/postgres"
+# Same modes as the live root: non-root containers traverse data/ to their own directory.
+install -d -m 0711 "${RROOT}" "${RROOT}/data"
+install -d -m 0700 "${RROOT}/data/postgres"
 install -d -m 0700 -o 1000 "${RROOT}/data/relay"
 tar -C "${RROOT}" -xf "${BACKUP}/state.tar"
 tar -C "${RROOT}/data" -xf "${BACKUP}/storage.tar"

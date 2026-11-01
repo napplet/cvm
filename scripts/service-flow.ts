@@ -131,7 +131,10 @@ try {
     const afterFirst = await balance(client);
     const firstSpend = BigInt(sessionResult.confirmedSpend);
     check(firstSpend > 0n && firstSpend <= BigInt(maximum), "FLOW_SPEND_OUTSIDE_CAP", sessionResult);
-    check(funded.available - afterFirst.available === firstSpend && afterFirst.held === 0n, "FLOW_LEDGER_MISMATCH", { before: funded.available.toString(), after: afterFirst.available.toString(), held: afterFirst.held.toString(), spend: sessionResult.confirmedSpend });
+    // The open session keeps its remaining cap on hold for revisions: settled
+    // funds (available + held) fall by exactly the confirmed spend.
+    const settled = (value: { available: bigint; held: bigint }) => value.available + value.held;
+    check(settled(funded) - settled(afterFirst) === firstSpend && afterFirst.held === BigInt(sessionResult.remainingCap), "FLOW_LEDGER_MISMATCH", { before: settled(funded).toString(), after: settled(afterFirst).toString(), held: afterFirst.held.toString(), remainingCap: sessionResult.remainingCap, spend: sessionResult.confirmedSpend });
     report.generation = { sessionId: sessionResult.sessionId, artifactId: sessionResult.artifactId, confirmedSpend: sessionResult.confirmedSpend, remainingCap: sessionResult.remainingCap, durationMs: Date.now() - admissionStarted };
 
     // 5. Durable status timeline and sandboxed preview from the preview origin.
@@ -158,10 +161,11 @@ try {
     const revised = await client.reviseSession(revisionInput);
     check(revised?.status === "completed" && revised.artifactId && revised.artifactId !== sessionResult.artifactId, "FLOW_REVISION", revised);
     const afterRevision = await balance(client);
-    check(afterFirst.available - afterRevision.available === BigInt(revised.confirmedSpend), "FLOW_REVISION_LEDGER_MISMATCH", { revised, before: afterFirst.available.toString(), after: afterRevision.available.toString() });
+    check(settled(afterFirst) - settled(afterRevision) === BigInt(revised.confirmedSpend), "FLOW_REVISION_LEDGER_MISMATCH", { revised, before: settled(afterFirst).toString(), after: settled(afterRevision).toString(), held: afterRevision.held.toString() });
     const replayed = await client.reviseSession(revisionInput);
     check(replayed.artifactId === revised.artifactId && replayed.confirmedSpend === revised.confirmedSpend, "FLOW_REVISION_REPLAY_CHANGED", replayed);
-    check((await balance(client)).available === afterRevision.available, "FLOW_REVISION_REPLAY_CHARGED");
+    const afterReplay = await balance(client);
+    check(settled(afterReplay) === settled(afterRevision) && afterReplay.held === afterRevision.held, "FLOW_REVISION_REPLAY_CHARGED");
     report.revision = { artifactId: revised.artifactId, confirmedSpend: revised.confirmedSpend, replay: "same artifact, no second charge" };
 
     // 7. Ownership: another Nostr identity sees nothing.
@@ -205,13 +209,14 @@ try {
     } finally { for (const item of servers) item.server.stop(true); }
 
     const projects = await client.callTool("projects", { action: "list" }).catch((error: Error) => ({ error: error.message }));
-    report.final = { balance: (await balance(client)).available.toString(), projects: Array.isArray(projects?.projects) ? projects.projects.length : projects };
+    const final = await balance(client);
+    report.final = { balance: final.available.toString(), held: final.held.toString(), settled: (final.available + final.held).toString(), projects: Array.isArray(projects?.projects) ? projects.projects.length : projects };
     await writeFile(statePath, JSON.stringify({ sessionId: sessionResult.sessionId, artifactId: revised.artifactId, balance: report.final, spends: [sessionResult.confirmedSpend, revised.confirmedSpend] }, null, 2), { mode: 0o600 });
   } else {
     // Reopen after restart/restore: same identity, same artifact, no model call.
     const prior = JSON.parse(await readFile(statePath, "utf8")) as { sessionId: string; artifactId: string; balance: { balance: string } };
     const now = await balance(client);
-    check(now.available.toString() === prior.balance.balance, "FLOW_REOPEN_BALANCE_CHANGED", { prior: prior.balance.balance, now: now.available.toString() });
+    check(now.available.toString() === prior.balance.balance && (now.available + now.held).toString() === (prior.balance as { settled?: string }).settled, "FLOW_REOPEN_BALANCE_CHANGED", { prior: prior.balance, now: now.available.toString(), held: now.held.toString() });
     const status = await client.sessionStatus(prior.sessionId);
     check(status.status === "ok", "FLOW_REOPEN_STATUS", status);
     const preview = await client.preview({ sessionId: prior.sessionId, artifactId: prior.artifactId });

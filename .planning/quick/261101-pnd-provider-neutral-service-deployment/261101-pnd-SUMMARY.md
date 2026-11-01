@@ -27,11 +27,19 @@ Live evidence on beta (test realm, private names via alpha Traefik), 2026-11-01:
   path with all checksums intact; isolated restore verified identity, 56 tables /
   672 rows, 12 artifacts, ledger invariant, and project reopen (70 s restore).
 
+Paid generation (after OpenAI credits were added), revision c5f06287c31e:
+- Two real gpt-5-mini generations, each verified under gVisor (build +
+  conformance), charged exactly 15 sats from the usage receipt; settled funds
+  9999 -> 9969. Revision replay charged nothing. Publication announced.
+- Explicit refusals (429 insufficient_quota) settled at 0; a verify-stage rejection
+  of nonconforming generated code charged actual usage (18 and 16 sats) and sealed
+  no artifact. Instructions now state the unused-variable compile rules.
+- Latency (single runs, not p95): admission 53 ms; isolated worker start 19 ms
+  after the model step, first in-container stage ~160 ms; model ~30 s.
+
 Not complete:
-- Paid OpenAI generation: the configured key's organization has no API credits
-  (HTTP 429 insufficient_quota). The refusal now settles at zero charge.
-  Live flow currently uses the test-realm deterministic model adapter.
 - Real-money realm: needs a receive-only NWC connection, two real Cashu mints and
   public DNS/ingress. Not deployed; not production-ready.
 - Homelab backup runner on alpha must be updated after the homelab branch merges
   (`./homelab backup install-runner`) to include the CVM volume nightly.
+- p95 startup measurement under concurrent load was not run.

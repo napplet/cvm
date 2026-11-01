@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { EncryptionMode } from "@contextvm/sdk/core";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
@@ -113,6 +113,8 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     const readiness = await new LocalDevelopmentRuntimeReadiness({ image: config.worker.image, runtime: config.worker.runtime }).assertReady();
     const signer = new PrivateKeySigner(identity.signerPrivateKey);
     const servicePubkey = await signer.getPublicKey();
+    // Public identity marker for backups and operators; never a secret.
+    await writeFile(resolve(storage, "service-pubkey"), `${servicePubkey}\n`, { mode: 0o644 });
     const transport = new NostrServerTransport({ signer, relayHandler: [config.relay.url], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
     // `development_publication` is the historical name of the user-signed publication tool.
     const bridge = new ContextVmSdkBridge(transport, ["service_info", "projects", "development_publication"]);

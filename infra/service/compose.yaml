@@ -120,6 +120,17 @@ services:
       - ${NAPPLET_CVM_ROOT}/secrets/test_wallet_password:/run/secrets/napplet-cvm/test_wallet_password:ro
     depends_on: [test-mint, relay]
 
+  # VPS ingress: TLS for the three service names. Homelab uses its existing Traefik.
+  caddy:
+    <<: *restart
+    profiles: [caddy]
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${NAPPLET_CVM_ROOT}/data/caddy:/data
+    depends_on: [cvm]
+
 volumes:
   engine-data:
   engine-socket:

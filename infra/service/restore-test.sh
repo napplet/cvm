@@ -21,7 +21,14 @@ REVISION="${NAPPLET_CVM_RESTORE_REVISION:-$(jq -r .revision "${BACKUP}/manifest.
 [[ -d "${LIVE_ROOT}/releases/${REVISION}" ]] || { echo "release ${REVISION} is not present on this host" >&2; exit 3; }
 
 compose() { docker compose -p "${PROJECT}" --env-file "${RROOT}/compose.env" -f "${RROOT}/current/infra/service/compose.yaml" "$@"; }
-if [[ -f "${RROOT}/compose.env" ]]; then compose --profile test-rails down -v --remove-orphans >/dev/null 2>&1 || true; fi
+# Remove any earlier isolated instance by its compose label; this does not
+# depend on that run's (possibly outdated) environment file.
+purge() {
+  docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}" | xargs -r docker rm -f >/dev/null
+  docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}" | xargs -r docker network rm >/dev/null
+  docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}" | xargs -r docker volume rm >/dev/null
+}
+purge
 rm -rf -- "${RROOT}"
 # Same modes as the live root: non-root containers traverse data/ to their own directory.
 install -d -m 0711 "${RROOT}" "${RROOT}/data"
@@ -63,4 +70,4 @@ if [[ -n "${FLOW_DIR}" ]]; then
     scripts/service-flow.ts --phase reopen --origin "${ORIGIN}" --identity /flow/user.key --state /flow/flow-state.json --resolve http://cvm:8080 --relay ws://relay:8080
 fi
 echo "NAPPLET_CVM_RESTORE_TEST_OK backup=${BACKUP} revision=${REVISION} realm=${REALM} restore_seconds=$((ready - started)) total_seconds=$(( $(date +%s) - started ))"
-if [[ "${NAPPLET_CVM_RESTORE_KEEP:-0}" != 1 ]]; then compose "${PROFILE[@]}" down -v --remove-orphans >/dev/null; rm -rf -- "${RROOT}"; fi
+if [[ "${NAPPLET_CVM_RESTORE_KEEP:-0}" != 1 ]]; then purge; rm -rf -- "${RROOT}"; fi

@@ -27,7 +27,10 @@ if (import.meta.main) {
     const message = error instanceof Error ? error.message : "SERVICE_START_FAILED";
     // Validation errors report issue paths and codes only, never values.
     const issues = error instanceof Error && error.name === "ZodError" ? (error as unknown as { issues: Array<{ path: PropertyKey[]; code: string }> }).issues.slice(0, 8).map((issue) => `${issue.path.map(String).join(".")}:${issue.code}`) : undefined;
-    console.error(JSON.stringify({ ready: false, error: /^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? message : "SERVICE_START_FAILED", ...(issues ? { validation: issues } : {}) }));
+    // Unexpected errors report their class and system error code, not their text.
+    const cause = error instanceof Error ? (error as { code?: unknown }).code ?? (error.cause as { code?: unknown } | undefined)?.code : undefined;
+    const kind = error instanceof Error && !/^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? { kind: error.name, ...(typeof cause === "string" && /^[A-Z_]{2,40}$/u.test(cause) ? { code: cause } : {}) } : {};
+    console.error(JSON.stringify({ ready: false, error: /^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? message : "SERVICE_START_FAILED", ...kind, ...(issues ? { validation: issues } : {}) }));
     process.exit(1);
   }
 }

@@ -42,7 +42,7 @@ compose up -d --wait postgres
 compose exec -T postgres pg_restore -U napplet_cvm -d napplet_cvm --no-owner --exit-on-error < "${BACKUP}/database.dump"
 compose "${PROFILE[@]}" up -d --wait relay engine
 docker save napplet-cvm/dev-worker:development napplet-cvm/dev-publication:development | compose exec -T engine docker --host unix:///run/cvm-docker/docker.sock load -q
-[[ "${REALM}" == test ]] && compose "${PROFILE[@]}" up -d test-mint test-wallet
+[[ "${REALM}" == test ]] && compose "${PROFILE[@]}" up -d test-mint test-mint-2 test-wallet
 compose run --rm --no-deps --entrypoint bun cvm scripts/migrate.ts --check
 compose up -d --no-deps cvm
 for _ in $(seq 120); do

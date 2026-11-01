@@ -15,7 +15,9 @@ export type RelayReceipt = { relay: string; state: "published" | "failed"; detai
  * relay over the internal address; every other relay must be publicly routable.
  */
 export async function publishOnUserRelays(relays: string[], event: Event, serviceRelay: string | Readonly<{ internal: string; public?: string }>, send: boolean | "always"): Promise<RelayReceipt[]> {
-  const internal = relayUrl(typeof serviceRelay === "string" ? serviceRelay : serviceRelay.internal);
+  // The service's own relay address is trusted configuration (often a private
+  // stack name), not user input; normalize it the way relayUrl() does.
+  const internal = new URL(typeof serviceRelay === "string" ? serviceRelay : serviceRelay.internal).href.replace(/\/$/u, "");
   const exposed = typeof serviceRelay === "string" || !serviceRelay.public ? undefined : relayUrl(serviceRelay.public);
   return Promise.all(relays.map(async value => {
     let child: ReturnType<typeof Bun.spawn> | undefined; let timer: ReturnType<typeof setTimeout> | undefined;

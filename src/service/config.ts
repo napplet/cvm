@@ -36,11 +36,15 @@ export const ServiceConfigSchema = z.object({
     mints: z.array(z.object({ url: https, route: z.string().url().optional() }).strict()).min(2).max(8) }).strict(),
     reserveSat: z.string().regex(/^[1-9][0-9]{0,8}$/u).default("3750"),
   }).strict(),
-  model: z.object({
-    adapter: z.literal("openai-responses"),
-    /** Mounted, non-secret pricing document: model, profile, priceCard, priceSources. */
-    pricingFile: absolute,
-  }).strict(),
+  model: z.discriminatedUnion("adapter", [
+    z.object({
+      adapter: z.literal("openai-responses"),
+      /** Mounted, non-secret pricing document: model, profile, priceCard, priceSources. */
+      pricingFile: absolute,
+    }).strict(),
+    /** Test realm only: fixed source and synthetic fixture pricing, no provider call. */
+    z.object({ adapter: z.literal("deterministic-test") }).strict(),
+  ]),
   worker: z.object({
     adapter: z.literal("docker"),
     image: z.string().min(3).max(256),
@@ -52,6 +56,7 @@ export const ServiceConfigSchema = z.object({
   if (config.realm !== "real") return;
   if (new URL(config.origins.relay).protocol !== "wss:") ctx.addIssue({ code: "custom", path: ["origins", "relay"], message: "real realm requires wss" });
   if (config.funding.cashu.mints.some((mint) => mint.route)) ctx.addIssue({ code: "custom", path: ["funding", "cashu", "mints"], message: "real realm mints cannot be privately routed" });
+  if (config.model.adapter !== "openai-responses") ctx.addIssue({ code: "custom", path: ["model", "adapter"], message: "real realm requires a metered provider" });
   if (config.worker.runtime === "runc") ctx.addIssue({ code: "custom", path: ["worker", "runtime"], message: "real realm requires a sandboxed OCI runtime" });
 });
 

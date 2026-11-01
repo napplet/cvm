@@ -33,6 +33,8 @@ test("the real-money realm rejects test rails, private mint routes, plaintext re
   expect(() => parseServiceConfig({ ...real, funding: baseConfig.funding })).toThrow();
   expect(() => parseServiceConfig({ ...real, origins: { ...baseConfig.origins, relay: "ws://cvm.example.org/relay" } })).toThrow();
   expect(() => parseServiceConfig({ ...real, worker: { ...baseConfig.worker, runtime: "runc" } })).toThrow();
+  expect(parseServiceConfig({ ...baseConfig, model: { adapter: "deterministic-test" } }).model.adapter).toBe("deterministic-test");
+  expect(() => parseServiceConfig({ ...real, model: { adapter: "deterministic-test" } })).toThrow();
   expect(() => parseServiceConfig({ ...real, funding: { ...real.funding, cashu: { mintPolicyVersion: "service-real-v1", mints: [{ url: "https://mint.dev.invalid" }, { url: "https://mint.example.net" }] } } })).toThrow("SERVICE_REAL_REALM_TEST_MARKER");
 });
 

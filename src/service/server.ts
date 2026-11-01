@@ -16,7 +16,7 @@ import { ContinuationService } from "../continuity/continuation-service";
 import { PendingActionEnvelopeService } from "../continuity/checkpoint-envelope";
 import { PreAdmissionSessionService } from "../continuity/pre-admission-session-service";
 import { accountIdForPrincipal } from "../domain/account-command";
-import { maximumOperationCharge } from "../model/price-card";
+import { maximumOperationCharge, PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, type ModelProfile, type PriceCard } from "../model/price-card";
 import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "../dev/development-model-gateway";
 import { SourceProposalStore } from "../dev/source-proposal-store";
 import { registerDevelopmentPricing } from "../dev/register-development-pricing";
@@ -96,17 +96,26 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
       allowMintRoutes: config.realm === "test",
     });
 
-    // Paid generation: OpenAI Responses with exact usage receipts and lookup reconciliation.
-    const pricingDocument = JSON.parse(new TextDecoder().decode(await readMountedFile(config.model.pricingFile, 256_000)));
-    const configured = await configuredProviderFromEnvironment({ apiKey: await secrets.text("openai_api_key"), model: pricingDocument.model, profile: pricingDocument.profile, priceCard: pricingDocument.priceCard, priceSources: pricingDocument.priceSources });
-    if (!configured) throw new Error("SERVICE_MODEL_REQUIRED");
+    // Paid generation: OpenAI Responses with exact usage receipts and lookup
+    // reconciliation. The deterministic adapter exists only for the test realm.
     const proposals = new SourceProposalStore(app.pool);
-    const pricing = { card: configured.priceCard, profile: configured.profile };
+    let configured: Awaited<ReturnType<typeof configuredProviderFromEnvironment>>;
+    let pricing: { card: PriceCard; profile: ModelProfile };
+    if (config.model.adapter === "openai-responses") {
+      const pricingDocument = JSON.parse(new TextDecoder().decode(await readMountedFile(config.model.pricingFile, 256_000)));
+      configured = await configuredProviderFromEnvironment({ apiKey: await secrets.text("openai_api_key"), model: pricingDocument.model, profile: pricingDocument.profile, priceCard: pricingDocument.priceCard, priceSources: pricingDocument.priceSources });
+      if (!configured) throw new Error("SERVICE_MODEL_REQUIRED");
+      pricing = { card: configured.priceCard, profile: configured.profile };
+    } else {
+      if (config.realm !== "test") throw new Error("SERVICE_TEST_MODEL_DENIED");
+      configured = undefined;
+      pricing = { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] };
+    }
     await registerDevelopmentPricing(app.pool, { profile: pricing.profile, priceCard: pricing.card });
     const repository = new LocalArtifactRepository({ objectRoot: resolve(storage, "artifacts"), pool: app.pool });
     let priorSource: ConstructorParameters<typeof DevelopmentModelGateway>[0]["priorSource"];
-    const gateway = new DevelopmentModelGateway({ store: proposals, configured, priorSource: async (value) => priorSource?.(value) });
-    if (gateway.label() !== "Configured OpenAI Responses") throw new Error("SERVICE_MODEL_REQUIRED");
+    const gateway = new DevelopmentModelGateway({ store: proposals, ...(configured ? { configured } : {}), priorSource: async (value) => priorSource?.(value) });
+    if ((config.model.adapter === "openai-responses") !== (gateway.label() === "Configured OpenAI Responses")) throw new Error("SERVICE_MODEL_ADAPTER_MISMATCH");
 
     // Isolated worker: the configured Docker engine and OCI runtime, probed before listening.
     configureUntrustedContainerRuntime(config.worker.runtime);
@@ -261,7 +270,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
         development_publication: (value, pubkey) => publication.handle(value, pubkey),
         service_info: async (value, pubkey) => {
           ServiceInfoArgumentsSchema.parse(value);
-          return { reserveSat: config.funding.reserveSat, actionCeilingSat, providerLabel: config.realm === "real" ? "OpenAI Responses · metered sats" : "OpenAI Responses · test credits", estimates: await readGenerationEstimates(app.pool, pubkey, pricing, actionCeilingSat).catch(() => null), available: true, development: false, realm: config.realm };
+          return { reserveSat: config.funding.reserveSat, actionCeilingSat, providerLabel: config.model.adapter === "deterministic-test" ? "Deterministic test model · test credits" : config.realm === "real" ? "OpenAI Responses · metered sats" : "OpenAI Responses · test credits", estimates: await readGenerationEstimates(app.pool, pubkey, pricing, actionCeilingSat).catch(() => null), available: true, development: false, realm: config.realm };
         },
       },
       policyVersion: config.policy.version,
@@ -333,7 +342,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
       async status() {
         await assertCanonicalSchema(pool);
         await assertServiceRealm(pool, config.realm);
-        return Object.freeze({ realm: config.realm, servicePubkey, workerImage: readiness.imageDigest, workerRuntime: config.worker.runtime, model: configured.model, migrations: "current" as const });
+        return Object.freeze({ realm: config.realm, servicePubkey, workerImage: readiness.imageDigest, workerRuntime: config.worker.runtime, model: configured?.model ?? "deterministic-test", migrations: "current" as const });
       },
       close,
     });

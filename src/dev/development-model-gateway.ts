@@ -51,6 +51,8 @@ function outputText(native: z.infer<typeof ProviderResponseSchema>): string {
 function sameReceipt(left: NormalizedUsageReceipt, right: NormalizedUsageReceipt): boolean { return JSON.stringify(left) === JSON.stringify(right); }
 
 /** Server-only selector. All config absent means deterministic; partial config is an actionable error. */
+class DefinitiveRejection extends Error { constructor(readonly status: number) { super(`OPENAI_RESPONSE_HTTP_${status}`); } }
+
 export class DevelopmentModelGateway implements ModelGateway {
   readonly #deterministic: DeterministicModelGateway;
   readonly #configured?: ConfiguredProvider;
@@ -99,6 +101,7 @@ export class DevelopmentModelGateway implements ModelGateway {
       const code = error instanceof Error ? (/^[A-Z][A-Z0-9_:]{2,80}$/u.test(error.message) ? error.message : error.name) : "UNKNOWN";
       console.error(JSON.stringify({ event: "model_dispatch_error", operationId: intent.operationId, code, receiptKnown: !!knownReceipt }));
       if (knownReceipt) return ModelDispatchObservationSchema.parse({ status: "failed", receipt: knownReceipt });
+      if (error instanceof DefinitiveRejection) return this.#preDispatchRejected(intent);
       return ModelDispatchObservationSchema.parse({ status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: signal.aborted ? "aborted" : "uncertain_acceptance", provenance: { protectedEvidenceReference: `openai:response:unknown:${intent.operationId}` } });
     }
   }
@@ -141,7 +144,13 @@ export class DevelopmentModelGateway implements ModelGateway {
   async #request(method: "GET" | "POST", url: string, intent: ProviderOperationIntent, signal: AbortSignal, body?: unknown): Promise<Response> {
     const configured = this.#configured!;
     const response = await this.#fetch(url, { method, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(configured.profile.deadlineMs)]), headers: { authorization: `Bearer ${configured.apiKey}`, ...(method === "POST" ? { "content-type": "application/json", "idempotency-key": intent.operationId } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-    if (!response.ok) throw new Error(`OPENAI_RESPONSE_HTTP_${response.status}`); return response;
+    if (!response.ok) {
+      // An explicit client-error response means OpenAI did not run the request:
+      // it is a definitive non-acceptance, never an uncertain billable outcome.
+      if (method === "POST" && [400, 401, 403, 404, 422, 429].includes(response.status)) throw new DefinitiveRejection(response.status);
+      throw new Error(`OPENAI_RESPONSE_HTTP_${response.status}`);
+    }
+    return response;
   }
   async #priorFiles(intent: ProviderOperationIntent): Promise<readonly SourceProposalFile[] | undefined> {
     if (!intent.authorizedPriorArtifactReference) return undefined;

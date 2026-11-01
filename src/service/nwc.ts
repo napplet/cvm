@@ -65,9 +65,7 @@ type Invoice = z.infer<typeof Invoice>;
  * wallet's signed `lookup_invoice` result for the original payment hash.
  */
 export class NwcInvoiceReceiver implements LightningReceiptPort {
-  constructor(private readonly uri: string, private readonly options: Readonly<{ policy?: NwcRelayPolicy; referencePrefix?: string }> = {}) {
-    assertNwcConnection(uri, options.policy ?? "loopback");
-  }
+  constructor(private readonly uri: string, private readonly options: Readonly<{ policy?: NwcRelayPolicy; referencePrefix?: string }> = {}) {}
   private get prefix() { return this.options.referencePrefix ?? "dev-nwc"; }
   private request(method: string, params: Record<string, unknown>, signal?: AbortSignal) { return nwcRequest(this.uri, method, params, signal, this.options.policy ?? "loopback"); }
 

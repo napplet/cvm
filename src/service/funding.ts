@@ -8,7 +8,7 @@ import { LightningTopUpCoordinator } from "../funding/lightning-top-up";
 import { ProtectedRailMaterialVault } from "../funding/protected-rail-material";
 import { PostgresFundingDatabase } from "../persistence/postgres-funding-database";
 import type { PostgresSqlClient, PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
-import { NwcInvoiceReceiver, type NwcRelayPolicy } from "./nwc";
+import { assertNwcConnection, NwcInvoiceReceiver, type NwcRelayPolicy } from "./nwc";
 
 export type ServicePool = PostgresSqlPool & Pick<PostgresSqlClient, "query"> & { end(): Promise<void> };
 
@@ -39,6 +39,7 @@ export async function createServiceFunding(input: Readonly<{
   deadlineMs?: number;
 }>) {
   if (input.fundingKey.byteLength !== 32) throw new Error("SERVICE_FUNDING_KEY_INVALID");
+  assertNwcConnection(input.nwcUri, input.nwcPolicy);
   if (input.mints.length < 1 || input.mints.length > 8 || new Set(input.mints.map((mint) => mint.url)).size !== input.mints.length) throw new Error("SERVICE_MINTS_INVALID");
   const routes = new Map<string, string>();
   for (const mint of input.mints) {

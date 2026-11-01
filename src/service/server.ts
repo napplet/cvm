@@ -114,7 +114,8 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     const signer = new PrivateKeySigner(identity.signerPrivateKey);
     const servicePubkey = await signer.getPublicKey();
     const transport = new NostrServerTransport({ signer, relayHandler: [config.relay.url], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
-    const bridge = new ContextVmSdkBridge(transport, ["service_info", "projects"]);
+    // `development_publication` is the historical name of the user-signed publication tool.
+    const bridge = new ContextVmSdkBridge(transport, ["service_info", "projects", "development_publication"]);
     const progress = new DevelopmentProgressTransport(bridge);
     const accountStatus = new AccountStatusService({
       store: app.database.funding,
@@ -255,6 +256,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
       preview,
       extensions: {
         projects: (value, pubkey) => projects.handle(value, pubkey),
+        development_publication: (value, pubkey) => publication.handle(value, pubkey),
         service_info: async (value, pubkey) => {
           ServiceInfoArgumentsSchema.parse(value);
           return { reserveSat: config.funding.reserveSat, actionCeilingSat, providerLabel: config.realm === "real" ? "OpenAI Responses · metered sats" : "OpenAI Responses · test credits", estimates: await readGenerationEstimates(app.pool, pubkey, pricing, actionCeilingSat).catch(() => null), available: true, development: false, realm: config.realm };

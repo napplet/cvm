@@ -9,12 +9,20 @@ for (const [ip, prefix] of [["0.0.0.0",8],["10.0.0.0",8],["100.64.0.0",10],["127
 const globalV6 = new BlockList(); globalV6.addSubnet("2000::",3,"ipv6"); blocked.addSubnet("2001:db8::",32,"ipv6");
 export function publicRelayAddress(address: string): boolean { const family = isIP(address); return family === 4 ? !blocked.check(address,"ipv4") : family === 6 && globalV6.check(address,"ipv6") && !blocked.check(address,"ipv6"); }
 export type RelayReceipt = { relay: string; state: "published" | "failed"; detail?: string };
-export async function publishOnUserRelays(relays: string[], event: Event, developmentRelay: string, send: boolean | "always"): Promise<RelayReceipt[]> {
+/**
+ * `serviceRelay` is the service's own relay: its internal address and, when it
+ * is exposed, its public URL. A user who names the public URL reaches the same
+ * relay over the internal address; every other relay must be publicly routable.
+ */
+export async function publishOnUserRelays(relays: string[], event: Event, serviceRelay: string | Readonly<{ internal: string; public?: string }>, send: boolean | "always"): Promise<RelayReceipt[]> {
+  const internal = relayUrl(typeof serviceRelay === "string" ? serviceRelay : serviceRelay.internal);
+  const exposed = typeof serviceRelay === "string" || !serviceRelay.public ? undefined : relayUrl(serviceRelay.public);
   return Promise.all(relays.map(async value => {
     let child: ReturnType<typeof Bun.spawn> | undefined; let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const normalized = relayUrl(value); const url = new URL(normalized);
-      const local = normalized === relayUrl(developmentRelay);
+      const requested = relayUrl(value);
+      const normalized = requested === exposed ? internal : requested; const url = new URL(normalized);
+      const local = normalized === internal;
       const addresses = await lookup(url.hostname.replace(/^\[|\]$/g,""), { all:true });
       if (!addresses.length || (!local && addresses.some(item => !publicRelayAddress(item.address)))) throw new Error("Relay is not publicly reachable");
       const node = Bun.which("node"); if (!node) throw new Error("Node socket adapter unavailable");
@@ -25,7 +33,7 @@ export async function publishOnUserRelays(relays: string[], event: Event, develo
       timer = setTimeout(() => child?.kill(), 22000);
       const output = await new Response(spawned.stdout).text(); const exit = await spawned.exited;
       const confirmed = exit === 0 && output.length < 100 && JSON.parse(output).confirmed === true;
-      return confirmed ? { relay:normalized,state:"published" as const } : { relay:normalized,state:"failed" as const,detail:"No confirmation received." };
+      return confirmed ? { relay:requested,state:"published" as const } : { relay:requested,state:"failed" as const,detail:"No confirmation received." };
     } catch { return { relay:value,state:"failed" as const,detail:"Connection failed or publication declined." }; }
     finally { clearTimeout(timer); child?.kill(); }
   }));

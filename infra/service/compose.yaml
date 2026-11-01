@@ -1,0 +1,163 @@
+# napplet-cvm service stack for one host (homelab machine or VPS).
+# Rendered inputs (by Ansible or by hand):
+#   ${NAPPLET_CVM_ROOT}/config/service.json, model-pricing.json   (non-secret)
+#   ${NAPPLET_CVM_ROOT}/secrets/*                                (0600 files)
+#   ${NAPPLET_CVM_ROOT}/data/{postgres,storage,relay}            (persistent)
+# Only the service port is published; PostgreSQL, the relay and the build
+# engine stay on the private stack network. TLS terminates at the host's
+# existing reverse proxy (Traefik on homelab, or the optional Caddy profile).
+name: ${NAPPLET_CVM_PROJECT:-napplet-cvm}
+
+x-restart: &restart
+  restart: unless-stopped
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_USER: napplet_cvm
+      POSTGRES_DB: napplet_cvm
+      POSTGRES_PASSWORD_FILE: /run/secrets/napplet-cvm/postgres_password
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/data/postgres:/var/lib/postgresql/data
+      - ${NAPPLET_CVM_ROOT}/secrets/postgres_password:/run/secrets/napplet-cvm/postgres_password:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "napplet_cvm", "-d", "napplet_cvm"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    stop_grace_period: 60s
+
+  relay:
+    <<: *restart
+    image: scsibug/nostr-rs-relay:0.9.0@sha256:03f54bfbffff80a50db62c9287913bd25a2dec08033b56d2122bc2550363d5c5
+    platform: linux/amd64
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/data/relay:/usr/src/app/db
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  engine:
+    <<: *restart
+    image: napplet-cvm/engine:${NAPPLET_CVM_REVISION}
+    build: { context: ../.., dockerfile: infra/service/engine.Dockerfile }
+    # Nested containers need a privileged engine. Generated code never runs in
+    # this container directly: workers use runsc, --network none, read-only
+    # roots, dropped capabilities and CPU/memory/PID limits.
+    privileged: true
+    command: ["dockerd", "--host=unix:///run/cvm-docker/docker.sock"]
+    volumes:
+      - engine-data:/var/lib/docker
+      - engine-socket:/run/cvm-docker
+      - scratch:/scratch
+    healthcheck:
+      test: ["CMD", "docker", "--host=unix:///run/cvm-docker/docker.sock", "info"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  cvm:
+    <<: *restart
+    image: napplet-cvm/service:${NAPPLET_CVM_REVISION}
+    build:
+      context: ../..
+      dockerfile: infra/service/Dockerfile
+      args: { NAPPLET_CVM_REVISION: "${NAPPLET_CVM_REVISION}" }
+    init: true
+    # Resolver for the service's outbound names (relays, mints, wallet relay,
+    # model API, its own public origins). Set per host in compose.env.
+    dns: ["${NAPPLET_CVM_DNS:?set NAPPLET_CVM_DNS in compose.env}"]
+    shm_size: 1gb
+    stop_grace_period: 30s
+    depends_on:
+      postgres: { condition: service_healthy }
+      engine: { condition: service_healthy }
+      relay: { condition: service_healthy }
+    ports:
+      - "${NAPPLET_CVM_BIND:-127.0.0.1:18871}:8080"
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/config:/etc/napplet-cvm:ro
+      - ${NAPPLET_CVM_ROOT}/secrets:/run/secrets/napplet-cvm:ro
+      - ${NAPPLET_CVM_ROOT}/data/storage:/var/lib/napplet-cvm
+      - engine-socket:/run/cvm-docker
+      - scratch:/scratch
+    healthcheck:
+      test: ["CMD", "bun", "-e", "if (!(await fetch('http://127.0.0.1:8080/health')).ok) process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 5m
+      retries: 4
+
+  # Test realm only: a FakeWallet Cashu mint and an NWC wallet that issues
+  # self-settling invoices. Never enabled for the real-money realm.
+  test-mint:
+    <<: *restart
+    profiles: [test-rails]
+    image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
+    command: poetry run mint
+    environment:
+      MINT_BACKEND_BOLT11_SAT: FakeWallet
+      MINT_LISTEN_HOST: 0.0.0.0
+      MINT_LISTEN_PORT: "3338"
+      MINT_PRIVATE_KEY_FILE: /run/secrets/napplet-cvm/test_mint_key
+      MINT_DATABASE: /data/mint
+      FAKEWALLET_BRR: "true"
+      FAKEWALLET_DELAY_INCOMING_PAYMENT: "0"
+    entrypoint: ["sh", "-c", "export MINT_PRIVATE_KEY=$$(cat /run/secrets/napplet-cvm/test_mint_key) && exec \"$$@\"", "--"]
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/data/test-mint:/data
+      - ${NAPPLET_CVM_ROOT}/secrets/test_mint_key:/run/secrets/napplet-cvm/test_mint_key:ro
+  test-mint-2:
+    <<: *restart
+    profiles: [test-rails]
+    image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
+    command: poetry run mint
+    environment:
+      MINT_BACKEND_BOLT11_SAT: FakeWallet
+      MINT_LISTEN_HOST: 0.0.0.0
+      MINT_LISTEN_PORT: "3338"
+      MINT_DATABASE: /data/mint
+      FAKEWALLET_BRR: "true"
+      FAKEWALLET_DELAY_INCOMING_PAYMENT: "0"
+    entrypoint: ["sh", "-c", "export MINT_PRIVATE_KEY=$$(cat /run/secrets/napplet-cvm/test_mint_2_key) && exec \"$$@\"", "--"]
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/data/test-mint-2:/data
+      - ${NAPPLET_CVM_ROOT}/secrets/test_mint_2_key:/run/secrets/napplet-cvm/test_mint_2_key:ro
+  test-wallet:
+    <<: *restart
+    profiles: [test-rails]
+    image: ghcr.io/getalby/hub:v1.24.1@sha256:ca9da58cafd68e91358820a20d83d328a333a8f699007a70d9aa50538da7c129
+    environment:
+      WORK_DIR: /data
+      RELAY: ws://relay:8080
+      SEND_EVENTS_TO_ALBY: "false"
+      AUTO_LINK_ALBY_ACCOUNT: "false"
+      LOG_LEVEL: "2"
+    entrypoint: ["sh", "-c", "export AUTO_UNLOCK_PASSWORD=$$(cat /run/secrets/napplet-cvm/test_wallet_password) && exec /bin/main"]
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/data/test-wallet:/data
+      - ${NAPPLET_CVM_ROOT}/secrets/test_wallet_password:/run/secrets/napplet-cvm/test_wallet_password:ro
+    depends_on:
+      test-mint: { condition: service_started }
+      relay: { condition: service_healthy }
+
+  # VPS ingress: TLS for the three service names. Homelab uses its existing Traefik.
+  caddy:
+    <<: *restart
+    profiles: [caddy]
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ${NAPPLET_CVM_ROOT}/config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${NAPPLET_CVM_ROOT}/data/caddy:/data
+    depends_on: [cvm]
+
+volumes:
+  engine-data:
+  engine-socket:
+  scratch:

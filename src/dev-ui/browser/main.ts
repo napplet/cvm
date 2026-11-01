@@ -196,6 +196,7 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
     const connected = await client.connect();
     const info = await client.callTool("service_info", {});
     Object.assign(bootstrap, { reserveSat: info.reserveSat, actionCeilingSat: info.actionCeilingSat, providerLabel: info.providerLabel });
+    developmentService = info.development !== false;
     product?.configuration(); product?.estimates(info.estimates);
     if (!product && byId<HTMLInputElement>("maximum").value === "3750") byId<HTMLInputElement>("maximum").value = info.actionCeilingSat;
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account);
@@ -262,9 +263,26 @@ async function runGeneration(request: GenerationRequest): Promise<any> {
   }
   return result;
 }
+let developmentService = true;
+/** A deployed service has no faucet: request a Lightning invoice for the
+ * shortfall, show it to pay from any wallet, and wait for the verified credit. */
+async function fundShortfall(shortfall: bigint, maximum: string): Promise<void> {
+  const topUp = await client!.fundNwc(String(shortfall));
+  if (topUp?.status === "credited") { await refresh(); return; }
+  if (topUp?.status !== "payment_required" || typeof topUp.paymentRequest !== "string") throw new Error("LIGHTNING_INVOICE_UNAVAILABLE");
+  setFundingStatus(`Pay ${shortfall} sats to continue (invoice expires ${topUp.expiresAt ? new Date(topUp.expiresAt).toLocaleTimeString() : "soon"}): ${topUp.paymentRequest}`);
+  try { await navigator.clipboard?.writeText(topUp.paymentRequest); } catch { /* Clipboard is optional. */ }
+  const deadline = Date.now() + 10 * 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000)); await refresh();
+    if (BigInt(balance) >= BigInt(maximum)) { setFundingStatus("Payment received"); return; }
+  }
+  throw new Error("LIGHTNING_PAYMENT_NOT_RECEIVED: your saved action can resume after payment");
+}
 async function prepareTestFunds(maximum: string): Promise<void> {
   await refresh();
   const shortfall = BigInt(maximum) - BigInt(balance); if (shortfall <= 0n) return;
+  if (!developmentService) return fundShortfall(shortfall, maximum);
   // Cashu submits a gross bearer amount. Reserve the explicit, bounded user
   // fee ceiling so a verified net credit actually reaches the requested cap.
   const feeCeiling = 64n;

@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 status: in_progress
-stopped_at: infrastructure detour removed; provider-neutral application wiring remains
-last_updated: "2026-10-31"
+stopped_at: provider-neutral service deployed to beta (test realm) via Ansible; paid generation and real-money rails await operator inputs
+last_updated: "2026-11-01"
 progress:
   total_phases: 7
   completed_phases: 6
@@ -29,3 +29,4 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 | Task | Result |
 | --- | --- |
 | 261031-vgz | Remove speculative infrastructure architecture and simplify affected mainline history; see quick-task summary. |
+| 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified on beta. See quick-task summary. |

@@ -50,6 +50,9 @@ export class LocalPublication {
   #active = new Map<string, Promise<unknown>>();
   #previews = new Map<string, Promise<string>>();
   origin = "";
+  /** Loopback Blossom listener, for a deployment's public reverse proxy. */
+  get localOrigin(): string { return this.#localOrigin; }
+  private get serviceRelay() { return { internal: this.options.relay, ...(this.options.publicRelay ? { public: this.options.publicRelay } : {}) }; }
   private constructor(private readonly options: Options) {}
   static async open(options: Options) {
     const service = new LocalPublication(options);
@@ -254,7 +257,7 @@ export class LocalPublication {
       }
       if (row.prepared.relays && !row.prepared.preview) {
         await this.publishApplication(row, true);
-        row.relay_results = await publishOnUserRelays(row.prepared.relays, event, this.options.relay, true);
+        row.relay_results = await publishOnUserRelays(row.prepared.relays, event, this.serviceRelay, true);
         await this.query("UPDATE development_publications SET relay_results=$2,updated_at=now() WHERE id=$1", [row.id, JSON.stringify(row.relay_results)]);
         row.state = row.relay_results.some(result => result.state === "published") ? "published" : "unconfirmed";
       } else {
@@ -268,7 +271,7 @@ export class LocalPublication {
   }
   private async republish(row: Row) {
     await this.publishApplication(row, "always");
-    const relayResults = await publishOnUserRelays(row.prepared.relays!, row.signed_event!, this.options.relay, "always");
+    const relayResults = await publishOnUserRelays(row.prepared.relays!, row.signed_event!, this.serviceRelay, "always");
     // A resend does not undo a prior publication or its confirmation receipts.
     const known = new Map((row.relay_results ?? []).map(receipt => [receipt.relay, receipt]));
     for (const receipt of relayResults) if (known.get(receipt.relay)?.state !== "published") known.set(receipt.relay, receipt);
@@ -287,7 +290,7 @@ export class LocalPublication {
     if (!application?.signedEvent || !row.prepared.relays?.length) return;
     // Listing delivery never downgrades an applet's independently confirmed
     // publication. Preserve prior receipts when a later resend is unavailable.
-    const results = await publishOnUserRelays(row.prepared.relays, application.signedEvent, this.options.relay, send);
+    const results = await publishOnUserRelays(row.prepared.relays, application.signedEvent, this.serviceRelay, send);
     const known = new Map((application.relayResults ?? []).map(receipt => [receipt.relay, receipt]));
     for (const receipt of results) if (known.get(receipt.relay)?.state !== "published") known.set(receipt.relay, receipt);
     application.relayResults = [...known.values()];
@@ -305,7 +308,7 @@ export class LocalPublication {
   private async observe(row: Row): Promise<boolean> {
     if (!row.signed_event) return false;
     if (row.prepared.relays && !row.prepared.preview) {
-      row.relay_results = await publishOnUserRelays(row.prepared.relays, row.signed_event, this.options.relay, false);
+      row.relay_results = await publishOnUserRelays(row.prepared.relays, row.signed_event, this.serviceRelay, false);
       await this.query("UPDATE development_publications SET relay_results=$2,updated_at=now() WHERE id=$1", [row.id, JSON.stringify(row.relay_results)]);
       return row.relay_results.some(result => result.state === "published");
     }

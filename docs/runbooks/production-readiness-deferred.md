@@ -1,3 +1,5 @@
+> **Historical — do not follow.** Describes the withdrawn Google Cloud/hosted-worker production path. The current deployment, backup, restore and rollback procedure is [service deployment](service-deployment.md).
+
 # Resumed production readiness
 
 **Resumed, 2026-10-27:** The user requested full production gap closure, preserving the working private Beta deployment. Implementation and no-effect preparation precede the exact bounded authorization checkpoint. Production is not certified. The scope and initial current-state audit are recorded in `.planning/phases/07-admission-slo-resilience-launch-safety/07-PRODUCTION-RESUMPTION.md`; gap plans are tracked in `07-PRODUCTION-GAP-MATRIX.md`.

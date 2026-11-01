@@ -178,3 +178,15 @@ describe("Lightning settlement receipt matrix", () => {
     expect(fundingStore.postings).toHaveLength(0);
   });
 });
+
+describe("Lightning payment request release", () => {
+  test("only the owner of a pending top-up receives its BOLT11 request; projections never carry it", async () => {
+    const { coordinator, topUps } = fixture();
+    const begun = await coordinator.begin(request());
+    expect(JSON.stringify(begun)).not.toContain(canaryInvoice);
+    expect(await coordinator.paymentRequest({ principal, topUpId: begun.topUpId })).toBe(canaryInvoice);
+    expect(await coordinator.paymentRequest({ principal: { pubkey: "ef".repeat(32) }, topUpId: begun.topUpId })).toBeUndefined();
+    expect(await coordinator.paymentRequest({ principal, topUpId: "lightning:unknown" })).toBeUndefined();
+    expect(JSON.stringify(topUps.snapshot())).not.toContain(canaryInvoice);
+  });
+});

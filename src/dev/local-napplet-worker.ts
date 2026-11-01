@@ -12,6 +12,13 @@ import { parseWorkerDiagnostic, type WorkerDiagnostic } from "./worker-diagnosti
 const image = process.env.NAPPLET_CVM_DEV_WORKER_IMAGE ?? "napplet-cvm/dev-worker:development";
 const Stage = z.object({ name: z.enum(["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"]), exitCode: z.number().int(), stdout: z.string().max(40_000).optional(), stderr: z.string().max(20_000).optional() }).strict();
 const Report = z.object({ stages: z.array(Stage).min(1).max(8) }).strict();
+/** OCI runtime for every container that executes generated code (e.g. `runsc`). */
+let untrustedRuntime: string | undefined;
+export function configureUntrustedContainerRuntime(runtime: string | undefined): void {
+  if (runtime !== undefined && !/^[a-z][a-z0-9_.-]{1,31}$/u.test(runtime)) throw new Error("WORKER_RUNTIME_INVALID");
+  untrustedRuntime = runtime;
+}
+export function untrustedRuntimeArgs(runtime = untrustedRuntime): string[] { return runtime ? ["--runtime", runtime] : []; }
 export type WorkerOutput = Readonly<{ distRoot: string; toolchainSha256: string; commandEvidence: readonly z.infer<typeof Stage>[]; cleanup(): Promise<void> }>;
 
 export async function runBoundedDevelopmentCommand(argv: string[], input: Readonly<{ deadlineMs: number; maxBytes: number; signal?: AbortSignal; onStdoutLine?: (line: string) => void }>) {
@@ -65,7 +72,7 @@ async function report(path: string): Promise<z.infer<typeof Report>> {
 
 /** Model-free closed-command worker, with independently bounded host and container lifetimes. */
 export class LocalNappletWorker {
-  constructor(private readonly input: Readonly<{ dockerBin?: string; image?: string; deadlineMs?: number; maxOutputBytes?: number; onProgress?: (stage: z.infer<typeof Stage>["name"] | "worker", state: "running" | "completed" | "failed", diagnostic?: WorkerDiagnostic) => void }> = {}) {
+  constructor(private readonly input: Readonly<{ dockerBin?: string; image?: string; runtime?: string; deadlineMs?: number; maxOutputBytes?: number; onProgress?: (stage: z.infer<typeof Stage>["name"] | "worker", state: "running" | "completed" | "failed", diagnostic?: WorkerDiagnostic) => void }> = {}) {
     for (const value of [input.deadlineMs, input.maxOutputBytes]) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new Error("WORKER_LIMIT_INVALID");
     }
@@ -94,7 +101,7 @@ export class LocalNappletWorker {
       // runs the worker as the image's unprivileged identity.
       const hostUid = process.getuid?.() ?? 0; const hostGid = process.getgid?.() ?? 0;
       const workerUser = hostUid > 0 && hostGid > 0 ? `${hostUid}:${hostGid}` : "65532:65532";
-      const args = ["run", "--name", containerName, "--label", "org.napplet-cvm.development-worker=true", "--rm", "--network", "none", "--read-only", "--user", workerUser, "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/work:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/home/napplet:rw,exec,nosuid,nodev,size=128m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, imageId!, "/usr/local/bin/run-proposal"];
+      const args = ["run", ...untrustedRuntimeArgs(this.input.runtime ?? untrustedRuntime), "--name", containerName, "--label", "org.napplet-cvm.development-worker=true", "--rm", "--network", "none", "--read-only", "--user", workerUser, "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/work:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/home/napplet:rw,exec,nosuid,nodev,size=128m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, imageId!, "/usr/local/bin/run-proposal"];
       const result = await runBoundedDevelopmentCommand([docker, ...args], { deadlineMs: Math.max(1, Math.min(this.input.deadlineMs ?? 180_000, 180_000)), maxBytes: Math.max(1, Math.min(this.input.maxOutputBytes ?? 256_000, 256_000)), signal, onStdoutLine: (line) => {
         if (!line.startsWith("NAPPLET_STAGE ")) return;
         try {

@@ -136,7 +136,7 @@ export interface ContextVmFundingAdapterOptions {
   admissionReceipts?: AdmissionReceiptAuthority;
   accountStatus?: AccountStatusService;
   topUps?: Readonly<{
-    lightning: Readonly<{ begin(input: unknown): Promise<unknown> }>;
+    lightning: Readonly<{ begin(input: unknown): Promise<unknown>; paymentRequest?(input: Readonly<{ principal: { pubkey: string }; topUpId: string }>): Promise<string | undefined> }>;
     cashu: Readonly<{ submit(input: unknown): Promise<unknown> }>;
   }>;
   /** Narrow transport-neutral generation facades; repair is deliberately absent. */
@@ -433,7 +433,10 @@ export class ContextVmFundingAdapter {
       ...(railResult.amount ? { amount: railResult.amount } : {}), ...(railResult.unit ? { unit: railResult.unit } : {}),
       ...(railResult.safeDisplayReference ? { safeDisplayReference: railResult.safeDisplayReference } : {}),
       ...(railResult.expiresAt ? { expiresAt: railResult.expiresAt } : {}), ...(railResult.settlementReference ? { settlementReference: railResult.settlementReference } : {}),
-      paymentInteraction: args.mode, ...(args.mode === "explicit_gating" ? { explicitGatingIdentity: canonical.invocationHash } : {}) });
+      paymentInteraction: args.mode, ...(args.mode === "explicit_gating" ? { explicitGatingIdentity: canonical.invocationHash } : {}),
+      // Only the verified requester receives its own pending BOLT11 request,
+      // inside this encrypted response, so it can be paid by any wallet.
+      ...(args.pmi === "bitcoin-lightning-bolt11" && railResult.status === "payment_required" ? await this.lightningPaymentRequest(verifiedPubkey, railResult.topUpId) : {}) });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
       jsonrpc: "2.0", method: "notifications/top_up", params: wireResult,
     }), requestEventId);
@@ -442,6 +445,11 @@ export class ContextVmFundingAdapter {
       id: request.id,
       result: wireResult,
     });
+  }
+
+  private async lightningPaymentRequest(pubkey: string, topUpId: string): Promise<{ paymentRequest?: string }> {
+    const request = await this.options.topUps?.lightning.paymentRequest?.({ principal: { pubkey }, topUpId }).catch(() => undefined);
+    return request && /^ln[a-z0-9]{8,2048}$/u.test(request) ? { paymentRequest: request } : {};
   }
 
   private async lifecycleFor(invocationHash: string, requestEventId: string, verifiedPubkey: string, requestId: string | number | null): Promise<AdmissionLifecycleContext> {

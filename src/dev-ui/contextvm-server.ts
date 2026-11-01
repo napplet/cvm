@@ -71,7 +71,7 @@ export type DevelopmentContextVmServer = Readonly<{
   close(): Promise<void>;
 }>;
 
-function developmentCapacity(readiness: DevelopmentRuntimeReadiness): ReadyCapacityPort {
+export function developmentCapacity(readiness: DevelopmentRuntimeReadiness): ReadyCapacityPort {
   const reservations = new Map<string, Readonly<{ reference: string; expiresAt: string; binding: string }>>();
   return {
     async reserveNow(input) {
@@ -103,14 +103,14 @@ async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amou
   return new TextDecoder().decode(app.applicationToken(localToken));
 }
 
-function safeGenerationDiagnostic(error: unknown): string {
+export function safeGenerationDiagnostic(error: unknown): string {
   const message = error instanceof Error ? error.message : "GENERATION_ERROR_REDACTED";
   const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined;
   const safe = (value: string | undefined) => value && /^[A-Z][A-Z0-9_:-]{2,159}$/u.test(value) ? value : undefined;
   return safe(cause) ?? safe(message) ?? "GENERATION_ERROR_REDACTED";
 }
 
-async function durableTimeline(app: DevelopmentFunding, accountId: string, sessionId: string): Promise<readonly Readonly<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: string; detail: string }>[]> {
+export async function durableTimeline(app: Pick<DevelopmentFunding, "pool">, accountId: string, sessionId: string): Promise<readonly Readonly<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: string; detail: string }>[]> {
   const rows = await app.pool.query<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: Date | string; detail: string }>(`
     SELECT 'source_recorded'::text AS stage, sp.created_at AS at, 'Source proposal recorded' AS detail FROM source_proposals sp WHERE sp.account_id=$1 AND sp.session_id=$2
     UNION ALL SELECT 'provider_recorded'::text, po.created_at, 'Provider receipt recorded' FROM provider_observations po JOIN source_proposals sp ON sp.operation_id=po.operation_id WHERE sp.account_id=$1 AND sp.session_id=$2

@@ -1,3 +1,5 @@
+> **Historical — do not follow.** Describes the withdrawn Google Cloud/hosted-worker production path. The current deployment, backup, restore and rollback procedure is [service deployment](service-deployment.md).
+
 # Production architecture decision record
 
 **Status:** preparation only, not a production-release claim.

@@ -108,6 +108,20 @@ export class LightningTopUpCoordinator {
     } catch { return this.markUnknown(claim.topUp.topUpId); }
   }
 
+  /**
+   * The BOLT11 payment request for the owner's own pending top-up, so the
+   * payer can actually pay it. Invoices are payment requests, not bearer
+   * secrets, but they are still released only to the verified principal and
+   * never stored in public projections or logs.
+   */
+  async paymentRequest(input: Readonly<{ principal: Principal; topUpId: string }>): Promise<string | undefined> {
+    const principal = PrincipalSchema.parse(input.principal); const accountId = await accountIdForPrincipal(principal);
+    const topUp = await this.options.repository.transact((state) => state.topUps.get(input.topUpId));
+    if (!topUp || topUp.accountId !== accountId || topUp.state !== "pending" || !topUp.protectedMaterialId || !topUp.expiresAt || Date.parse(topUp.expiresAt) <= Date.parse(this.#now())) return undefined;
+    const bytes = await this.options.vault.open({ id: topUp.protectedMaterialId, accountId, topUpId: topUp.topUpId, rail: "lightning" });
+    try { return new TextDecoder().decode(bytes); } finally { bytes.fill(0); }
+  }
+
   async reconcile(input: Readonly<{ principal: Principal; topUpId: string }>): Promise<LightningTopUpResult> {
     const principal = PrincipalSchema.parse(input.principal); const accountId = await accountIdForPrincipal(principal);
     const topUp = await this.options.repository.transact((state) => {

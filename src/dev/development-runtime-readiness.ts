@@ -46,7 +46,7 @@ export type DevelopmentRuntimeReadiness = Readonly<{ imageDigest: string; readin
 
 /** Real, bounded no-network smoke probe. Invoke before admission/model spending. */
 export class LocalDevelopmentRuntimeReadiness {
-  constructor(private readonly options: Readonly<{ dockerBin?: string; image?: string; projectRoot?: string }> = {}) {}
+  constructor(private readonly options: Readonly<{ dockerBin?: string; image?: string; runtime?: string; projectRoot?: string }> = {}) {}
   async assertReady(): Promise<DevelopmentRuntimeReadiness> {
     const projectRoot = this.options.projectRoot ?? root;
     const hostSha256 = await verifyDevelopmentHostFiles(projectRoot);
@@ -73,7 +73,7 @@ export class LocalDevelopmentRuntimeReadiness {
     `;
     let probe: { cliHash: string; runnerHash: string; capabilityParserHash: string; skillsSha256: string; skillsLoaderHash: string; browserVersion: string; playwright: string; typescript: string; conformance: string };
     try {
-      const result = await runBoundedDevelopmentCommand([docker, "run", "--name", name, "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "1g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/home/napplet:rw,nosuid,nodev,size=64m", "--entrypoint", "bun", imageDigest!, "-e", script], { deadlineMs: 45_000, maxBytes: 32_000 });
+      const result = await runBoundedDevelopmentCommand([docker, "run", ...(this.options.runtime ? ["--runtime", this.options.runtime] : []), "--name", name, "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "1g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/home/napplet:rw,nosuid,nodev,size=64m", "--entrypoint", "bun", imageDigest!, "-e", script], { deadlineMs: 45_000, maxBytes: 32_000 });
       if (result.exitCode !== 0) throw new Error("DEV_WORKER_BROWSER_NOT_READY:rebuild the development worker image");
       probe = JSON.parse(result.stdout.trim());
       if (probe.capabilityParserHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/source-capabilities.ts"))) || probe.skillsSha256 !== skills.sha256 || probe.skillsLoaderHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/authoring-skills.ts"))) || probe.cliHash !== (arch === "amd64" ? "a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28" : "35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54") || probe.runnerHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/run-proposal.ts"))) || probe.playwright !== "1.61.0" || probe.typescript !== "5.9.3" || probe.conformance !== "0.2.15" || !/^\d+\.\d+\.\d+\.\d+$/u.test(probe.browserVersion)) throw new Error("DEV_WORKER_TOOLCHAIN_MISMATCH:rebuild the development worker image");

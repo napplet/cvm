@@ -21,7 +21,7 @@ import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "../d
 import { SourceProposalStore } from "../dev/source-proposal-store";
 import { registerDevelopmentPricing } from "../dev/register-development-pricing";
 import { DevelopmentNwcSettlementReconciler } from "../dev/dev-funding-reconciler";
-import { LocalNappletWorker } from "../dev/local-napplet-worker";
+import { LocalNappletWorker, configureUntrustedContainerRuntime } from "../dev/local-napplet-worker";
 import { LocalArtifactVerifier } from "../dev/local-artifact-verifier";
 import { LocalArtifactRepository } from "../dev/local-artifact-repository";
 import { LocalPreviewGrantStore } from "../dev/local-preview-grant-store";
@@ -109,6 +109,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     if (gateway.label() !== "Configured OpenAI Responses") throw new Error("SERVICE_MODEL_REQUIRED");
 
     // Isolated worker: the configured Docker engine and OCI runtime, probed before listening.
+    configureUntrustedContainerRuntime(config.worker.runtime);
     const readiness = await new LocalDevelopmentRuntimeReadiness({ image: config.worker.image, runtime: config.worker.runtime }).assertReady();
     const signer = new PrivateKeySigner(identity.signerPrivateKey);
     const servicePubkey = await signer.getPublicKey();

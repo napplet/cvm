@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { readVerifiedArtifactFile } from "./local-artifact-verifier";
-import { runBoundedDevelopmentCommand } from "./local-napplet-worker";
+import { runBoundedDevelopmentCommand, untrustedRuntimeArgs } from "./local-napplet-worker";
 import type { LocalArtifactRepository, SealedArtifact } from "./local-artifact-repository";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -47,7 +47,7 @@ export async function publicationScreenshot(root: string, repository: LocalArtif
         const target = join(input, file.path); await mkdir(join(target, ".."), { recursive: true });
         await writeFile(target, stored.bytes, { flag: "wx", mode: 0o444 });
       }
-      const run = await runBoundedDevelopmentCommand(["docker", "run", "--name", name, "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/work:rw,nosuid,nodev,size=16m", "--tmpfs", "/home/napplet:rw,nosuid,nodev,size=16m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, image], { deadlineMs: 90000, maxBytes: 16000 });
+      const run = await runBoundedDevelopmentCommand(["docker", "run", ...untrustedRuntimeArgs(), "--name", name, "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/work:rw,nosuid,nodev,size=16m", "--tmpfs", "/home/napplet:rw,nosuid,nodev,size=16m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, image], { deadlineMs: 90000, maxBytes: 16000 });
       if (run.exitCode !== 0) throw new Error("PUBLICATION_SCREENSHOT_FAILED", { cause: run.stderr.slice(-2000) });
       // Inventory using the same bounded, no-follow checks as generated files.
       const { collectArtifactFiles } = await import("./local-artifact-verifier");

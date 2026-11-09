@@ -22,6 +22,9 @@ try {
   assert(await page.locator("#workspace-nav-label").innerText()==="Create" && await page.locator("#workspace-home").getAttribute("aria-current")==="page","CREATE_CONTEXT_MISSING");
   assert(await page.locator(".app-header").evaluate(el=>getComputedStyle(el).position)==="sticky","APPLICATION_NAV_NOT_PERSISTENT");
   assert(await page.locator("#workspace-settings").isHidden() && await page.locator("#chatgpt-account").count() === 0, "PUBLIC_PROVIDER_CONTROLS_EXPOSED");
+  await page.evaluate(() => (window as any).workspace.failed("PROVIDER_NOT_ACCEPTED", false));
+  assert((await page.locator("#notice-copy").innerText()).includes("provider needs operator attention"), "PROVIDER_REJECTION_MISLABELED_AS_ARTIFACT_FAILURE");
+  assert(!(await page.locator("#notice-copy").innerText()).includes("simpler change"), "PROVIDER_REJECTION_BLAMES_USER_IDEA");
   await page.locator("#idea").fill('<img src=x onerror="alert(1)"> A focused counter');
   await page.getByRole("button", { name: "Shape my idea" }).click();
   assert(await page.locator("#idea-review img").count() === 0, "DRAFT_INTERPRETED_AS_HTML");

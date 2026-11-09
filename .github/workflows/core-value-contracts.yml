@@ -87,6 +87,8 @@ jobs:
       - run: bun install --cwd tests/dev-ui --frozen-lockfile
       - name: Check application, test and Bun CLI TypeScript contracts
         run: bunx --package typescript@5.9.3 tsc --noEmit --pretty false
+      - name: Authoring tools, provider conversations and usage boundaries
+        run: bun test tests/dev/authoring-tools.test.ts tests/dev/napplet-authoring.test.ts tests/dev/model-tool-loop.test.ts tests/dev/authoring-responses.test.ts tests/dev/chatgpt-model-gateway.test.ts tests/dev/chatgpt-diagnostic.test.ts
       - name: Install pinned Chromium and Linux browser libraries
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
       - name: Preview host domains and local relay data flow

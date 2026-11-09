@@ -58,7 +58,7 @@ integration("upgrade from an earlier revision preserves rows, and test activity 
     await pool.query("INSERT INTO ledger_transactions(transaction_id,reference,unit) VALUES('tx-1','test-top-up','sat')");
     await pool.query("INSERT INTO ledger_entries(entry_id,transaction_id,account_id,direction,amount,unit,entry_reference) VALUES('e-1','tx-1','acct-test','credit',63,'sat','test-top-up:credit')");
     await expect(assertCanonicalSchema(pool)).rejects.toThrow("SERVICE_MIGRATION_PENDING:service/001_service_realm.sql");
-    expect((await applyCanonicalMigrations(pool)).applied).toEqual(["service/001_service_realm.sql", "development/017_validation_failures.sql"]);
+    expect((await applyCanonicalMigrations(pool)).applied).toEqual(["service/001_service_realm.sql", "development/017_validation_failures.sql", "development/018_model_turn_evidence.sql"]);
     expect((await pool.query("SELECT settled_available::text AS value FROM account_balance_projection WHERE account_id='acct-test'")).rows[0].value).toBe("63");
     // Existing ledger activity is test history: it can never be adopted as real money.
     await expect(initializeServiceRealm(pool, "real")).rejects.toThrow("SERVICE_REAL_REALM_REQUIRES_EMPTY_LEDGER");
@@ -79,3 +79,26 @@ integration("a revision never serves a database migrated by a newer revision or 
     await expect(assertCanonicalSchema(pool)).rejects.toThrow("SERVICE_MIGRATION_CHANGED:phase-03/001_funding.sql");
   } finally { await pool.end(); }
 }, 60_000);
+
+integration('confirmed authoring turns are immutable, intent-bound and survive restart', async () => {
+  const {SourceProposalStore}=await import('../../src/dev/source-proposal-store');
+  const {ProviderOperationIntentSchema,NormalizedUsageReceiptSchema}=await import('../../src/model/model-gateway');
+  const pool=await database('authoring_turns');
+  try {
+    await applyCanonicalMigrations(pool);
+    const store=new SourceProposalStore(pool);
+    const intent=ProviderOperationIntentSchema.parse({operationId:'op-turn',providerRequestId:'request-turn',accountId:'owner',sessionId:'session',actionId:'action',expectedVersion:0,actionBudgetReference:'budget',profileId:'profile',priceCardId:'card',requestFingerprint:'a'.repeat(64),prompt:'A focused counter',maximumUnits:[{dimension:'input_tokens',units:'1000'},{dimension:'output_tokens',units:'1000'}],selection:'unselected'});
+    const receipt=NormalizedUsageReceiptSchema.parse({operationId:intent.operationId,providerRequestId:intent.providerRequestId,provider:'openai_responses',model:'model',profileId:intent.profileId,priceCardId:intent.priceCardId,selection:'unselected',completedAt:'2026-11-09T00:00:00.000Z',provenance:{protectedEvidenceReference:'test:response'},usage:[{dimension:'input_tokens',units:'20'},{dimension:'output_tokens',units:'10'}]});
+    const turn={intent,receipt,turnIndex:0,providerResponseId:'resp-turn'};
+    expect(await store.hasModelTurnEvidence(intent)).toBe(false);
+    await store.recordModelTurn(turn);await store.recordModelTurn(turn);
+    expect(await new SourceProposalStore(pool).hasModelTurnEvidence(intent)).toBe(true);
+    expect((await pool.query('SELECT count(*)::int AS count FROM development_model_turn_evidence')).rows[0].count).toBe(1);
+    await expect(store.hasModelTurnEvidence({...intent,accountId:'foreign-owner'})).rejects.toThrow('BINDING_INVALID');
+    await expect(store.recordModelTurn({...turn,providerResponseId:'other-response'})).rejects.toThrow('CONFLICT');
+    await expect(store.recordModelTurn({...turn,receipt:{...receipt,profileId:'foreign-profile'}})).rejects.toThrow('BINDING_INVALID');
+    await expect(pool.query("UPDATE development_model_turn_evidence SET provider_response_id='changed'")).rejects.toThrow();
+    await expect(pool.query('DELETE FROM development_model_turn_evidence')).rejects.toThrow();
+    expect(await store.lookupUsageEvidence(intent)).toBeUndefined();
+  } finally {await pool.end();}
+},60000);

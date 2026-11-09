@@ -57,6 +57,27 @@ export class SourceProposalStore {
     return freeze(NormalizedUsageReceiptSchema.parse(row.receipt_json));
   }
 
+  /** A confirmed intermediate response fences a later dispatch after a lost continuation. */
+  async recordModelTurn(input: Readonly<{ intent: ProviderOperationIntent; turnIndex: number; providerResponseId: string; receipt: NormalizedUsageReceipt }>): Promise<void> {
+    const intent = ProviderOperationIntentSchema.parse(input.intent);
+    const receipt = NormalizedUsageReceiptSchema.parse(input.receipt);
+    if (!Number.isInteger(input.turnIndex) || input.turnIndex < 0 || input.turnIndex >= 3 || !input.providerResponseId || receipt.operationId !== intent.operationId || receipt.providerRequestId !== intent.providerRequestId || receipt.profileId !== intent.profileId || receipt.priceCardId !== intent.priceCardId || receipt.selection !== intent.selection) throw new Error("MODEL_TURN_EVIDENCE_BINDING_INVALID");
+    const hash = await sha256(canonicalJson(intent));
+    const result = await this.query("INSERT INTO development_model_turn_evidence(operation_id,turn_index,intent_sha256,provider_response_id,receipt_json) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING operation_id", [intent.operationId, input.turnIndex, hash, input.providerResponseId, receipt]);
+    if (!result.rows.length) {
+      const row = (await this.query<{ intent_sha256: string; provider_response_id: string; receipt_json: unknown }>("SELECT intent_sha256,provider_response_id,receipt_json FROM development_model_turn_evidence WHERE operation_id=$1 AND turn_index=$2", [intent.operationId, input.turnIndex])).rows[0];
+      if (!row || row.intent_sha256 !== hash || row.provider_response_id !== input.providerResponseId || !sameReceipt(NormalizedUsageReceiptSchema.parse(row.receipt_json), receipt)) throw new Error("MODEL_TURN_EVIDENCE_CONFLICT");
+    }
+  }
+
+  async hasModelTurnEvidence(input: ProviderOperationIntent): Promise<boolean> {
+    const intent = ProviderOperationIntentSchema.parse(input);
+    const row = (await this.query<{ intent_sha256: string }>("SELECT intent_sha256 FROM development_model_turn_evidence WHERE operation_id=$1 LIMIT 1", [intent.operationId])).rows[0];
+    if (!row) return false;
+    if (row.intent_sha256 !== await sha256(canonicalJson(intent))) throw new Error("MODEL_TURN_EVIDENCE_BINDING_INVALID");
+    return true;
+  }
+
   async persist(input: Readonly<{ intent: ProviderOperationIntent; provider: string; model: string; proposal: Omit<SourceProposal, "reference" | "sha256"> }>): Promise<StoredSourceProposal> {
     const intent = ProviderOperationIntentSchema.parse(input.intent);
     const raw = { files: input.proposal.files };

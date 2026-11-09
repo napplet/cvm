@@ -50,6 +50,8 @@ jobs:
         run: bun scripts/probe-development-relay.ts
       - run: bun scripts/dev.ts up
       - run: bun scripts/dev.ts status
+      - name: Offline Three.js and GSAP build, conformance and sandbox preview
+        run: NAPPLET_RUN_VISUAL_WORKER=1 bun test tests/dev-ui/visual-authoring.integration.test.ts --timeout 300000
       - name: Real development service and browser flows
         run: bun scripts/dev.ts test --case=full
       - name: Isolated launcher persistence and reset

@@ -34,6 +34,7 @@ try {
   }
   await writeFile(join(destination, "LICENSE"), license);
   await writeFile(join(destination, "skills-lock.json"), await readFile(join(staging, "skills-lock.json")));
-  await writeFile(join(destination, "source.json"), JSON.stringify({ repository: "https://github.com/napplet/napplet", revision, installer: `skills@${cliVersion}`, skills: contents.map(({ name, sha256 }) => ({ name, sha256 })) }, null, 2) + "\n");
+  const existing = JSON.parse(await readFile(join(destination, "source.json"), "utf8"));
+  await writeFile(join(destination, "source.json"), JSON.stringify({ resources: existing.resources ?? [], repository: "https://github.com/napplet/napplet", revision, installer: `skills@${cliVersion}`, skills: contents.map(({ name, sha256 }) => ({ name, sha256 })) }, null, 2) + "\n");
   console.log(`Installed ${contents.length} authoring skills at ${revision}. Rebuild the development worker before generation.`);
 } finally { await rm(staging, { recursive: true, force: true }); }

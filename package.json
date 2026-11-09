@@ -37,6 +37,7 @@
     "@contextvm/sdk": "0.13.10",
     "@kehto/runtime": "0.24.1",
     "@kehto/shell": "0.22.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@napplet/core": "0.32.0",
     "@napplet/nap": "0.32.0",
     "@opentelemetry/api": "1.9.1",

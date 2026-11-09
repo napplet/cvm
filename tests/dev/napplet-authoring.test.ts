@@ -8,10 +8,11 @@ import { nappletAuthoringInstructions } from "../../src/dev/napplet-authoring";
 test("installed skills reach the model with the bounded service contract intact", async () => {
   const skills = await loadAuthoringSkills();
   const instructions = await nappletAuthoringInstructions("Return only the requested JSON source files.");
-  expect(instructions).toContain(skills.guidance);
-  expect(instructions.indexOf("SERVICE EXECUTION CONTRACT")).toBeGreaterThan(instructions.lastIndexOf("</skill>"));
+  expect(instructions).not.toContain(skills.guidance);
+  expect(instructions).toContain("read_authoring_resource");
+  expect(instructions).toContain("napplet-sdk");
   expect(instructions).toContain("Return only the requested JSON source files.");
-  expect(instructions).toContain("You have no tools in this source-generation turn");
+  expect(instructions).not.toContain("You have no tools in this source-generation turn");
   expect(instructions).toContain("Only src/main.ts, src/styles.css and the data-only src/capabilities.json can change");
   expect(instructions).toContain("do not change the manifest, tests, dependencies or toolchain");
   expect(instructions).toContain("No title header");

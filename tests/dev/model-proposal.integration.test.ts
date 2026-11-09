@@ -117,8 +117,8 @@ test("configured provider pricing usage proposal recovery parses raw Responses H
     expect(dispatched.receipt.usage).toEqual([{ dimension: "input_tokens", units: "15" }, { dimension: "cached_tokens", units: "5" }, { dimension: "output_tokens", units: "8" }, { dimension: "reasoning_tokens", units: "3" }]);
     await expect(proposalStore.recordProviderObservation({ intent: configuredIntent, providerResponseId: "resp_other", receipt: dispatched.receipt, sourceProposalReference: dispatched.sourceProposalReference })).rejects.toThrow("PROVIDER_OBSERVATION_OPERATION_CONFLICT");
     const body = JSON.parse(String(calls[0]?.init?.body));
-    expect(body.input[0].content).toContain('<skill name="napplet-ui">'); expect(body.input[0].content).toContain("SERVICE EXECUTION CONTRACT");
-    expect(body.max_output_tokens).toBe(100); expect(body.input[0].content).toContain("runtimeHasDomain"); expect(body.input[1].content).toContain("const prior = true;"); expect(calls[0]?.init?.headers).toMatchObject({ "idempotency-key": operationId });
+    expect(body.input[0].content).toContain('read_authoring_resource'); expect(body.input[0].content).toContain("SERVICE EXECUTION CONTRACT");
+    expect(body.max_output_tokens).toBe(100); expect(body.input[0].content).toContain("runtimeHasDomain"); expect(body.input[1].content).toContain("const prior = true;"); expect(calls[0]?.init?.headers).toMatchObject({ "idempotency-key": `${operationId}:turn:0` });
     const lookup = await gateway.lookup(configuredIntent, new AbortController().signal);
     expect(lookup).toMatchObject({ status: "receipt_found", sourceProposalReference: dispatched.sourceProposalReference });
     // Durable correlated usage is sufficient; receipt recovery requires no provider request.

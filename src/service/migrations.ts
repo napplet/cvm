@@ -16,7 +16,7 @@ export const SERVICE_MIGRATIONS = Object.freeze([
   "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql",
   "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql",
   "development/011_publication_relays.sql", "development/012_remix_imports.sql", "development/013_publication_tracking.sql", "development/014_request_cost_history.sql",
-  "development/015_revision_restore.sql", "development/016_usage_evidence.sql", "service/001_service_realm.sql", "development/017_validation_failures.sql",
+  "development/015_revision_restore.sql", "development/016_usage_evidence.sql", "service/001_service_realm.sql", "development/017_validation_failures.sql", "development/018_model_turn_evidence.sql",
 ] as const);
 
 /** Historical ledger name, retained so existing databases upgrade in place. */

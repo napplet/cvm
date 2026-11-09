@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 status: in_progress
-stopped_at: compiler failure recovery verified; provider-neutral test deployment preserved; real-money activation remains incomplete
+stopped_at: authoring tools and offline visual libraries verified; real-money activation remains incomplete
 last_updated: "2026-11-09"
 progress:
   total_phases: 7
@@ -32,5 +32,5 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 | 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified. See quick-task summary. |
 | 261109-i83 | Container startup diagnostics and complete control-image packaging; focused regression and offline runtime probes. Hosted validation is tracked on PR #114. |
 | 261109-j5i | Separate portable application deployment instructions from operator-owned inventories, automation and live records. |
-
 | 261109-kc1 | Preserve compiler failure evidence and run one metered correction within the signed maximum; explicit owner approval when another budget is needed. 111 focused tests, four PostgreSQL checks, Chromium approval regression and pinned TypeScript pass. |
+| 261109-mxi | Callable napplet skills and read-only Nostrbook MCP in both model modes; bounded conversations, immutable turn usage and offline Three.js/GSAP. Focused tests, PostgreSQL, worker/artifact/Chromium and OAuth/returning-project browser checks pass. |

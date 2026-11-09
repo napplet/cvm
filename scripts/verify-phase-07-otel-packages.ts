@@ -18,11 +18,12 @@ const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const RENEWAL_REVIEW_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-renewal-reviews`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
-/** Immutable 2026-10-31 delegated-operator decision for the unchanged
+/** Delegated-operator renewal for the MCP addition; every prior locked package is unchanged.
+ * The immutable historical decision remains in evidence. This covers the unchanged
  * six-package closure and current root inputs. The pending audit remains
  * separate and never gains approval authority. */
-const APPROVED_OPERATOR_RECORD_DIGEST = "52dc056fc3e98a81edc7f4642c3829fccba3ae81c54a711cdfc0ea9d0febb3f4";
-const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "396739982eed64ec48ab5703c93132852091662b0d58481e1cf242768216b0d6", bunLockSha256: "6360fa66cc48e7945e6d23d0a06ac1eafedad6710edb1ee53b85a8a36d607845" });
+const APPROVED_OPERATOR_RECORD_DIGEST = "f9a0cf6866092ece28f392ee1f58716efc3a42991db57a62194b32b14b12f816";
+const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "96c527a1cf5c6942a1a111b20d0371d48e6388be780dfed67125cf7d077b8ddd", bunLockSha256: "7ee9d49fdeccdc0305b8f9e1d899353042ca833fe6da5b85039ae33dcd18befe" });
 /** The upstream base is only a recipe input. Smoke records bind the locally
  * measured derived collector image instead of mounting configuration into a
  * bare upstream container. */

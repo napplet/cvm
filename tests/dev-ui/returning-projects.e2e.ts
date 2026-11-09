@@ -129,8 +129,10 @@ try {
   const costs=(await owner.callTool("projects",{action:"costs",id})).costs;
   assert(costs.requests.length===2 && BigInt(costs.total.confirmed)===costs.requests.reduce((sum:bigint,r:any)=>sum+BigInt(r.charge),0n),"TOTAL_DOES_NOT_SUM_ALL_REQUESTS");
   assert(costs.requests[0].prompt==="Make the counter button larger","REVISION_PROMPT_MISSING");
-  const latest=(await pool.query<{admission_reference:string;expected_session_version:number;reservation_sat:string;idempotency_key:string}>("SELECT admission_reference,expected_session_version,reservation_sat,idempotency_key FROM metered_actions WHERE id=$1",[costs.requests[0].id])).rows[0];
-  await owner.reviseSession({sessionId:id,admissionReference:latest.admission_reference,expectedVersion:latest.expected_session_version,maximum:latest.reservation_sat,idempotencyKey:latest.idempotency_key,revision:costs.requests[0].prompt});
+  // Replay the exact signed browser command. A per-operation reservation is
+  // smaller than the approved workflow maximum when correction is available.
+  await page.locator('#replay-revision').evaluate(button => (button as HTMLButtonElement).click());
+  await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('#replay-revision')!.disabled);
   const pageOne=(await owner.callTool("projects",{action:"costs",id,limit:1})).costs;
   const pageTwo=(await owner.callTool("projects",{action:"costs",id,limit:1,after:pageOne.nextCursor})).costs;
   assert(pageOne.total.confirmed===costs.total.confirmed && pageTwo.total.confirmed===costs.total.confirmed && pageTwo.requests[0].number===1,"PAGINATION_OR_REPLAY_CHANGED_TOTAL");
@@ -181,16 +183,16 @@ try {
 
   // A failed build still pays for completed model usage; interrupted output has
   // a separately confirmed zero local charge. Neither becomes a fake free run.
-  await owner.fundCashu("1000");
+  await owner.fundCashu("3000");
   fixture.setInferenceMode("invalid-typescript");
-  const failedAdmission=await owner.fundAdmission("395");
-  const failed=await owner.reviseSession({sessionId:id,admissionReference:failedAdmission.admissionReference,expectedVersion:4,maximum:"395",idempotencyKey:"costs:failed",revision:"Test a change that fails its checks"});
+  const failedAdmission=await owner.fundAdmission("1314");
+  const failed=await owner.reviseSession({sessionId:id,admissionReference:failedAdmission.admissionReference,expectedVersion:4,maximum:"657",idempotencyKey:"costs:failed",revision:"Test a change that fails its checks"});
   assert(failed.status==="failed" && BigInt(failed.confirmedSpend)>0n,"FAILED_TEST_DID_NOT_INCUR_USAGE");
   const paidFailure=(await owner.callTool("projects",{action:"costs",id})).costs;
   assert(paidFailure.requests[0].charge===failed.confirmedSpend && paidFailure.requests[0].lines.length>0 && BigInt(paidFailure.total.confirmed)===BigInt(afterRestoredEdit.total.confirmed)+BigInt(failed.confirmedSpend),"FAILED_CHARGE_NOT_IN_TOTAL");
   fixture.setInferenceMode("cut");
-  const cutAdmission=await owner.fundAdmission("395");
-  const cut=await owner.reviseSession({sessionId:id,admissionReference:cutAdmission.admissionReference,expectedVersion:failed.sessionVersion,maximum:"395",idempotencyKey:"costs:cut",revision:"Test interrupted output"});
+  const cutAdmission=await owner.fundAdmission("1314");
+  const cut=await owner.reviseSession({sessionId:id,admissionReference:cutAdmission.admissionReference,expectedVersion:failed.sessionVersion,maximum:"657",idempotencyKey:"costs:cut",revision:"Test interrupted output"});
   const zero=(await owner.callTool("projects",{action:"costs",id})).costs;
   assert(cut.status==="failed" && zero.requests[0].charge==="0" && zero.total.confirmed===paidFailure.total.confirmed && zero.total.pending===0,"ZERO_CHARGE_NOT_DISTINCT_FROM_UNKNOWN");
   fixture.setInferenceMode("complete");

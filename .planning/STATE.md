@@ -30,3 +30,4 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 | --- | --- |
 | 261031-vgz | Remove speculative infrastructure architecture and simplify affected mainline history; see quick-task summary. |
 | 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified on beta. See quick-task summary. |
+| 261109-i83 | Container startup diagnostics and complete control-image packaging; focused regression and offline runtime probes. Hosted validation is tracked on PR #114. |

@@ -1,4 +1,4 @@
-import { loadServiceConfig } from "../src/service/config";
+import { loadServiceConfig, SERVICE_CONFIG_PATH } from "../src/service/config";
 import { createServiceRuntime } from "../src/service/server";
 
 /**
@@ -20,17 +20,26 @@ export async function startProductionServer() {
   return runtime;
 }
 
+/** Only known startup diagnostics may include text from an error. */
+export function serviceStartupFailure(error: unknown): { ready: false; error: string; kind?: string; code?: string; validation?: string[] } {
+  // Error codes only; mounted secrets never appear in diagnostics.
+  const message = error instanceof Error ? error.message : "SERVICE_START_FAILED";
+  // This fixed, non-secret mount path contains lowercase characters. Keep
+  // arbitrary exception text redacted rather than relaxing the code filter.
+  const safeMessage = /^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message)
+    || message === `SERVICE_MOUNT_UNAVAILABLE:${SERVICE_CONFIG_PATH}`;
+  // Validation errors report issue paths and codes only, never values.
+  const issues = error instanceof Error && error.name === "ZodError" ? (error as unknown as { issues: Array<{ path: PropertyKey[]; code: string }> }).issues.slice(0, 8).map((issue) => `${issue.path.map(String).join(".")}:${issue.code}`) : undefined;
+  // Unexpected errors report their class and system error code, not their text.
+  const cause = error instanceof Error ? (error as { code?: unknown }).code ?? (error.cause as { code?: unknown } | undefined)?.code : undefined;
+  const kind = error instanceof Error && !safeMessage ? { kind: error.name, ...(typeof cause === "string" && /^[A-Z_]{2,40}$/u.test(cause) ? { code: cause } : {}) } : {};
+  return { ready: false, error: safeMessage ? message : "SERVICE_START_FAILED", ...kind, ...(issues ? { validation: issues } : {}) };
+}
+
 if (import.meta.main) {
   try { await startProductionServer(); }
   catch (error) {
-    // Error codes only; mounted secrets never appear in diagnostics.
-    const message = error instanceof Error ? error.message : "SERVICE_START_FAILED";
-    // Validation errors report issue paths and codes only, never values.
-    const issues = error instanceof Error && error.name === "ZodError" ? (error as unknown as { issues: Array<{ path: PropertyKey[]; code: string }> }).issues.slice(0, 8).map((issue) => `${issue.path.map(String).join(".")}:${issue.code}`) : undefined;
-    // Unexpected errors report their class and system error code, not their text.
-    const cause = error instanceof Error ? (error as { code?: unknown }).code ?? (error.cause as { code?: unknown } | undefined)?.code : undefined;
-    const kind = error instanceof Error && !/^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? { kind: error.name, ...(typeof cause === "string" && /^[A-Z_]{2,40}$/u.test(cause) ? { code: cause } : {}) } : {};
-    console.error(JSON.stringify({ ready: false, error: /^[A-Z][A-Z0-9_:./-]{2,200}$/u.test(message) ? message : "SERVICE_START_FAILED", ...kind, ...(issues ? { validation: issues } : {}) }));
+    console.error(JSON.stringify(serviceStartupFailure(error)));
     process.exit(1);
   }
 }

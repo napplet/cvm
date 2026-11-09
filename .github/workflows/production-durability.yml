@@ -11,6 +11,8 @@ on:
       - "bun.lock"
       - "infra/production/Dockerfile"
       - "infra/production/modal-billing/**"
+      - "infra/dev-ui/**"
+      - "infra/vendor/**"
       - "scripts/production.ts"
       - "scripts/test-production-control-image.ts"
       - "tests/fixtures/legacy-durability-subjects.sql"

@@ -9,7 +9,7 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `funded_admission` | Capacity and cap reservation | `idempotencyKey`, `requestedCap`, `unit: "sat"`; accepted reference or refusal |
 | `approve_session_cap` | Optional higher session maximum | Session/admission, key, `expectedApprovedCap`, absolute `maximum`, `unit: "sat"`; approved receipt or finite denial |
 | `start_session` | First generation or development pending draft | Bounded `idea`, `maximum`, key, admission or `mode: "pre_admission"`; optional `remixReference` |
-| `revise_session` | Next metered action | Session, admission, `expectedVersion`, maximum, key, bounded `revision` |
+| `revise_session` | Next metered action | Session, admission, `expectedVersion`, maximum, key, bounded `revision`; optional `repairOperationId` from owner-scoped status |
 | `resume_session` | Explicit exact-action continuation | Checkpoint/version, pending reference/fingerprint, key, approval and funding/cap reference |
 | `session_status` | Durable state and billing | `sessionId`, optional billing page; or pending-action checkpoint |
 | `preview` | Verified artifact descriptor/review | `action`, session/artifact IDs and runtime variant |
@@ -102,3 +102,9 @@ The development `projects` tool accepts `{ action: "restore", id, artifactId, ex
 A successful response has `status: "restored"`, `sessionVersion`, `artifactVersion`, `artifactId`, and `charge: "0"`. The command selects an owned, verified artifact with retained source, advances the session version, and records an immutable restoration. It makes no model call and creates no metered action. Retry with the same key and exact arguments to recover the same result. Stale commands return `STALE_SESSION_VERSION`; active or unresolved work returns `SESSION_NOT_REVISION_READY`.
 
 After restoration, `session_status.session.latestVerifiedArtifact` identifies the **current** build, which may be older than other entries in `verifiedArtifacts`. Keep all those entries available for browsing. A subsequent `revise_session` uses the current build’s source. Reload status after restoring to obtain the authoritative current state; another client may already have changed it. Publication remains a separate explicit action.
+
+### Compiler correction
+
+The container compositions enable at most one automatic TypeScript correction within a signed request’s `maximum`. Each provider operation has a separate budget and usage receipt; replay joins the same correction operation. The failed source and diagnostic must be durably bound to the owner, session, version and originating operation. Provider ambiguity, worker interruption and conformance rejection do not trigger correction.
+
+When `session_status.session.failedValidationOperationId` is present, the owner can explicitly approve a new `revise_session` request with that value as `repairOperationId`, the current `expectedVersion`, bounded revision text, a funded admission and a new key. This also supports an initial failed version at version zero. Missing or foreign failure evidence is denied before model dispatch. Reading status never starts a correction.

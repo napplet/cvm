@@ -29,7 +29,7 @@ let selected: Version | undefined;
 let currentVersion: Version | undefined;
 let sessionVersion = 0;
 let pendingRestore: { action: "restore"; id: string; artifactId: string; expectedVersion: number; idempotencyKey: string } | undefined;
-let lastRevision: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; idempotencyKey: string }> | undefined;
+let lastRevision: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; repairOperationId?: string; idempotencyKey: string }> | undefined;
 const versions: Version[] = [];
 
 const product = (/\/(dev|console.html)$/.test(location.pathname)) ? undefined : new ProductWorkspace(app, bootstrap);
@@ -142,10 +142,11 @@ async function hydrateSession(sessionId: string): Promise<boolean> {
   sessionVersion = status.session.version;
   currentVersion = versions.find(v => v.artifactId === status.session.latestVerifiedArtifact?.id);
   renderVersions(); renderDurableTimeline(status.session); const latest = currentVersion;
-  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); await refreshCosts(); return true; }
+  const repair = typeof status.session.failedValidationOperationId === "string" ? { sessionId, expectedVersion: status.session.version, operationId: status.session.failedValidationOperationId } : undefined;
+  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); product?.repairAvailable(repair); await refreshCosts(); return true; }
   await selectVersion(latest);
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
-  product?.completed(latest, true); product?.sessionState(status.session.state); await refreshCosts(); void refreshEstimates();
+  product?.completed(latest, true); product?.sessionState(status.session.state); product?.repairAvailable(repair); await refreshCosts(); void refreshEstimates();
   return true;
 }
 
@@ -178,10 +179,10 @@ product?.onSessionStatusCheck(async () => {
   currentVersion = versions.find(v => v.artifactId === status.session.latestVerifiedArtifact?.id);
   renderVersions(); renderDurableTimeline(status.session);
   facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction });
-  product.sessionState(status.session.state); costSessionId = sessionId; await refreshCosts();
+  product.sessionState(status.session.state); product.repairAvailable(typeof status.session.failedValidationOperationId === "string" ? { sessionId, expectedVersion: status.session.version, operationId: status.session.failedValidationOperationId } : undefined); costSessionId = sessionId; await refreshCosts();
 });
 
-async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status.session); await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); void refreshEstimates(); }
+async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") { renderDurableTimeline(status.session); product?.repairAvailable(undefined); } await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); void refreshEstimates(); }
 
 byId<HTMLButtonElement>("connect").onclick = async () => {
   const button = byId<HTMLButtonElement>("connect"); button.disabled = true;
@@ -225,6 +226,7 @@ byId<HTMLButtonElement>("nwc").onclick = async () => { try { setFundingStatus("N
 byId<HTMLButtonElement>("generate").onclick = async () => { const button = byId<HTMLButtonElement>("generate"); button.disabled = true; setError(); try { const maximum = byId<HTMLInputElement>("maximum").value; const idea = byId<HTMLInputElement>("idea").value.trim(); if (!idea || !validMaximum(maximum)) throw new Error("Enter a focused idea and a maximum at or above the action ceiling"); const remixReference = await remix?.prepare(client!); const idempotencyKey = `browser:pending-start:${crypto.randomUUID()}`; if (BigInt(balance) < BigInt(maximum)) { setGenerationStatus("Saving action for explicit funding and resume"); const saved = await client!.savePreAdmission({ maximum, idea, idempotencyKey, ...(remixReference ? { remixReference } : {}) }); if (saved?.status === "saved") { savePending(saved); appendTimeline("saved action", `shortfall ${saved.shortfall} sats`); setGenerationStatus("Action saved; funding does not start it"); return; } if (saved?.status !== "funded_admission_required") throw new Error(saved?.code ?? "PENDING_ACTION_NOT_SAVED"); } setGenerationStatus("Request status: reserving ready isolated capacity"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); setGenerationStatus("Request status: creating metered proposal and isolated build"); await complete(await runGeneration({ kind: "start", input: { admissionReference: admission.admissionReference, maximum, idea, idempotencyKey, ...(remixReference ? { remixReference } : {}) } })); } catch (error) { setError(`Generation unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client; } };
 byId<HTMLButtonElement>("resume").onclick = async () => { if (!pending) return; const button = byId<HTMLButtonElement>("resume"); button.disabled = true; setError(); let step = "funded admission"; try { setGenerationStatus("Request status: accepting original maximum"); const admission = await client!.fundAdmission(pending.maximum, `browser:pending-admission:${pending.checkpointId}`); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); step = "pending action"; setGenerationStatus("Request status: resuming saved action"); const action = await runGeneration({ kind: "resume", input: { ...pending, admissionReference: admission.admissionReference, idempotencyKey: `browser:pending-resume:${pending.checkpointId}` } }); await complete(action); appendTimeline("resumed action", "accepted admission and exact pending action completed"); savePending(undefined); } catch (error) { setError(`Resume unavailable during ${step}: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !pending; } };
 byId<HTMLButtonElement>("revise").onclick = async () => { if (!selected) return; const button = byId<HTMLButtonElement>("revise"); button.disabled = true; setError(); try { if (selected.artifactId !== currentVersion?.artifactId) throw new Error("Restore this version or return to the current version before editing"); const revision = byId<HTMLInputElement>("revision").value.trim(); const maximum = byId<HTMLInputElement>("maximum").value; if (!revision || !validMaximum(maximum)) throw new Error("Enter a bounded revision and valid maximum"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); lastRevision = Object.freeze({ sessionId: selected.sessionId, admissionReference: admission.admissionReference, expectedVersion: sessionVersion, maximum, revision, idempotencyKey: `browser:revision:${crypto.randomUUID()}` }); setGenerationStatus("Request status: verifying revision"); await complete(await runGeneration({ kind: "revise", input: lastRevision })); byId<HTMLButtonElement>("replay-revision").disabled = false; } catch (error) { setError(`Revision unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !selected; } };
+product?.onRepair(async candidate => { const maximum = byId<HTMLInputElement>("maximum").value; if (!validMaximum(maximum)) throw new Error("Choose a valid maximum before approving the compiler correction."); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); lastRevision = Object.freeze({ sessionId: candidate.sessionId, admissionReference: admission.admissionReference, expectedVersion: candidate.expectedVersion, maximum, repairOperationId: candidate.operationId, revision: "Correct the retained TypeScript errors while preserving this applet’s purpose.", idempotencyKey: `browser:compiler-repair:${crypto.randomUUID()}` }); setGenerationStatus("Request status: sending approved compiler correction"); await complete(await runGeneration({ kind: "revise", input: lastRevision })); byId<HTMLButtonElement>("replay-revision").disabled = false; });
 byId<HTMLButtonElement>("replay-revision").onclick = async () => { if (!lastRevision) return; const button = byId<HTMLButtonElement>("replay-revision"); button.disabled = true; setError(); try { setGenerationStatus("Request status: replaying the signed revision request"); await complete(await runGeneration({ kind: "revise", input: lastRevision })); } catch (error) { setError(`Revision replay unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !lastRevision; } };
 
 // Keep the exact authorized request across reloads. Recovery reuses its admission
@@ -260,6 +262,7 @@ async function runGeneration(request: GenerationRequest): Promise<any> {
       } catch { /* The original generation result remains authoritative. */ }
     }
     if (interrupted) result.code += " · This attempt couldn’t finish. Your saved version and draft are safe. You can send your change again or edit it first. No local test charge was taken for this attempt; your subscription may still have counted its usage.";
+    if (typeof result?.sessionId === "string") await hydrateSession(result.sessionId).catch(() => undefined);
   }
   return result;
 }
@@ -298,7 +301,7 @@ if (product) byId<HTMLButtonElement>("recover").onclick = async () => {
   setError(); await complete(await runGeneration(request)); if (request.kind === "resume") savePending(undefined);
 };
 // One visual action spans admission, generation and opening its verified preview.
-const actionButtons = ["generate", "resume", "revise", "replay-revision", ...(product ? ["recover"] : [])];
+const actionButtons = ["generate", "resume", "revise", "replay-revision", ...(product ? ["approve-repair", "recover"] : [])];
 for (const id of actionButtons) {
   const button = byId<HTMLButtonElement>(id); const run = button.onclick!;
   button.onclick = async (event) => {

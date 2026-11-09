@@ -25,7 +25,11 @@ Start with the visible status and execution details. Keep the project/session an
 
 For a development subscription request that has durably ended with no recoverable source or receipt, the service can close the failed attempt and allow a new explicit revision. Previous verified versions remain available. Active requests and API-billed unknown outcomes are not automatically treated as free failures.
 
-**Build or TypeScript/conformance failure** means model output did not pass the worker’s checks. Inspect the failed stage. Do not publish the failed output. Correct the request or ask the operator to inspect the safe job diagnostic.
+**TypeScript failure** can be corrected automatically once when your approved maximum covers another model attempt. The service sends the exact failed source and a bounded compiler diagnostic back to the agent, then repeats all build and verification checks. The failed attempt and correction keep separate usage receipts.
+
+If the budget is insufficient, **Approve compiler correction** offers a new paid request for a retained compiler failure. Checking status or reopening the project does not approve a charge. Older failures without a saved compiler report cannot offer this recovery.
+
+**Other build or conformance failures** still stop the attempt. Inspect the failed stage and correct the request or ask the operator to inspect the safe diagnostic. Uncertain provider outcomes must be reconciled before another attempt.
 
 ## Reporting a problem
 

@@ -160,6 +160,11 @@ describe("verified ContextVM funding adapter", () => {
     expect(calls.revise).toHaveLength(1);
     expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "denied", code: "STALE_SESSION_VERSION" } });
 
+    await adapter.handle(envelope({ request: { id: "repair-revise", method: "tools/call", params: { name: "revise_session", arguments: { sessionId: "session:one", admissionReference: "admission:repair", idempotencyKey: "repair-one", expectedVersion: 1, maximum: "100", revision: "Correct the retained TypeScript errors while preserving this applet’s purpose.", repairOperationId: "operation:compiler-failure" } } } }));
+    expect(calls.revise.at(-1)).toMatchObject({
+      principal: { pubkey: fixture.requests.verifiedPubkey }, sessionId: "session:one", admissionReference: "admission:repair", idempotencyKey: "repair-one", expectedVersion: 1, maximum: "100", repairOperationId: "operation:compiler-failure",
+    });
+
     await adapter.handle(envelope({ request: { id: "status-1", method: "tools/call", params: { name: "session_status", arguments: { sessionId: "session:one", billing: { limit: 1 } } } } }));
     expect(calls.status).toHaveLength(1);
     expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "not_found_or_denied" } });

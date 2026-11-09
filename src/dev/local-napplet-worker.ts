@@ -21,6 +21,19 @@ export function configureUntrustedContainerRuntime(runtime: string | undefined):
 export function untrustedRuntimeArgs(runtime = untrustedRuntime): string[] { return runtime ? ["--runtime", runtime] : []; }
 export type WorkerOutput = Readonly<{ distRoot: string; toolchainSha256: string; commandEvidence: readonly z.infer<typeof Stage>[]; cleanup(): Promise<void> }>;
 
+/** A bounded compiler diagnostic projected from the closed worker report.
+ *
+ * This is deliberately narrower than a worker failure: only the verify stage
+ * and only a parsed TypeScript diagnostic are recoverable. Timeouts, runner
+ * faults, conformance failures, and arbitrary output remain opaque failures.
+ */
+export class WorkerValidationError extends Error {
+  constructor(readonly diagnostic: WorkerDiagnostic) {
+    super("WORKER_VALIDATION_FAILED");
+    this.name = "WorkerValidationError";
+  }
+}
+
 export async function runBoundedDevelopmentCommand(argv: string[], input: Readonly<{ deadlineMs: number; maxBytes: number; signal?: AbortSignal; onStdoutLine?: (line: string) => void }>) {
   input.signal?.throwIfAborted();
   const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
@@ -115,7 +128,9 @@ export class LocalNappletWorker {
       catch { throw new Error(result.exitCode === 0 ? "WORKER_EVIDENCE_MISSING" : "WORKER_COMMAND_FAILED"); }
       if (result.exitCode !== 0) {
         const failed = evidence.stages.at(-1)!;
-        this.progress(failed.name, "failed", failed.name === "verify" ? parseWorkerDiagnostic(failed.stdout ?? "") : undefined);
+        const diagnostic = failed.name === "verify" && failed.exitCode !== 0 ? parseWorkerDiagnostic(failed.stdout ?? "") : undefined;
+        this.progress(failed.name, "failed", diagnostic);
+        if (diagnostic) throw new WorkerValidationError(diagnostic);
         throw new Error(`WORKER_COMMAND_FAILED:${failed.name}`, { cause: { stage: failed.name, exitCode: failed.exitCode, stdout: failed.stdout?.slice(-4_000), stderr: failed.stderr?.slice(-4_000) } });
       }
       retained = true;

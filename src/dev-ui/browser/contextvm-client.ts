@@ -133,7 +133,7 @@ export class DevelopmentContextVmClient {
 
   async sessionStatus(sessionId: string): Promise<any> { return this.callTool("session_status", { sessionId }); }
 
-  async reviseSession(input: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; idempotencyKey?: string }>): Promise<any> {
+  async reviseSession(input: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; repairOperationId?: string; idempotencyKey?: string }>): Promise<any> {
     return this.callTool("revise_session", { ...input, idempotencyKey: input.idempotencyKey ?? `browser:revision:${crypto.randomUUID()}` });
   }
 

@@ -144,9 +144,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   let activeWork = 0;
   let configuring = false;
   let oauthGateway: ChatGptModelGateway | undefined;
-  let actionCeilingSat = composition.pricing
-    ? maximumOperationCharge(composition.pricing)
-    : maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
+  let actionCeilingSat = (2n * BigInt(maximumOperationCharge(composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] }))).toString();
   const identity = developmentServiceIdentity(config.fundingKey);
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
@@ -195,6 +193,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   type Pricing = ReturnType<typeof import("../dev/chatgpt-model-gateway").chatGptDevelopmentPricing>;
   const makeRuntime = (gateway: ModelGateway, pricing: Pricing) => {
     const generation = new MeteredGenerationService({
+      automaticValidationRepair: true,
       fundedAdmission, store: app.database.meteredFunding,
       gateway: progress.gateway({
         dispatch: async (intent, signal) => {
@@ -264,7 +263,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       if (persist) await chatgpt.select(settings);
       runtime = next; oauthGateway = gateway;
       providerLabel = api && !persist ? "Configured OpenAI Responses" : gateway ? "ChatGPT subscription · local test sats" : composition.providerLabel;
-      actionCeilingSat = maximumOperationCharge(runtime.pricing);
+      actionCeilingSat = (2n * BigInt(maximumOperationCharge(runtime.pricing))).toString();
     } finally { configuring = false; }
   }
   operator = await CvmOperator.open(resolve(stateRoot, "cvm-operator"), {

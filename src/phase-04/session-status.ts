@@ -54,6 +54,7 @@ const StatusOkSchema = z.object({
     actualSpend: DecimalSchema,
     remainingBalance: DecimalSchema,
     remainingCap: DecimalSchema,
+    failedValidationOperationId: z.string().min(1).optional(),
     latestVerifiedArtifact: z.object({ id: z.string().min(1), version: z.number().int().nonnegative() }).nullable(),
     verifiedArtifacts: z.array(z.object({ id: z.string().min(1), version: z.number().int().positive() }).strict()).default([]),
     timeline: z.array(z.object({ stage: z.enum(["source_recorded", "provider_recorded", "worker_completed", "artifact_verified", "ledger_settled"]), at: z.iso.datetime(), detail: z.string().min(1).max(160) }).strict()).default([]),
@@ -121,7 +122,7 @@ function historyItem(item: BillingLineItem): z.infer<typeof BillingHistoryItemSc
   });
 }
 function newestAction(actions: readonly MeteredAction[]): MeteredAction | undefined {
-  return [...actions].sort((left, right) => (right.sessionVersion ?? right.expectedVersion) - (left.sessionVersion ?? left.expectedVersion) || right.actionId.localeCompare(left.actionId))[0];
+  return actions.at(-1);
 }
 function safeProgress(state: z.infer<typeof StatusOkSchema>["session"]["state"]): z.infer<typeof StatusOkSchema>["session"]["progress"] {
   if (state === "needs_top_up") return "waiting_for_funding";
@@ -184,6 +185,9 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
     : undefined;
   const actions = await input.store.listMeteredActionsForSession(accountId, query.sessionId);
   const action = newestAction(actions);
+  const failedValidation = session.status === "failed" ? actions.filter(candidate => candidate.status === "failed" && candidate.expectedVersion === session.version
+    && candidate.artifact?.failedArtifactId?.startsWith("proposal:sha256:") && candidate.artifact.validationReportReference?.startsWith("validation:sha256:"))
+    .at(-1) : undefined;
   if (!action && !continuation) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
   try {
     const [account, page] = await Promise.all([input.store.status(accountId), input.store.listBillingLineItems(accountId, { limit, ...(storeCursor ? { cursor: storeCursor } : {}) })]);
@@ -270,6 +274,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
         status: "ok",
         session: {
           id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status),
+          ...(failedValidation ? { failedValidationOperationId: failedValidation.operationId } : {}),
           maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
           latestVerifiedArtifact: latest, nextAction: "revise_session", continuation: null,
           verifiedArtifacts,
@@ -289,7 +294,8 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
     const result = SessionStatusSchema.parse({
       status: "ok",
       session: {
-        id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status), maximum: action.maximum.toString(10), actualSpend,
+        id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status),
+          ...(failedValidation ? { failedValidationOperationId: failedValidation.operationId } : {}), maximum: action.maximum.toString(10), actualSpend,
         remainingBalance: action.remainingBalance ?? account.available, remainingCap,
         latestVerifiedArtifact: verifiedActions?.artifact?.artifactId && verifiedActions.artifactVersion ? { id: verifiedActions.artifact.artifactId, version: verifiedActions.artifactVersion } : null,
         verifiedArtifacts: actions.filter((candidate) => candidate.artifact?.artifactId && candidate.artifactVersion).sort((left, right) => (left.artifactVersion ?? 0) - (right.artifactVersion ?? 0)).map((candidate) => ({ id: candidate.artifact!.artifactId!, version: candidate.artifactVersion! })),

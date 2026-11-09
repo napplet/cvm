@@ -246,6 +246,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 4000
+          },
+          "repairOperationId": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -3417,6 +3421,10 @@
                 "remainingCap": {
                   "type": "string",
                   "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "failedValidationOperationId": {
+                  "type": "string",
+                  "minLength": 1
                 },
                 "latestVerifiedArtifact": {
                   "anyOf": [

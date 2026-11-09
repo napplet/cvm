@@ -163,7 +163,7 @@ export interface FundingStore {
 export interface MeteredFundingStore extends FundingStore {
   findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined>;
   findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined>;
-  /** Owner-scoped history used to bind one automatic repair to its failed action. */
+  /** Owner-scoped history in preparation order (oldest first), including failed actions. */
   listMeteredActionsForSession(accountId: string, sessionId: string): Promise<readonly MeteredAction[]>;
   listBillingLineItems(accountId: string, request?: BillingLineItemPageRequest): Promise<BillingLineItemPage>;
   sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined>;

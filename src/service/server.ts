@@ -150,6 +150,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     const owners = new Map<string, string>();
     const artifactVerifier = new LocalGenerationArtifactVerifier({ worker, verifier: new LocalArtifactVerifier(), repository, ownerIdForAccount: (accountId) => owners.get(accountId) });
     const generation = new MeteredGenerationService({
+      automaticValidationRepair: true,
       fundedAdmission, store: app.database.meteredFunding,
       gateway: progress.gateway({
         dispatch: async (intent, signal) => {
@@ -171,7 +172,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     const [packageHash, lockHash] = await Promise.all(["package.json", "bun.lock"].map(async (name) => new Bun.CryptoHasher("sha256").update(await readFile(resolve(root, name))).digest("hex")));
     const preAdmission = new PreAdmissionSessionService({ store: app.database.funding, envelope: new PendingActionEnvelopeService(new MountedPendingActionKey(identity.pendingActionKey)), generation, pricing,
       pins: { policyVersion: config.policy.version, profileId: pricing.profile.id, priceCardId: pricing.card.id, toolchainId: readiness.imageDigest, rootManifestSha256: new Bun.CryptoHasher("sha256").update(`${packageHash}:${lockHash}`).digest("hex") } });
-    const actionCeilingSat = maximumOperationCharge(pricing);
+    const actionCeilingSat = (2n * BigInt(maximumOperationCharge(pricing))).toString();
 
     priorSource = async (value) => {
       const artifact = await repository.get(value.authorizedPriorArtifactReference);

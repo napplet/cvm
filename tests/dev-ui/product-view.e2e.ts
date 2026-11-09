@@ -32,6 +32,29 @@ try {
   assert(await page.evaluate(() => (window as any).workspace.validate("generate")) === false, "INVALID_BUDGET_ACCEPTED");
   assert(await page.locator("#maximum").evaluate((el) => document.activeElement === el), "INVALID_BUDGET_NOT_FOCUSED");
   await page.locator("#maximum").fill("3250");
+  await page.locator("#maximum").fill("4100");
+  await page.evaluate(() => {
+    const w = window as any;
+    w.repairCalls = 0; w.repairFinished = false;
+    w.repairGate = new Promise<void>((resolve) => { w.releaseRepair = resolve; });
+    w.workspace.onRepair(async (candidate: unknown) => { w.repairCalls++; w.repairCandidate = candidate; await w.repairGate; });
+    // A status projection only makes the explicit control available.
+    w.workspace.repairAvailable({ sessionId: "session:compiler", expectedVersion: 0, operationId: "operation:compiler" });
+  });
+  assert(await page.locator("#approve-repair").isVisible() && (await page.locator("#notice-copy").innerText()).includes("4100"), "REPAIR_APPROVAL_COPY_NOT_BOUND_TO_CURRENT_MAXIMUM");
+  assert(await page.evaluate(() => (window as any).repairCalls) === 0, "STATUS_PROJECTION_DISPATCHED_REPAIR");
+  await page.evaluate(() => {
+    const w = window as any; const button = document.querySelector<HTMLButtonElement>("#approve-repair")!; const run = button.onclick!;
+    w.repairWrapper = (async () => { w.workspace.begin("approve-repair"); await run.call(button, new PointerEvent("click")); w.repairFinished = true; })();
+  });
+  await page.waitForFunction(() => (window as any).repairCalls === 1);
+  assert(await page.evaluate(() => (window as any).repairFinished) === false, "REPAIR_WRAPPER_DID_NOT_AWAIT_APPROVAL");
+  assert(await page.evaluate(() => JSON.stringify((window as any).repairCandidate)) === JSON.stringify({ sessionId: "session:compiler", expectedVersion: 0, operationId: "operation:compiler" }), "BEGIN_DROPPED_REPAIR_CANDIDATE");
+  await page.evaluate(async () => { const w = window as any; w.releaseRepair(); await w.repairWrapper; });
+  assert(await page.evaluate(() => (window as any).repairFinished) === true, "REPAIR_WRAPPER_NEVER_COMPLETED");
+  await page.evaluate(() => (window as any).workspace.repairAvailable(undefined));
+  assert(await page.locator("#approve-repair").isHidden() && await page.evaluate(() => (window as any).repairCalls) === 1, "UNKNOWN_REPAIR_CANDIDATE_VISIBLE_OR_DISPATCHED");
+  await page.evaluate(() => { const maximum = document.querySelector<HTMLInputElement>("#maximum")!; maximum.value = "3250"; maximum.dispatchEvent(new Event("input", { bubbles: true })); });
   await page.evaluate(() => (window as any).workspace.estimates({unit:"test_sat",windowDays:30,create:null,revise:null}));
   assert((await page.locator("#create-estimate-time").innerText()).includes("Not enough history"), "EMPTY_HISTORY_INVENTED_ETA");
   await page.evaluate(() => { const w=window as any; w.estimate={samples:4,basis:"create",cost:{low:"120",high:"300"},seconds:{low:30,high:60}}; w.workspace.estimates({unit:"test_sat",windowDays:30,create:w.estimate,revise:{...w.estimate,basis:"all"}}); });

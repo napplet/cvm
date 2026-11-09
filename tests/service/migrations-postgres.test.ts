@@ -52,13 +52,13 @@ integration("upgrade from an earlier revision preserves rows, and test activity 
   try {
     const all = await canonicalMigrations();
     // An earlier deployed revision: the sequence before the realm marker.
-    await applyCanonicalMigrations(pool, all.slice(0, -1));
+    await applyCanonicalMigrations(pool, all.slice(0, all.findIndex(migration => migration.name === "service/001_service_realm.sql")));
     await pool.query("INSERT INTO funding_accounts(account_id,unit) VALUES('acct-test','sat')");
     await pool.query("INSERT INTO account_balance_projection(account_id,unit,settled_available,held) VALUES('acct-test','sat',63,0)");
     await pool.query("INSERT INTO ledger_transactions(transaction_id,reference,unit) VALUES('tx-1','test-top-up','sat')");
     await pool.query("INSERT INTO ledger_entries(entry_id,transaction_id,account_id,direction,amount,unit,entry_reference) VALUES('e-1','tx-1','acct-test','credit',63,'sat','test-top-up:credit')");
     await expect(assertCanonicalSchema(pool)).rejects.toThrow("SERVICE_MIGRATION_PENDING:service/001_service_realm.sql");
-    expect((await applyCanonicalMigrations(pool)).applied).toEqual(["service/001_service_realm.sql"]);
+    expect((await applyCanonicalMigrations(pool)).applied).toEqual(["service/001_service_realm.sql", "development/017_validation_failures.sql"]);
     expect((await pool.query("SELECT settled_available::text AS value FROM account_balance_projection WHERE account_id='acct-test'")).rows[0].value).toBe("63");
     // Existing ledger activity is test history: it can never be adopted as real money.
     await expect(initializeServiceRealm(pool, "real")).rejects.toThrow("SERVICE_REAL_REALM_REQUIRES_EMPTY_LEDGER");

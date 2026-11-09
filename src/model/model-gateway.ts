@@ -32,6 +32,7 @@ export const ProviderOperationIntentSchema = z.object({
   // dispatch callers supply a bounded prompt before crossing the provider seam.
   prompt: PromptSchema.optional().default("legacy-recovery"), authorizedPriorArtifactReference: z.string().min(1).max(256).optional(),
   remixReference: RemixReferenceSchema.optional(),
+  validationRepair: z.object({ originOperationId: z.string().min(1), sourceReference: SourceProposalReferenceSchema, reportReference: z.string().regex(/^validation:sha256:[a-f0-9]{64}$/u) }).strict().optional(),
   maximumUnits: z.array(z.object({ dimension: UsageDimensionSchema, units: DecimalSchema }).strict()).min(1),
   selection: z.literal("unselected"),
 }).strict();

@@ -3,6 +3,8 @@ import { canonicalJson } from "../promotion/schema";
 import { NormalizedUsageReceiptSchema, ProviderOperationIntentSchema, SourceProposalSchema, type NormalizedUsageReceipt, type ProviderOperationIntent, type SourceProposal } from "../model/model-gateway";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { z } from "zod";
+import { WorkerValidationFailureSchema } from "./durable-worker-result-store";
+import type { WorkerDiagnostic } from "./worker-diagnostic";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const ApprovedPathSchema = z.enum(["src/app.ts", "src/main.ts", "src/styles.css", "src/capabilities.json"]);
@@ -11,6 +13,7 @@ const StoredProposalSchema = z.object({
   authorizedPriorArtifactReference: z.string().min(1).max(256).optional(), provider: z.string().min(1), model: z.string().min(1), profileId: z.string().min(1), priceCardId: z.string().min(1), proposal: SourceProposalSchema,
 }).strict();
 export type StoredSourceProposal = z.infer<typeof StoredProposalSchema>;
+export type ValidationRepairContext = Readonly<{ source: SourceProposal; diagnostic: WorkerDiagnostic }>;
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -28,9 +31,9 @@ function validFiles(proposal: SourceProposal): boolean {
 export class SourceProposalStore {
   constructor(private readonly pool: PostgresSqlPool) {}
 
-  private async query(sql: string, values: readonly unknown[]) {
+  private async query<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, values: readonly unknown[]): Promise<{ readonly rows: readonly T[] }> {
     const client = await this.pool.connect();
-    try { return await client.query(sql, values); } finally { client.release(); }
+    try { return await client.query<T>(sql, values); } finally { client.release(); }
   }
 
   /** Receipt journal is independent of generated source validity. */
@@ -91,6 +94,33 @@ export class SourceProposalStore {
       if ((input.reference && input.reference !== `proposal:sha256:${proposal.proposalSha256}`) || (input.sha256 && proposal.proposalSha256 !== input.sha256)) return undefined;
       return proposal;
     } finally { client.release(); }
+  }
+
+  /**
+   * Loads only a source proposal and compiler diagnostic already bound to the
+   * caller's account/session/version.  No worker output, logs, prompt, or
+   * credentials become repair context.
+   */
+  async repairContext(input: ProviderOperationIntent): Promise<ValidationRepairContext | undefined> {
+    const intent = ProviderOperationIntentSchema.parse(input);
+    const repair = intent.validationRepair;
+    if (!repair) return undefined;
+    const proposalSha256 = repair.sourceReference.slice("proposal:sha256:".length);
+    const row = (await this.query<{
+      proposal_sha256: string; operation_id: string; provider_request_id: string; account_id: string; session_id: string; action_id: string; expected_version: number; request_fingerprint_sha256: string; prior_artifact_reference: string | null; provider: string; model: string; profile_id: string; price_card_id: string; proposal_json: unknown;
+      failure_json: unknown; toolchain_sha256: string; state: string;
+    }>(
+      "SELECT s.proposal_sha256,s.operation_id,s.provider_request_id,s.account_id,s.session_id,s.action_id,s.expected_version,s.request_fingerprint_sha256,s.prior_artifact_reference,s.provider,s.model,s.profile_id,s.price_card_id,s.proposal_json,w.failure_json,w.toolchain_sha256,w.state FROM source_proposals s JOIN development_worker_results w ON w.operation_id=s.operation_id WHERE s.operation_id=$1 AND s.account_id=$2 AND s.session_id=$3 AND s.expected_version=$4 AND s.proposal_sha256=$5 AND w.state='failed'",
+      [repair.originOperationId, intent.accountId, intent.sessionId, intent.expectedVersion, proposalSha256],
+    )).rows[0];
+    if (!row) throw new Error("VALIDATION_REPAIR_CONTEXT_UNAVAILABLE");
+    if (row.state !== "failed" || row.operation_id !== repair.originOperationId || row.account_id !== intent.accountId || row.session_id !== intent.sessionId || row.expected_version !== intent.expectedVersion || row.proposal_sha256 !== proposalSha256) throw new Error("VALIDATION_REPAIR_CONTEXT_BINDING_INVALID");
+    const source = this.row(row);
+    const failure = WorkerValidationFailureSchema.safeParse(row.failure_json);
+    if (!failure.success || failure.data.operationId !== row.operation_id || failure.data.accountId !== row.account_id || failure.data.sessionId !== row.session_id || failure.data.actionId !== row.action_id || failure.data.expectedVersion !== row.expected_version || failure.data.proposalSha256 !== row.proposal_sha256 || failure.data.toolchainSha256 !== row.toolchain_sha256) throw new Error("VALIDATION_REPAIR_CONTEXT_BINDING_INVALID");
+    const reportReference = `validation:sha256:${await sha256(canonicalJson(failure.data))}`;
+    if (repair.sourceReference !== source.proposal.reference || repair.reportReference !== reportReference) throw new Error("VALIDATION_REPAIR_CONTEXT_BINDING_INVALID");
+    return freeze({ source: source.proposal, diagnostic: failure.data.diagnostic });
   }
 
   async recordProviderObservation(input: Readonly<{ intent: ProviderOperationIntent; providerResponseId: string; receipt: NormalizedUsageReceipt; sourceProposalReference: string }>): Promise<void> {

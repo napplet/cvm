@@ -72,6 +72,8 @@ const PreAdmissionStartSessionArgumentsSchema = z.object({
 export const StartSessionArgumentsSchema = z.union([FundedStartSessionArgumentsSchema, PreAdmissionStartSessionArgumentsSchema]);
 export const ReviseSessionArgumentsSchema = z.object({
   sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.number().int().nonnegative(), maximum: z.string().regex(/^[1-9][0-9]*$/u), revision: z.string().min(1).max(4_000),
+  /** Opaque server-issued operation binding for an explicitly approved compiler repair. */
+  repairOperationId: z.string().min(1).optional(),
 }).strict();
 const LegacyResumeSessionArgumentsSchema = ResumeSessionCommandSchema.omit({ principal: true });
 const PendingActionResumeArgumentsSchema = z.object({
@@ -271,7 +273,7 @@ export class ContextVmFundingAdapter {
     if (name === "revise_session") {
       const args = ReviseSessionArgumentsSchema.parse(argumentsInput);
       if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
-      const result = SessionActionResultSchema.parse(await this.options.generation.reviseSession({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: args.expectedVersion, maximum: args.maximum, policyVersion: this.policyVersion, revision: args.revision }));
+      const result = SessionActionResultSchema.parse(await this.options.generation.reviseSession({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: args.expectedVersion, maximum: args.maximum, policyVersion: this.policyVersion, revision: args.revision, ...(args.repairOperationId ? { repairOperationId: args.repairOperationId } : {}) }));
       return this.generationResponse("revise_session", verifiedPubkey, requestEventId, request.id, result);
     }
     if (name === "resume_session") {

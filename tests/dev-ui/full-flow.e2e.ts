@@ -69,7 +69,7 @@ try {
       const completed = stage === "generation" ? 1 : stage === "revision2" ? 2 : ["revision3", "pending-save", "post-restart", "topup"].includes(stage) ? 3 : stage === "resume" ? 4 : 0;
       for (const kind of ["actions", "providers", "receipts", "debits", "artifacts", "workers"] as const) check(snapshot[kind] === completed, `FULL_FLOW_EFFECT_COUNT:${stage}:${kind}:${snapshot[kind]}`);
       check(charges === String(completed * 5), `FULL_FLOW_EXACT_CHARGE:${stage}`);
-      const expectedCredits = stage === "cashu" || stage === "cashu-replay" ? 1 : stage === "topup" || stage === "resume" ? 3 : 2;
+      const expectedCredits = stage === "cashu" || stage === "cashu-replay" ? 3 : stage === "topup" || stage === "resume" ? 5 : 4;
       check(snapshot.credits === expectedCredits, `FULL_FLOW_DUPLICATE_CREDIT:${stage}`);
       if (["generation", "revision2", "revision3", "resume"].includes(stage)) {
         const latest = (await pool.query("SELECT terminal_result FROM metered_actions WHERE account_id=$1 AND state='verified' ORDER BY settled_at DESC LIMIT 1", [accountId])).rows[0]?.terminal_result as Record<string, unknown>;

@@ -15,8 +15,8 @@ function requireThat(condition: unknown, code: string): asserts condition {
 
 async function connectAndGenerate(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Connect" }).click();
-  await page.getByText("Connected").waitFor();
-  await page.getByLabel("Cashu amount (sats)").fill("4000");
+  await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
+  await page.getByLabel("Cashu amount (sats)").fill((BigInt(await page.getByLabel("Maximum (sats)").inputValue()) + 64n).toString());
   await page.getByRole("button", { name: "Fund with Cashu" }).click();
   await page.getByText("Cashu credited").waitFor();
   await page.getByLabel("Focused idea").fill("A focused counter used only for browser boundary evidence");

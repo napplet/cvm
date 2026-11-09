@@ -27,10 +27,11 @@ COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/infra ./infra
 COPY --from=build /app/tests/dev-ui ./tests/dev-ui
-RUN bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium \
+RUN mkdir -p /tmp/napplet-cvm \
+    && bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* \
     && chmod -R go-w /app /opt/napplet-cvm-browsers \
-    && mkdir -p /tmp/napplet-cvm && chown 65532:65532 /tmp/napplet-cvm && chmod 0700 /tmp/napplet-cvm
+    && chown 65532:65532 /tmp/napplet-cvm && chmod 0700 /tmp/napplet-cvm
 USER 65532:65532
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD bun -e 'fetch("http://127.0.0.1:8080/health").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))'
@@ -58,9 +59,9 @@ COPY --from=control /app /app
 COPY --from=modal-packages /opt/napplet-cvm-modal /opt/napplet-cvm-modal
 # Install browser libraries for this Python image's distro; do not copy the
 # control image's system libraries across distributions.
-RUN bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium \
+RUN mkdir -p /usr/local/bun-node-fallback-bin /tmp/napplet-cvm \
+    && bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /usr/local/bun-node-fallback-bin /tmp/napplet-cvm \
     && ln -s /usr/local/bin/bun /usr/local/bun-node-fallback-bin/node \
     && chown 65532:65532 /tmp/napplet-cvm && chmod 0700 /tmp/napplet-cvm \
     && chmod -R go-w /app /opt/napplet-cvm-modal /opt/napplet-cvm-browsers

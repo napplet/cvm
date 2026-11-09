@@ -19,7 +19,7 @@ import { ExternalSignerBoundaryAdapter } from "../release/native/external-signer
 import { createProductionPublicationUpload } from "./publication-upload";
 import { createProductionPublicationRelays } from "./publication-relays";
 import { createNativePromotedNappletCliSource } from "../release/native/promoted-cli";
-import { createContextVmDeploymentClient, openContextVmCertificationClient } from "../release/deployment/contextvm-client";
+import { createContextVmDeploymentClient, openContextVmCertificationClient, type ContextVmCertificationConstructionTransport } from "../release/deployment/contextvm-client";
 import { createPaymentDeploymentClients } from "../release/deployment/payment-clients";
 import { createVertexDeploymentClient } from "../release/deployment/vertex-client";
 import { createCompatibleHostDeploymentClient } from "../release/deployment/compatible-host-client";
@@ -67,6 +67,17 @@ import { openProductionPostgresPool } from "./postgres";
 export type MountedProductionSessionReferences = MountedProductionSessionRecord & Readonly<{
   gcsProvisionObject: Uint8Array;
 }>;
+
+/* Only the normal mounted producer may mint this in-process provenance. The
+ * token is reference identity, not JSON/config material, so a caller cannot
+ * reconstruct it with matching fields or a prototype chain. */
+const mountedSessionMaterials = new WeakSet<object>();
+
+export function assertMountedProductionSessionMaterial(value: unknown): asserts value is ProductionCertificationSessionMaterial {
+  if (!value || typeof value !== "object" || !mountedSessionMaterials.has(value)) {
+    throw new Error("PRODUCTION_MOUNTED_SESSION_PROVENANCE_REQUIRED");
+  }
+}
 
 type ReceiptBoundNative = Readonly<{
   plan(input: Readonly<{ request: unknown; receipt: unknown; operationId: string; region?: string }>): Promise<unknown>;
@@ -424,6 +435,8 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
    * accepted from the session record. */
   secrets: MountedProductionSecretMaterial;
   now?: () => number;
+  /** Explicit deny-effects construction transport; never mounted/configured. */
+  constructionTransport?: ContextVmCertificationConstructionTransport;
 }>): Promise<ProductionCertificationSessionMaterial> {
   if (input.config.realm !== "production-real"
     || input.generation.config.realm !== "production-real"
@@ -460,13 +473,29 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     authorizationRequest: authorization.request,
     authorizationReceipt: authorization.receipt,
     now,
+    ...(input.constructionTransport ? { constructionTransport: input.constructionTransport } : {}),
   });
   input.generation.registerClose(() => contextvmCertification.close());
   const control = new ProductionCoreControlClient({ serviceUrl: input.config.operator.privateControlAudience, candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, request: authorization.request, receipt: authorization.receipt, journal: dependencies.journal, identity: createGooglePrivateControlIdentity(input.config.operator.serviceAccount) });
   const coreSuites = createProductionCoreSuiteAdapters({ candidate: input.resolved.workerCandidate, control, contextvm: contextvmCertification });
   /* The mount-record parser guarantees JSON-only data; the Google factory
    * re-parses this exact controller shape before it creates ADC clients. */
-  const mountedGoogle = createMountedGoogleControls({ config: input.config, generation: input.generation, configuration: input.resolved.googleControls as MountedGoogleControlConfiguration, telemetry: coreSuites.telemetry, now });
+  /* The immutable record carries only controller-observed deployment facts.
+   * Its account scope is already bound on every provider discovery and the
+   * encryption-key reference is fixed production configuration, so derive
+   * both here instead of widening the JSON record into a credential channel. */
+  const accountScopeSha256 = input.resolved.discoveries.cloud_run.accountScopeSha256;
+  if (input.resolved.discoveries.cloud_sql_postgres.accountScopeSha256 !== accountScopeSha256
+    || input.resolved.discoveries.gcs.accountScopeSha256 !== accountScopeSha256
+    || input.resolved.discoveries.collector.accountScopeSha256 !== accountScopeSha256) {
+    throw new Error("PRODUCTION_MOUNTED_GOOGLE_ACCOUNT_SCOPE_REQUIRED");
+  }
+  const mountedGoogleConfiguration: MountedGoogleControlConfiguration = Object.freeze({
+    ...(input.resolved.googleControls as Omit<MountedGoogleControlConfiguration, "accountScopeSha256" | "gcs">),
+    accountScopeSha256,
+    gcs: Object.freeze({ encryptionKeyReference: input.config.gcs.encryptionKeyReference }),
+  });
+  const mountedGoogle = createMountedGoogleControls({ config: input.config, generation: input.generation, configuration: mountedGoogleConfiguration, telemetry: coreSuites.telemetry, now });
   const { google } = mountedGoogle;
   const cloudRun = createNativeCloudRunProvider({ config: input.resolved.providerConfigurations.cloud_run, port: mountedGoogle.cloudRun, now });
   const cloudSql = createNativeCloudSqlPostgresProvider({ config: input.resolved.providerConfigurations.cloud_sql_postgres, port: mountedGoogle.cloudSql, now });
@@ -596,7 +625,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const providers = Object.freeze(Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map(id => [id, descriptor(providerPorts[id]!, `native:${id}:${input.config.topologySha256}`)])) as ProductionCertificationSessionMaterial["providers"]);
   if (!input.deploymentConfig || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256) throw new Error("PRODUCTION_MOUNTED_SESSION_DEPLOYMENT_CONFIG_REQUIRED");
   const deploymentConfig = input.deploymentConfig;
-  return Object.freeze({
+  const material: ProductionCertificationSessionMaterial = Object.freeze({
     realm: "production-real", deploymentConfig, journal: dependencies.journal, clients, providers,
     workerCandidate: input.resolved.workerCandidate, control, checkpointCoordinator: dependencies.checkpointCoordinator,
     prepare: async ({ authorizationRequest, receipt }) => {
@@ -615,6 +644,8 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
       return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, ...(mountedGoogle.billingReports ? { billingReports: mountedGoogle.billingReports } : {}), now });
     },
   });
+  mountedSessionMaterials.add(material);
+  return material;
 }
 
 /** Named export consumed by the hash-pinned production-execution loader. It
@@ -630,6 +661,7 @@ export async function createProductionCertificationSessionMaterial(input: Readon
    * mutable state. It contains branded project clients and original-operation
    * ports; a JSON deployment file cannot manufacture this graph. */
   resolved?: MountedProductionSessionReferences;
+  constructionTransport?: ContextVmCertificationConstructionTransport;
 }>): Promise<ProductionCertificationSessionMaterial> {
   const resolved = input.resolved ?? await loadMountedProductionSessionRecord({ config: input.config, secrets: input.secrets });
   let mountedRequest: Awaited<ReturnType<typeof validateAuthorizationRequest>>;
@@ -653,7 +685,7 @@ export async function createProductionCertificationSessionMaterial(input: Readon
     || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256) {
     throw new Error("PRODUCTION_MOUNTED_SESSION_AUTHORIZATION_BINDING_REQUIRED");
   }
-  return createMountedProductionSessionMaterial({ config: input.config, deploymentConfig: input.deploymentConfig, generation: input.generation, resolved, secrets: input.secrets });
+  return createMountedProductionSessionMaterial({ config: input.config, deploymentConfig: input.deploymentConfig, generation: input.generation, resolved, secrets: input.secrets, ...(input.constructionTransport ? { constructionTransport: input.constructionTransport } : {}) });
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   type ProductionRuntime,
 } from "./composition";
 import { openProductionGenerationRuntime, type ProductionGenerationRuntime } from "./generation-runtime";
+import type { ProductionPostgresConstructionTransport } from "./postgres";
 import {
   createProductionSessionDependencies,
   type ProductionSessionRuntime,
@@ -117,6 +118,10 @@ export async function openMountedProductionSession(input: Readonly<{
   resolved?: MountedProductionSessionReferences;
   secrets?: MountedProductionSecretMaterial;
   now?: () => number;
+  /** Explicit hosted-tracer I/O boundary, unavailable from mounted JSON. */
+  postgresConstructionTransport?: ProductionPostgresConstructionTransport;
+  /** Explicit hosted-tracer ContextVM construction boundary. */
+  constructionTransport?: import("../release/deployment/contextvm-client").ContextVmCertificationConstructionTransport;
 }>): Promise<MountedProductionSessionAssembly> {
   const config = loadProductionConfig(input.config);
   const secrets = input.secrets ?? new MountedSecrets(config);
@@ -129,6 +134,7 @@ export async function openMountedProductionSession(input: Readonly<{
     config,
     secrets,
     ...(input.now ? { now: input.now } : {}),
+    ...(input.postgresConstructionTransport ? { postgresConstructionTransport: input.postgresConstructionTransport } : {}),
   });
   try {
     const material = input.material ?? (resolved && deploymentConfig
@@ -139,6 +145,7 @@ export async function openMountedProductionSession(input: Readonly<{
         authorization: generation.authorization,
         secrets,
         resolved,
+        ...(input.constructionTransport ? { constructionTransport: input.constructionTransport } : {}),
       })
       : undefined);
     if (!material) throw new Error("PRODUCTION_RUNTIME_SESSION_MATERIAL_REQUIRED");

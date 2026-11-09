@@ -73,9 +73,9 @@ None — discussion stayed within phase scope.
 
 NIP-5D is still an open, changing pull request, currently headed by `eb45dfd7335b7f88cb53781984c553581d2b4c34` as checked on 2026-08-03. It defines the napplet boundary: an `allow-scripts` opaque-origin iframe; `postMessage` envelope transport; identity bound by `MessageEvent.source` to the NIP-5A `(d-tag, aggregate-hash)` tuple; manifest-declared bare NAP requirements; and no `window.nostr` inside the iframe. The proposal assigns specific message domains to NAPs rather than to NIP-5D itself. [CITED: https://github.com/nostr-protocol/nips/pull/2303]
 
-The sibling authoritative implementation already separates the correct concerns: the CLI owns create/init/deploy planning, the Vite plugin computes path and aggregate hashes, the conformance CLI uses real Playwright Chromium plus a reference shell, and the skills prescribe the agent workflow. napplet-cvm should execute those public surfaces unchanged and record their reports; it must not fork validators or write a compatibility interpretation. The one justified CVM-owned layer is promotion orchestration: hermetic invocation, fixture composition, reproducibility/golden comparison, evidence storage, and explicitly documented policy gaps. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+The sibling authoritative implementation already separates the correct concerns: the CLI owns create/init/deploy planning, the Vite plugin computes path and aggregate hashes, the conformance CLI uses real Playwright Chromium plus a reference shell, and the skills prescribe the agent workflow. napplet-cvm should execute those public surfaces unchanged and record their reports; it must not fork validators or write a compatibility interpretation. The one justified CVM-owned layer is promotion orchestration: hermetic invocation, fixture composition, reproducibility/golden comparison, evidence storage, and explicitly documented policy gaps. [VERIFIED: sibling `$HOME/Develop/napplet` source]
 
-The immediate risk is supply-chain/provenance drift. The installed upstream repository describes a CLI at version `0.5.0`, while npm reports `@napplet/cli@0.0.0`; the registry also points different packages to `napplet/napplet` and `sandwichfarm/napplet`. Furthermore, the CLI's default conformance command uses `npx`. Phase 1 must therefore establish one reviewed image-local executable and frozen lockfile before it may call any toolchain set “promoted”; do not run `npx`, curl installers, or package resolution during a sealed build. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry]
+The immediate risk is supply-chain/provenance drift. The installed upstream repository describes a CLI at version `0.5.0`, while npm reports `@napplet/cli@0.0.0`; the registry also points different packages to `napplet/napplet` and `sandwichfarm/napplet`. Furthermore, the CLI's default conformance command uses `npx`. Phase 1 must therefore establish one reviewed image-local executable and frozen lockfile before it may call any toolchain set “promoted”; do not run `npx`, curl installers, or package resolution during a sealed build. [VERIFIED: sibling `$HOME/Develop/napplet` source; VERIFIED: npm registry]
 
 **Primary recommendation:** Build a small TypeScript/Bun promotion harness that treats a promoted toolchain manifest plus its content-addressed golden fixture as the only input authority, runs upstream tools unchanged inside a no-network/no-secrets image, and emits a signed-like immutable evidence bundle before switching the `current` promoted-set pointer. [ASSUMED]
 
@@ -85,7 +85,7 @@ The immediate risk is supply-chain/provenance drift. The installed upstream repo
 |---|---|
 | Hard contract | NIP-5D/NIP-5A revision, opaque sandbox, NAP-only authority, native package suites unchanged, reproducible unsigned bytes, aggregate hash, pinned provenance, default blocking. [CITED: https://github.com/nostr-protocol/nips/pull/2303] |
 | Recommended implementation | A TypeScript/Bun promotion runner, JSON schemas, content-addressed evidence/goldens, and a repository-local `current` pointer to the reviewed manifest. [ASSUMED] |
-| Promotion-time decision rule | No exact upstream release/commit combination is preselected. Promotion may name a set only after automated provenance evidence establishes the exact CLI distribution/source/executable mapping, the set passes the complete `create → init → skills → build → verify → Chromium → dry-run` fixture, and the exact evidence is reviewed. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry] |
+| Promotion-time decision rule | No exact upstream release/commit combination is preselected. Promotion may name a set only after automated provenance evidence establishes the exact CLI distribution/source/executable mapping, the set passes the complete `create → init → skills → build → verify → Chromium → dry-run` fixture, and the exact evidence is reviewed. [VERIFIED: sibling `$HOME/Develop/napplet` source; VERIFIED: npm registry] |
 | Deferred concern | Production signing, deployment side effects, preview shell, worker isolation and secret delivery belong to later phases; Phase 1 permits only dry-run manifest construction. [VERIFIED: 01-CONTEXT.md] |
 
 ## Architectural Responsibility Map
@@ -93,11 +93,11 @@ The immediate risk is supply-chain/provenance drift. The installed upstream repo
 | Capability | Primary Tier | Secondary Tier | Rationale |
 |---|---|---|---|
 | NIP-5D artifact semantics | Build/verifier | Browser shell | The verifier proves the sealed bytes and manifest; a shell later enforces runtime sandbox and message-source identity. [CITED: https://github.com/nostr-protocol/nips/pull/2303] |
-| Scaffold/skills workflow | Build/verifier | Agent workspace (later) | Phase 1 proves the toolchain path without building the production agent. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
-| Aggregate-hash and golden comparison | Build/verifier | Immutable artifact storage | The Vite/CLI tooling computes hashes; CVM promotion policy decides whether they match the reviewed golden. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
-| Chromium/reference-shell conformance | Build/verifier | Browser | The upstream CLI launches Chromium and attaches the upstream reference shell. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| Scaffold/skills workflow | Build/verifier | Agent workspace (later) | Phase 1 proves the toolchain path without building the production agent. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
+| Aggregate-hash and golden comparison | Build/verifier | Immutable artifact storage | The Vite/CLI tooling computes hashes; CVM promotion policy decides whether they match the reviewed golden. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
+| Chromium/reference-shell conformance | Build/verifier | Browser | The upstream CLI launches Chromium and attaches the upstream reference shell. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 | Candidate/promotion/quarantine state | Control plane | Immutable artifact storage | Only reviewed evidence changes the promoted pointer; candidates must not affect production. [ASSUMED] |
-| Dry-run deploy contract | Build/verifier | CLI | The upstream CLI produces the normal deploy plan/manifests but omits network writes in dry-run mode. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| Dry-run deploy contract | Build/verifier | CLI | The upstream CLI produces the normal deploy plan/manifests but omits network writes in dry-run mode. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 
 ## Standard Stack
 
@@ -106,19 +106,19 @@ The immediate risk is supply-chain/provenance drift. The installed upstream repo
 | Library/tool | Version | Purpose | Why Standard |
 |---|---:|---|---|
 | TypeScript executed by Bun | Bun `1.2+`, image-pinned | Promotion runner, schemas, fixture controller, tests. | Project stack decision; current machine has Bun `1.2.1`. [VERIFIED: `.planning/research/STACK.md`; VERIFIED: local environment] |
-| `@napplet/cli` [WARNING: flagged as suspicious — verify before using.] | **Do not select npm `0.0.0`**; pin reviewed executable commit and SHA-256 | Authoritative create/init/skills/deploy contract. | Its upstream source owns these commands, but npm provenance/version is inconsistent. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry] |
-| `@napplet/boilerplate` [WARNING: flagged as suspicious — verify before using.] | candidate `0.3.1`, exact integrity required | Authoritative starter substrate behind `napplet create`. | The upstream docs define it as the maintained starter. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
-| `@napplet/skills` [WARNING: flagged as suspicious — verify before using.] | candidate `0.3.1`, exact integrity required | Installed authoring contract. | It prescribes scaffold preservation, SDK use, and `verify`/conformance workflow. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| `@napplet/cli` [WARNING: flagged as suspicious — verify before using.] | **Do not select npm `0.0.0`**; pin reviewed executable commit and SHA-256 | Authoritative create/init/skills/deploy contract. | Its upstream source owns these commands, but npm provenance/version is inconsistent. [VERIFIED: sibling `$HOME/Develop/napplet` source; VERIFIED: npm registry] |
+| `@napplet/boilerplate` [WARNING: flagged as suspicious — verify before using.] | candidate `0.3.1`, exact integrity required | Authoritative starter substrate behind `napplet create`. | The upstream docs define it as the maintained starter. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
+| `@napplet/skills` [WARNING: flagged as suspicious — verify before using.] | candidate `0.3.1`, exact integrity required | Installed authoring contract. | It prescribes scaffold preservation, SDK use, and `verify`/conformance workflow. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 | `@napplet/sdk` [WARNING: flagged as suspicious — verify before using.] | candidate `0.27.2`, exact integrity required | Generated fixture’s shell-mediated NAP API. | The official napplet site describes it as the typed wrapper for `window.napplet`; use it rather than direct authority primitives. [CITED: https://napplet.run/] |
 | `@napplet/vite-plugin` [WARNING: flagged as suspicious — verify before using.] | candidate `0.14.1`, exact integrity required | NIP-5A path/aggregate hash and manifest-sidecar build output. | It computes per-file SHA-256 and aggregate hash at build time. [CITED: https://napplet.run/docs/packages/vite-plugin.html] |
-| `@napplet/conformance-cli` [WARNING: flagged as suspicious — verify before using.] | candidate `0.2.18`, exact integrity required | Native real-Chromium, reference-shell conformance gate. | It runs a Playwright browser against `sandbox="allow-scripts"` and exits nonzero on errors. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| `@napplet/conformance-cli` [WARNING: flagged as suspicious — verify before using.] | candidate `0.2.18`, exact integrity required | Native real-Chromium, reference-shell conformance gate. | It runs a Playwright browser against `sandbox="allow-scripts"` and exits nonzero on errors. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 
 ### Supporting
 
 | Tool | Version | Purpose | When to Use |
 |---|---:|---|---|
 | pnpm | Corepack/image-pinned | Frozen dependency installation. | Materialize the candidate image once; use `--frozen-lockfile` and an approved offline store for all sealed fixture runs. [ASSUMED] |
-| Playwright Chromium | exact browser revision from promoted image | Browser implementation used by the upstream conformance CLI. | Image build/preflight only; record browser version in evidence. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| Playwright Chromium | exact browser revision from promoted image | Browser implementation used by the upstream conformance CLI. | Image build/preflight only; record browser version in evidence. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 | Git + SHA-256 | image-pinned | Resolve exact spec/scaffold/NAP revisions and package/executable integrity. | Candidate intake and evidence verification. [ASSUMED] |
 
 ### Alternatives Considered
@@ -126,7 +126,7 @@ The immediate risk is supply-chain/provenance drift. The installed upstream repo
 | Instead of | Could Use | Tradeoff |
 |---|---|---|
 | Native napplet manifest/conformance tooling | Custom NIP-5D validator or compatibility shim | Forbidden by D-01/D-08; it would create an implementation-specific contract and duplicate upstream ownership. [VERIFIED: 01-CONTEXT.md] |
-| Frozen image-local commands | `npx` on every CI/build run | The upstream CLI defaults to `npx`, which can resolve packages during the run; this conflicts with a sealed, no-network build. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| Frozen image-local commands | `npx` on every CI/build run | The upstream CLI defaults to `npx`, which can resolve packages during the run; this conflicts with a sealed, no-network build. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 | Content-addressed reviewed goldens | Auto-updated snapshots | Auto-update would violate D-13 by treating changed bytes as proof rather than review input. [VERIFIED: 01-CONTEXT.md] |
 
 **Installation:** Do not use a floating installation command. Candidate intake must produce a lockfile plus package tarball integrity and an image digest; the promotion fixture then installs only from that sealed material. [ASSUMED]
@@ -220,13 +220,13 @@ type PromotionManifest = Readonly<{
 
 ### Pattern 2: Two clean unsigned builds, then separately produced deploy metadata
 
-**What:** Build the same fixture twice in isolated fresh work directories with the same manifest and deterministic environment. Hash every served `dist` file and compare bytes plus aggregate hash to each other and to the immutable golden. Produce `napplet deploy --dry-run` only after this passes; its timestamped/signed output is evidence, never part of `dist`. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: 01-CONTEXT.md]
+**What:** Build the same fixture twice in isolated fresh work directories with the same manifest and deterministic environment. Hash every served `dist` file and compare bytes plus aggregate hash to each other and to the immutable golden. Produce `napplet deploy --dry-run` only after this passes; its timestamped/signed output is evidence, never part of `dist`. [VERIFIED: sibling `$HOME/Develop/napplet` source; VERIFIED: 01-CONTEXT.md]
 
 **When to use:** Every candidate promotion and every deliberate golden update. [ASSUMED]
 
 ### Pattern 3: Narrow policy-gap tests around upstream ownership
 
-**What:** Keep the upstream `scanForbiddenGlobals`, manifest validator, reference shell, and conformance CLI intact. Add CVM tests only for policy facts not covered by the current upstream scan: service-worker registration, dynamic code/authority construction, direct signer/relay library imports or obvious direct protocol clients, and mutations of built output after a passing build. Do not add a second envelope or manifest parser. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+**What:** Keep the upstream `scanForbiddenGlobals`, manifest validator, reference shell, and conformance CLI intact. Add CVM tests only for policy facts not covered by the current upstream scan: service-worker registration, dynamic code/authority construction, direct signer/relay library imports or obvious direct protocol clients, and mutations of built output after a passing build. Do not add a second envelope or manifest parser. [VERIFIED: sibling `$HOME/Develop/napplet` source]
 
 **When to use:** Only after an upstream coverage inventory identifies the gap; remove the CVM check if upstream adopts the identical assertion, then retain a regression invocation of the upstream suite. [ASSUMED]
 
@@ -242,18 +242,18 @@ type PromotionManifest = Readonly<{
 
 - **Compatibility shim:** Never adjust a manifest/envelope so a broken upstream package appears to conform; file and test an upstream correction instead. [VERIFIED: 01-CONTEXT.md]
 - **Auto-promoting changed bytes:** A new build passing tests cannot overwrite a golden or `current` pointer. [VERIFIED: 01-CONTEXT.md]
-- **Using `npx` in the sealed run:** It is the CLI default for conformance but allows run-time dependency resolution; override the command to the image-local binary. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
-- **Treating a regex scan as complete containment:** The current upstream scanner declares itself heuristic and does not list service workers or every dynamic form; retain runtime Chromium checks and targeted gap cases. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+- **Using `npx` in the sealed run:** It is the CLI default for conformance but allows run-time dependency resolution; override the command to the image-local binary. [VERIFIED: sibling `$HOME/Develop/napplet` source]
+- **Treating a regex scan as complete containment:** The current upstream scanner declares itself heuristic and does not list service workers or every dynamic form; retain runtime Chromium checks and targeted gap cases. [VERIFIED: sibling `$HOME/Develop/napplet` source]
 - **Dry-running with a real user key:** Phase 1 needs only synthetic test signing material; user custody/publishing is explicitly later work. [ASSUMED]
 
 ## Don't Hand-Roll
 
 | Problem | Don't Build | Use Instead | Why |
 |---|---|---|---|
-| NIP-5D/NAP envelope and manifest validation | CVM parser or validator | Upstream `@napplet/conformance` and conformance CLI | Native suite is the implementation-layer coverage and must stay in lockstep with upstream NAPs. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
-| Browser shell/reference responses | A bespoke mock shell | Upstream reference shell through the conformance CLI | It tests actual postMessage behavior in Chromium and degraded capability handling. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
-| Manifest/path/aggregate hashing | CVM hash/manifest emitter | Upstream Vite plugin and CLI dry-run | NIP-5A tags, hashes, and deploy templates have protocol edge cases and upstream ownership. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
-| Scaffolding/skills installation | Custom starter or copied skill text | Promoted `napplet create`, `napplet init`, `napplet skills install` | Ensures fixture uses the intended maintained substrate. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| NIP-5D/NAP envelope and manifest validation | CVM parser or validator | Upstream `@napplet/conformance` and conformance CLI | Native suite is the implementation-layer coverage and must stay in lockstep with upstream NAPs. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
+| Browser shell/reference responses | A bespoke mock shell | Upstream reference shell through the conformance CLI | It tests actual postMessage behavior in Chromium and degraded capability handling. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
+| Manifest/path/aggregate hashing | CVM hash/manifest emitter | Upstream Vite plugin and CLI dry-run | NIP-5A tags, hashes, and deploy templates have protocol edge cases and upstream ownership. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
+| Scaffolding/skills installation | Custom starter or copied skill text | Promoted `napplet create`, `napplet init`, `napplet skills install` | Ensures fixture uses the intended maintained substrate. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 | Release approval/evidence indexing | Manual CI log interpretation | Small CVM promotion state/evidence layer | This product-specific review, quarantine, golden, and waiver record is not owned upstream. [ASSUMED] |
 
 **Key insight:** Phase 1 is a composition and promotion problem, not a new napplet protocol implementation. The CVM must verify provenance and execution boundaries around upstream tools while leaving NIP/NAP semantics upstream. [VERIFIED: 01-CONTEXT.md]
@@ -262,25 +262,25 @@ type PromotionManifest = Readonly<{
 
 ### Pitfall 1: Pinning versions without pinning the source identity
 
-**What goes wrong:** npm `@napplet/cli` reports `0.0.0` while the sibling implementation reports `0.5.0`, and package repositories differ. A semver pin alone can select the wrong executable. [VERIFIED: npm registry; VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+**What goes wrong:** npm `@napplet/cli` reports `0.0.0` while the sibling implementation reports `0.5.0`, and package repositories differ. A semver pin alone can select the wrong executable. [VERIFIED: npm registry; VERIFIED: sibling `$HOME/Develop/napplet` source]
 
 **How to avoid:** Require registry integrity, reviewed source commit, executable SHA-256, lockfile digest, and image digest in the candidate manifest; a missing field blocks promotion. [ASSUMED]
 
 ### Pitfall 2: Calling the CLI’s default conformance command in a no-network build
 
-**What goes wrong:** The CLI default invokes `npx --yes @napplet/conformance-cli`; a build can drift or attempt network resolution. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+**What goes wrong:** The CLI default invokes `npx --yes @napplet/conformance-cli`; a build can drift or attempt network resolution. [VERIFIED: sibling `$HOME/Develop/napplet` source]
 
 **How to avoid:** Configure `conformance.command` to a preinstalled image-local `napplet-conformance` path and make egress denial observable. [ASSUMED]
 
 ### Pitfall 3: Comparing signed manifests rather than unsigned artifact bytes
 
-**What goes wrong:** Manifest creation includes time and possibly signatures; equal source may have different metadata even when `dist` is identical. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+**What goes wrong:** Manifest creation includes time and possibly signatures; equal source may have different metadata even when `dist` is identical. [VERIFIED: sibling `$HOME/Develop/napplet` source]
 
 **How to avoid:** Compare the complete unsigned served `dist` byte tree and aggregate hash first; retain dry-run manifest/signature data as a separate evidence object. [VERIFIED: 01-CONTEXT.md]
 
 ### Pitfall 4: Assuming the current static scanner covers SAFE-06 completely
 
-**What goes wrong:** The current scanner covers direct fetch/XHR/WebSocket, browser storage/cookies, `window.nostr`, and explicit external script/style/image URLs, but is documented as heuristic and does not list service-worker registration or dynamic access forms. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+**What goes wrong:** The current scanner covers direct fetch/XHR/WebSocket, browser storage/cookies, `window.nostr`, and explicit external script/style/image URLs, but is documented as heuristic and does not list service-worker registration or dynamic access forms. [VERIFIED: sibling `$HOME/Develop/napplet` source]
 
 **How to avoid:** First record the upstream scanner result; then test the narrow missing cases at source and post-build levels and fail closed on dynamic code construction that prevents inspection. [ASSUMED]
 
@@ -333,7 +333,7 @@ This deliberately consumes native reports rather than importing private upstream
 These facts cannot be selected honestly during research because they depend on the exact candidate that survives provenance and execution checks. They are resolved by the following promotion-time decision rules, not by assuming candidate facts in advance:
 
 1. **Authoritative CLI distribution/source mapping**
-   - Known evidence: official source describes a `0.5.0` CLI, npm exposes `@napplet/cli@0.0.0`, and the official installer documents SHA256SUMS verification. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry]
+   - Known evidence: official source describes a `0.5.0` CLI, npm exposes `@napplet/cli@0.0.0`, and the official installer documents SHA256SUMS verification. [VERIFIED: sibling `$HOME/Develop/napplet` source; VERIFIED: npm registry]
    - Resolution rule: automated candidate provenance must establish one exact release asset or distribution, authoritative source commit, package/tarball mapping, published checksum, and executable digest. The blocking Plan 03 provenance review must approve that exact evidence-bound candidate ID before image intake. Missing or inconsistent mapping quarantines the candidate; no version or source relationship is inferred.
 
 2. **Compatible NAP revisions and synthetic-harness domains**
@@ -341,7 +341,7 @@ These facts cannot be selected honestly during research because they depend on t
    - Resolution rule: select at least one state/resource path and one intent/social path only from the same exact candidate set that passes provenance, scaffold, SDK, reference-shell, Chromium, and degraded-capability checks. Record the selected NAP commits and bare domains in that candidate's immutable promotion manifest, and require each hard capability to be demonstrably necessary. An unknown, mismatched, or separately sourced revision/domain blocks review; the harness never substitutes a privately imported or guessed domain.
 
 3. **Byte reproducibility of the promoted scaffold**
-   - Known evidence: the Vite/CLI path computes aggregate hashes, while manifests can carry time/signature data outside unsigned `dist`. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+   - Known evidence: the Vite/CLI path computes aggregate hashes, while manifests can carry time/signature data outside unsigned `dist`. [VERIFIED: sibling `$HOME/Develop/napplet` source]
    - Resolution rule: two isolated clean builds from identical source and the same immutable manifest must produce byte-identical complete unsigned trees and the same upstream aggregate hash. Any difference is a non-waivable promotion blocker and requires an upstream toolchain correction followed by a new candidate run; CVM normalization, patching, compatibility shims, or golden replacement cannot resolve it.
 
 ## Environment Availability
@@ -355,7 +355,7 @@ These facts cannot be selected honestly during research because they depend on t
 | Playwright CLI | local inspection only | ✓ | `1.62.1` | Promoted image must still pin a browser revision. |
 | Context7 CLI | preferred documentation lookup | ✗ | — | Official napplet docs, current NIP PR, sibling upstream source were inspected. |
 
-**Missing dependencies with no fallback:** none for planning. The actual promoted CLI binary/source identity is an acceptance gate, not currently established. [VERIFIED: local environment; VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+**Missing dependencies with no fallback:** none for planning. The actual promoted CLI binary/source identity is an acceptance gate, not currently established. [VERIFIED: local environment; VERIFIED: sibling `$HOME/Develop/napplet` source]
 
 ## Validation Architecture
 
@@ -414,7 +414,7 @@ OWASP ASVS is the appropriate verification catalogue for application security; t
 |---|---|---|
 | Package/source substitution | Tampering | Publisher + tarball integrity + source commit + executable/image digest must agree before intake. [ASSUMED] |
 | Build script dependency reaches registry/network | Information disclosure / tampering | Prebuilt sealed image, frozen offline install, default-deny egress, and command allowlist; capture attempted egress as a failure. [ASSUMED] |
-| Generated code bypasses NAP authority | Elevation of privilege | Upstream conformance/reference-shell and narrow gap fixtures reject direct primitives, external bytes, service workers, and dynamic/uninspectable authority. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source] |
+| Generated code bypasses NAP authority | Elevation of privilege | Upstream conformance/reference-shell and narrow gap fixtures reject direct primitives, external bytes, service workers, and dynamic/uninspectable authority. [VERIFIED: sibling `$HOME/Develop/napplet` source] |
 | Artifact/manifest TOCTOU | Tampering | Compute and compare all `dist` bytes plus aggregate hash before evidence and dry-run; never allow dry-run metadata to alter `dist`. [VERIFIED: 01-CONTEXT.md] |
 | Emergency waiver persists indefinitely | Elevation of privilege | Exact-candidate waiver, owner identity, immutable evidence, enforced expiry, and automatic rollback/blocked state. [ASSUMED] |
 
@@ -436,7 +436,7 @@ OWASP ASVS is the appropriate verification catalogue for application security; t
 - [napplet official site](https://napplet.run/) — package roles and stated alpha status.
 - [Vite plugin documentation](https://napplet.run/docs/packages/vite-plugin.html) — path/aggregate hash and build-time manifest behavior.
 - [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/) — security verification categorization.
-- Sibling checkout `/Users/sandwich/Develop/napplet` — inspected CLI, skills, boilerplate, Vite plugin, conformance runner, validators, reference shell, and deployment-network test source.
+- Sibling checkout `$HOME/Develop/napplet` — inspected CLI, skills, boilerplate, Vite plugin, conformance runner, validators, reference shell, and deployment-network test source.
 
 ### Secondary (registry/tool evidence)
 

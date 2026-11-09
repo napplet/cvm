@@ -1,6 +1,6 @@
 # Deployment
 
-Run the CVM as a containerized service on the homelab or a VPS. Reuse Coolify on the existing homelab. Use Ansible when host setup/deployment needs automation. Google Cloud is excluded.
+Run the CVM as a containerized service on any compatible Linux host or VPS. This repository owns the application, images, Compose definition and configuration contract. Keep Ansible playbooks, inventories, host routing and deployment records in a separate operator-owned repository. Google Cloud is excluded.
 
 The application has one architecture. Configure concrete adapters at startup:
 
@@ -11,7 +11,7 @@ The application has one architecture. Configure concrete adapters at startup:
 | Metered model calls | `ModelGateway` |
 | Isolated execution | Existing worker ports and adapters |
 | Metrics and traces | `LifecycleTelemetryPort` and OTLP |
-| Deployment | Container configuration and Ansible or existing Coolify lifecycle |
+| Deployment | Portable container configuration; operator-owned deployment automation |
 
 Keep provider credentials in adapter/bootstrap code and secret mounts, outside the domain core and generated applets. Choosing a provider changes configuration and its adapter, not funding, sessions, publication, or authorization protocols.
 
@@ -21,7 +21,7 @@ Preserve data and service identity during deployment. Test balances remain test 
 
 ## Selected adapters
 
-`src/service/server.ts` is the one composition root; `scripts/production.ts` boots it from `/etc/napplet-cvm/service.json` and secret files under `/run/secrets/napplet-cvm`. It reuses the funded admission, metered generation, continuation, preview and publication services the private Beta flow already uses.
+`src/service/server.ts` is the one composition root; `scripts/production.ts` boots it from `/etc/napplet-cvm/service.json` and secret files under `/run/secrets/napplet-cvm`. It reuses the funded admission, metered generation, continuation, preview and publication services used by the local development flow.
 
 | Concern | Selected implementation |
 | --- | --- |
@@ -33,6 +33,6 @@ Preserve data and service identity during deployment. Test balances remain test 
 | Artifacts and checkpoints | Filesystem volume: content-addressed, digest-verified sealed artifacts; AES-GCM pending-action envelopes keyed from the mounted service seed, 30-day expiry |
 | Preview | Pinned Paja runtime on a separate preview origin with `sandbox` CSP |
 | Publication | User-signed manifests copied by the user's client to user-owned Blossom servers through the `@napplet/cli` upload authorization; the service signs only its own preview copies |
-| Deployment | `infra/service/compose.yaml` + homelab `ops/cvm/ansible` (`./homelab cvm production …`); see [service deployment](../runbooks/service-deployment.md) |
+| Deployment | `infra/service/compose.yaml` with operator-supplied configuration; see [service deployment](../runbooks/service-deployment.md) |
 
 Google Cloud, Cloud Run, Cloud SQL, GCS, Vertex and the hosted worker providers are not used. The legacy `src/production/*` bootstrap remains in the tree as historical code and is not on the startup path.

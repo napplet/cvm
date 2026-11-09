@@ -14,11 +14,11 @@ progress:
 ---
 # Project State
 
-The existing private CVM runs on homelab Beta/Coolify with development/test credits. Preserve its identity, credentials, projects, artifacts and audit history. Production real-money operation is incomplete.
+Existing operator deployments may contain development/test credits. Preserve its identity, credentials, projects, artifacts and audit history. Production real-money operation is incomplete.
 
 ## Current instruction
 
-Provider-neutral application. Simple container deployment using Ansible on homelab or VPS, or the existing Coolify lifecycle. Google Cloud is excluded. Reuse existing SQL/storage/model/worker/telemetry interfaces; configure adapters. No enterprise platform, cluster, separate provider graph or successor authorization scheme.
+Provider-neutral application. Simple container deployment using Ansible on an operator-selected host or VPS. Google Cloud is excluded. Reuse existing SQL/storage/model/worker/telemetry interfaces; configure adapters. No enterprise platform, cluster, separate provider graph or successor authorization scheme.
 
 The non-google-v1 architecture and its native core/edge/host-preflight work are withdrawn. Former agent owners and handoffs are inactive and must not be resumed. The old Google production activation path remains disabled. See [deployment](../docs/architecture/provider-neutral-deployment.md).
 
@@ -29,5 +29,7 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 | Task | Result |
 | --- | --- |
 | 261031-vgz | Remove speculative infrastructure architecture and simplify affected mainline history; see quick-task summary. |
-| 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified on beta. See quick-task summary. |
+| 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified. See quick-task summary. |
 | 261109-i83 | Container startup diagnostics and complete control-image packaging; focused regression and offline runtime probes. Hosted validation is tracked on PR #114. |
+
+| 261109-j5i | Separate portable application deployment instructions from operator-owned inventories, automation and live records. |

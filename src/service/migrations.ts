@@ -6,7 +6,7 @@ const root = resolve(import.meta.dir, "../..");
 
 /**
  * The canonical, append-only migration sequence used by every deployment of
- * the service: the private Beta instance, Ansible hosts and local development.
+ * the service: operator deployments and local development.
  * Existing entries never change; checksums detect drift. The withdrawn
  * `phase-07/*` production_real schema is not part of this sequence.
  */

@@ -66,7 +66,7 @@ bun scripts/dev.ts test --case=publication
 
 The built site can be served independently; copy `cvm.json` with it. Local naddrs require access to the development relay and Blossom server. [Static hosting and publishing](docs/runbooks/development-gui.md#static-hosting-and-publishing) explains network configuration.
 
-The private homelab deployment uses `compose.homelab.yaml` and `infra/homelab/manifest.json`, managed through `./homelab cvm` in the homelab repository. It uses the existing ChatGPT account and test credits; production remains deferred. See the [homelab runbook](https://github.com/sandwichfarm/homelab/blob/master/ops/cvm/README.md).
+Run the portable container stack with the [service deployment guide](docs/runbooks/service-deployment.md). Keep host inventories, routing and deployment automation in a separate operator-owned repository.
 
 The first user-facing deployment will be branded **applet.broker**. The reusable service is intended for an eventual open-source **@napplet/cvm** release; this repository has not published that package or deployed the public site.
 

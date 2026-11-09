@@ -461,5 +461,5 @@ changed consent, quota, fresh-preview state isolation and teardown. This is loca
 mechanism evidence, not live provider/HTTPS/user-signer certification. Broader
 domain support, production client presentation/ContextVM negotiation, explicitly
 versioned publication/attestation, owner signing and all live gates remain open.
-These handlers/assets have not been deployed or enabled on the private Beta
+These handlers/assets have not been deployed or enabled in an operator environment
 service; existing legacy strict schemas and records remain unchanged.

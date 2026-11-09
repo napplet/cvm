@@ -14,7 +14,7 @@ Checklist
 5. Container image + compose; prove boot with mounted config.
 6. Worker controls probed against the actual engine/runtime.
 7. End-to-end flow through the same composition (signed ContextVM → top-up → generation → preview → resume → publication).
-8. Ansible playbook (homelab repo), truthful `./homelab cvm production` commands, backup integration and isolated restore.
+8. Operator-owned deployment automation, backup integration and isolated restore.
 9. Docs replacing stale Google instructions.
 
 Out of scope: Google, clusters, multi-region, new provider graph, certification orchestration.

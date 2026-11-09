@@ -1,7 +1,7 @@
 # Phase 6: Sealed Preview & User-Owned Publication - Pattern Map
 
-**Mapped:** 2026-08-05  
-**Files analyzed:** 27 planned new/modified surfaces  
+**Mapped:** 2026-08-05
+**Files analyzed:** 27 planned new/modified surfaces
 **Analogs found:** 27 / 27
 
 ## File Classification
@@ -40,7 +40,7 @@
 
 **Copy contract style from:** `src/continuity/contracts.ts`; **owner-safe projection style from:** `src/phase-04/session-status.ts`.
 
-Use strict Zod schemas at every port edge, inferred exported types, and discriminated public results. Keep server-only operation IDs, object locations, provider payloads, prompts, source, credentials, and signing material out of public result schemas. The ContextVM test asserts this exact redaction posture at [tests/contextvm/adapter.test.ts](/Users/sandwich/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:108):
+Use strict Zod schemas at every port edge, inferred exported types, and discriminated public results. Keep server-only operation IDs, object locations, provider payloads, prompts, source, credentials, and signing material out of public result schemas. The ContextVM test asserts this exact redaction posture at [tests/contextvm/adapter.test.ts]($HOME/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:108):
 
 ```ts
 expect(JSON.stringify(transport.responses.at(-1)?.response))
@@ -51,9 +51,9 @@ Model the preview descriptor as an allowlisted immutable projection (account/ses
 
 ### `src/publication/preview-service.ts`
 
-**Analog:** [src/phase-02/trusted-core.ts](/Users/sandwich/Develop/napplet-cvm/src/phase-02/trusted-core.ts:109) (`artifactMatchesRequest`, `verifiedArtifactIsValid`, lines 109-122).
+**Analog:** [src/phase-02/trusted-core.ts]($HOME/Develop/napplet-cvm/src/phase-02/trusted-core.ts:109) (`artifactMatchesRequest`, `verifiedArtifactIsValid`, lines 109-122).
 
-Copy its fail-closed verified-artifact gate: lookup is server-owned and caller facts must match durable facts exactly before constructing any descriptor. The parallel Phase 5 checkpoint dependency is explicit about this ownership at [src/continuity/continuation-service.ts](/Users/sandwich/Develop/napplet-cvm/src/continuity/continuation-service.ts:16):
+Copy its fail-closed verified-artifact gate: lookup is server-owned and caller facts must match durable facts exactly before constructing any descriptor. The parallel Phase 5 checkpoint dependency is explicit about this ownership at [src/continuity/continuation-service.ts]($HOME/Develop/napplet-cvm/src/continuity/continuation-service.ts:16):
 
 ```ts
 checkpoint: Readonly<{
@@ -66,7 +66,7 @@ Apply the same shape: `loadVerifiedArtifactExact(owner, sessionId, artifactVersi
 
 ### `src/publication/manifest-event.ts`
 
-**Closest analog:** [src/promotion/schema.ts](/Users/sandwich/Develop/napplet-cvm/src/promotion/schema.ts) for canonical project fingerprints; **critical distinction:** do not use `canonicalJson` for NIP-01 event ID serialization.
+**Closest analog:** [src/promotion/schema.ts]($HOME/Develop/napplet-cvm/src/promotion/schema.ts) for canonical project fingerprints; **critical distinction:** do not use `canonicalJson` for NIP-01 event ID serialization.
 
 Copy the project pattern of strict input parsing, SHA-256 digesting, and comparison-before-use, but isolate maintained NIP-01 serialization/signature verification in this adapter. Build one canonical unsigned template from server facts, persist its digest, then verify the returned event's ID/signature and exact owner, kind, tags/content, d-tag, aggregate hash, capability digest, intent identity, and expiry. Collapse every failure to the same `invalid_manifest` public result, avoiding an ownership/signature oracle.
 
@@ -74,13 +74,13 @@ Declare `nostr-tools@2.24.1` as an exact direct root dependency and contract-tes
 
 ### Promoted CLI exact-source contract probe
 
-**Analogs:** [src/promotion/candidate.ts](/Users/sandwich/Develop/napplet-cvm/src/promotion/candidate.ts) for exact commit/SHA validation and [tests/promotion/candidate.test.ts](/Users/sandwich/Develop/napplet-cvm/tests/promotion/candidate.test.ts) for mutation-driven fail-closed cases.
+**Analogs:** [src/promotion/candidate.ts]($HOME/Develop/napplet-cvm/src/promotion/candidate.ts) for exact commit/SHA validation and [tests/promotion/candidate.test.ts]($HOME/Develop/napplet-cvm/tests/promotion/candidate.test.ts) for mutation-driven fail-closed cases.
 
 Bind the probe to commit `1a38b9150f3a3da148091c11bce4d0365f7298e5`, Linux asset SHA-256 `46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e`, and exact hashes for the critical upstream source files. Treat only structured lower-level payload upload, pre-signed relay publication, progress/result contracts, and the network success predicate as eligible. The command dispatcher, signer resolution, workspace discovery/file collection, deploy planning, manifest creation/signing, dependency/build/rebuild, root/snapshot/multi-target, JSON report, and human stdout paths are closed. Return `publication_unavailable` on any identity, source, signature, or route mismatch, and require that result before the Plan 06 announcement can expose publication.
 
 ### `src/publication/publication-service.ts`
 
-**Analog:** [src/continuity/continuation-service.ts](/Users/sandwich/Develop/napplet-cvm/src/continuity/continuation-service.ts:89) (`wakePausedAction` through reconciliation).
+**Analog:** [src/continuity/continuation-service.ts]($HOME/Develop/napplet-cvm/src/continuity/continuation-service.ts:89) (`wakePausedAction` through reconciliation).
 
 Copy the ordering: re-read durable state, verify every fence, create a durable claim in the same transaction, perform external work outside the transaction, and close the original claim. Its core pattern is:
 
@@ -91,11 +91,11 @@ if (!claim.claimed) return frozen({ status: "replayed", code: "WAKE_ALREADY_CLAI
 await this.recordWakeDispatchOutcome({ ..., outcome: "completed" });
 ```
 
-For publication, verify the signed owner event first; transactionally create/replay the parent publication intent and child `deploy`, `owner_manifest`, and `attestation` effect intents; then call ports in the persisted order. On a throw/lost response mark only that child `unknown`; reconciliation calls `observe(originalOperationId)` and never redeploys, re-signs, or creates a fresh event. Copy lookup-only reconciliation from [src/continuity/continuation-service.ts](/Users/sandwich/Develop/napplet-cvm/src/continuity/continuation-service.ts:153): it reads the stored claim, checks its immutable tuple, observes the original operation, then records closure.
+For publication, verify the signed owner event first; transactionally create/replay the parent publication intent and child `deploy`, `owner_manifest`, and `attestation` effect intents; then call ports in the persisted order. On a throw/lost response mark only that child `unknown`; reconciliation calls `observe(originalOperationId)` and never redeploys, re-signs, or creates a fresh event. Copy lookup-only reconciliation from [src/continuity/continuation-service.ts]($HOME/Develop/napplet-cvm/src/continuity/continuation-service.ts:153): it reads the stored claim, checks its immutable tuple, observes the original operation, then records closure.
 
 ### `src/persistence/publication-store.ts`
 
-**Analog:** [src/persistence/session-store.ts](/Users/sandwich/Develop/napplet-cvm/src/persistence/session-store.ts:173) (`TransactionalMemorySessionStore.claimEffectIntent`).
+**Analog:** [src/persistence/session-store.ts]($HOME/Develop/napplet-cvm/src/persistence/session-store.ts:173) (`TransactionalMemorySessionStore.claimEffectIntent`).
 
 Use its exact conflict fence:
 
@@ -112,7 +112,7 @@ Adapt the identity tuple to `(account, session, artifact version, publication in
 
 ### `src/persistence/sqlite-publication-store.ts` and PostgreSQL extension
 
-**SQLite analog:** [src/persistence/sqlite-session-store.ts](/Users/sandwich/Develop/napplet-cvm/src/persistence/sqlite-session-store.ts:144).
+**SQLite analog:** [src/persistence/sqlite-session-store.ts]($HOME/Develop/napplet-cvm/src/persistence/sqlite-session-store.ts:144).
 
 Copy a single SQLite transaction, parameterized queries, and busy-to-safe-denial conversion:
 
@@ -123,13 +123,13 @@ return this.#database.transaction(() => {
 // SQLITE_BUSY / database is locked => { status: "blocked" }
 ```
 
-**PostgreSQL analog:** [src/persistence/postgres-funding-store.ts](/Users/sandwich/Develop/napplet-cvm/src/persistence/postgres-funding-store.ts:36) (`transact`) and [src/persistence/postgres-sql-funding-store.ts](/Users/sandwich/Develop/napplet-cvm/src/persistence/postgres-sql-funding-store.ts:133) (transaction methods).
+**PostgreSQL analog:** [src/persistence/postgres-funding-store.ts]($HOME/Develop/napplet-cvm/src/persistence/postgres-funding-store.ts:36) (`transact`) and [src/persistence/postgres-sql-funding-store.ts]($HOME/Develop/napplet-cvm/src/persistence/postgres-sql-funding-store.ts:133) (transaction methods).
 
 Extend the existing transaction interfaces/implementations rather than introducing a parallel connection abstraction. Match memory, SQLite, and Postgres observable statuses and conflict rules. Add [tests/persistence/phase-06-sql-schema-parity.test.ts] using the Phase 5 parity-test layout to assert schema strings, constraints, and each implementation's replay/conflict/unknown behavior.
 
 ### `migrations/phase-06/001_publication.sql`
 
-**Analog:** [migrations/phase-05/001_continuation.sql](/Users/sandwich/Develop/napplet-cvm/migrations/phase-05/001_continuation.sql:1).
+**Analog:** [migrations/phase-05/001_continuation.sql]($HOME/Develop/napplet-cvm/migrations/phase-05/001_continuation.sql:1).
 
 Follow its transaction wrapper, foreign keys, identity uniqueness, state `CHECK`s, and immutability trigger. In particular, use the Phase 5 paired intent/effect model:
 
@@ -144,7 +144,7 @@ Publication tables need parent intent identity/fingerprint/template/expiry and s
 
 ### `src/contextvm/adapter.ts` and `announcement.ts`
 
-**Adapter analog:** [src/contextvm/adapter.ts](/Users/sandwich/Develop/napplet-cvm/src/contextvm/adapter.ts:102). Extend `dispatch` with strict schemas for preview, capability review/intent/status, signed-manifest submission, and reconciliation. Preserve its boundary sequence:
+**Adapter analog:** [src/contextvm/adapter.ts]($HOME/Develop/napplet-cvm/src/contextvm/adapter.ts:102). Extend `dispatch` with strict schemas for preview, capability review/intent/status, signed-manifest submission, and reconciliation. Preserve its boundary sequence:
 
 ```ts
 const envelope = EnvelopeSchema.parse(input);
@@ -155,22 +155,22 @@ const response = await this.dispatch(principal.pubkey, envelope.requestEventId, 
 
 Only derive the principal from the SDK-verified pubkey; never accept caller owner/key/session identity as authority. Keep generic `-32602` wire errors and explicit response allowlists. Retain notification correlation for safe status projections.
 
-**Announcement analog:** [src/contextvm/announcement.ts](/Users/sandwich/Develop/napplet-cvm/src/contextvm/announcement.ts:1). It already declares `preview` and `publication` as planned, and [tests/contextvm/adapter.test.ts](/Users/sandwich/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:71) locks their truthful planned/available projection. Change them to available only with every corresponding adapter command wired; preserve schema uniqueness, lexical sorting, freeze, and no sensitive metadata.
+**Announcement analog:** [src/contextvm/announcement.ts]($HOME/Develop/napplet-cvm/src/contextvm/announcement.ts:1). It already declares `preview` and `publication` as planned, and [tests/contextvm/adapter.test.ts]($HOME/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:71) locks their truthful planned/available projection. Change them to available only with every corresponding adapter command wired; preserve schema uniqueness, lexical sorting, freeze, and no sensitive metadata.
 
 ### Deterministic ports/fakes and Phase 6 tests
 
-**Fake pattern:** [src/worker-port/fake-worker.ts](/Users/sandwich/Develop/napplet-cvm/src/worker-port/fake-worker.ts:126). New deterministic host, signer, deployment, relay, and attestation fakes should accept a closed script, record exact operation IDs, inject `unknown` after effect, and have no credentials/network/filesystem attachment. Copy the stated isolation contract:
+**Fake pattern:** [src/worker-port/fake-worker.ts]($HOME/Develop/napplet-cvm/src/worker-port/fake-worker.ts:126). New deterministic host, signer, deployment, relay, and attestation fakes should accept a closed script, record exact operation IDs, inject `unknown` after effect, and have no credentials/network/filesystem attachment. Copy the stated isolation contract:
 
 ```ts
 // Its only effect path is ScopedToolGateway; no environment, credentials,
 // network, host filesystem, or durable store is attached to this object.
 ```
 
-Tests under `tests/phase-06/` should use explicit owner/artifact/fingerprint fixtures and cover: exact descriptor denial; runtime message zero authority; required-block/optional-degrade; intent invalidation/replay/conflict; generic invalid signature; exact sealed-byte port inputs; partial/unknown/reconciliation lookup-only behavior. Extend [tests/contextvm/adapter.test.ts](/Users/sandwich/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:12)'s `FakeContextVmTransport` for adapter integration and assert wire redaction.
+Tests under `tests/phase-06/` should use explicit owner/artifact/fingerprint fixtures and cover: exact descriptor denial; runtime message zero authority; required-block/optional-degrade; intent invalidation/replay/conflict; generic invalid signature; exact sealed-byte port inputs; partial/unknown/reconciliation lookup-only behavior. Extend [tests/contextvm/adapter.test.ts]($HOME/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:12)'s `FakeContextVmTransport` for adapter integration and assert wire redaction.
 
 ### Phase 6 evidence, reference set, and design script
 
-**Analogs:** [src/verification/phase-05-design-evidence.ts](/Users/sandwich/Develop/napplet-cvm/src/verification/phase-05-design-evidence.ts:46), [tests/evals/phase-05-reference-set.test.ts](/Users/sandwich/Develop/napplet-cvm/tests/evals/phase-05-reference-set.test.ts:1), and [scripts/verify-phase-05-design-slice.ts](/Users/sandwich/Develop/napplet-cvm/scripts/verify-phase-05-design-slice.ts:1).
+**Analogs:** [src/verification/phase-05-design-evidence.ts]($HOME/Develop/napplet-cvm/src/verification/phase-05-design-evidence.ts:46), [tests/evals/phase-05-reference-set.test.ts]($HOME/Develop/napplet-cvm/tests/evals/phase-05-reference-set.test.ts:1), and [scripts/verify-phase-05-design-slice.ts]($HOME/Develop/napplet-cvm/scripts/verify-phase-05-design-slice.ts:1).
 
 Copy the facts-only comparison gate. Evidence must re-derive public outcomes from named Phase 6 authority probes, compare expected values only after observation, hash inputs, write immutable digest-named evidence (`flag: "wx"`), and validate it again. Keep host/signer/CLI/relay providers explicit `not_observed` / `unselected` with Phase 7 closure—never label deterministic fakes production-certified.
 
@@ -178,25 +178,25 @@ Copy the facts-only comparison gate. Evidence must re-derive public outcomes fro
 
 ### Owner authority and redaction
 
-**Sources:** [src/contextvm/adapter.ts](/Users/sandwich/Develop/napplet-cvm/src/contextvm/adapter.ts:102), [tests/contextvm/adapter.test.ts](/Users/sandwich/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:121).
+**Sources:** [src/contextvm/adapter.ts]($HOME/Develop/napplet-cvm/src/contextvm/adapter.ts:102), [tests/contextvm/adapter.test.ts]($HOME/Develop/napplet-cvm/tests/contextvm/adapter.test.ts:121).
 
 SDK-verified pubkey is the sole owner input. All external/public results are explicit allowlists; test forbidden account/provider/archive/credential/lease/internal strings.
 
 ### Immutable identity and exact replay
 
-**Sources:** [src/persistence/session-store.ts](/Users/sandwich/Develop/napplet-cvm/src/persistence/session-store.ts:173), [migrations/phase-05/001_continuation.sql](/Users/sandwich/Develop/napplet-cvm/migrations/phase-05/001_continuation.sql:121).
+**Sources:** [src/persistence/session-store.ts]($HOME/Develop/napplet-cvm/src/persistence/session-store.ts:173), [migrations/phase-05/001_continuation.sql]($HOME/Develop/napplet-cvm/migrations/phase-05/001_continuation.sql:121).
 
 Persist immutable identity before effects, use uniqueness plus request fingerprint fence, transition uncertain claims to reconciliation, and forbid updates which replace sealed identity.
 
 ### Persist-before-effect, observe-original-only
 
-**Source:** [src/continuity/continuation-service.ts](/Users/sandwich/Develop/napplet-cvm/src/continuity/continuation-service.ts:153).
+**Source:** [src/continuity/continuation-service.ts]($HOME/Develop/napplet-cvm/src/continuity/continuation-service.ts:153).
 
 External calls occur only after their durable claim. Timeout/crash uses the exact stored operation ID in an observe-only port; a later action cannot manufacture new deployment, manifest, or attestation work.
 
 ### Deterministic design evidence
 
-**Source:** [src/verification/phase-05-design-evidence.ts](/Users/sandwich/Develop/napplet-cvm/src/verification/phase-05-design-evidence.ts:71).
+**Source:** [src/verification/phase-05-design-evidence.ts]($HOME/Develop/napplet-cvm/src/verification/phase-05-design-evidence.ts:71).
 
 Digest canonical evidence, independently revalidate it, write immutable content-addressed records, and separate deterministic proof from unselected provider certification.
 
@@ -209,6 +209,6 @@ Digest canonical evidence, independently revalidate it, write immutable content-
 
 ## Metadata
 
-**Analog search scope:** `src/{contextvm,continuity,persistence,phase-02,phase-04,verification,worker-port}`, `migrations/phase-05`, `tests/{contextvm,persistence,phase-05,evals}`  
-**Files scanned:** 43 TypeScript source files, 43 test files, 3 prior migration files  
+**Analog search scope:** `src/{contextvm,continuity,persistence,phase-02,phase-04,verification,worker-port}`, `migrations/phase-05`, `tests/{contextvm,persistence,phase-05,evals}`
+**Files scanned:** 43 TypeScript source files, 43 test files, 3 prior migration files
 **Pattern extraction date:** 2026-08-05

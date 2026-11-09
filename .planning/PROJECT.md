@@ -83,7 +83,7 @@ A user can describe one focused applet and receive a safe, conformant napplet th
 - ContextVM transports MCP/JSON-RPC messages over signed Nostr events. Public keys provide the persistent identity used for authorization and account association.
 - CEP-8 separates capability-price discovery from settlement and negotiates payment methods through PMIs. In v1, a separate top-up capability accepts Lightning and Cashu, while generation debits actual usage from the resulting account balance.
 - Top-ups do not automatically restart a checkpoint older than ten minutes. Explicit resume prevents surprising expenditure of newly deposited funds.
-- Use a provider-neutral application with ordinary container deployment through Ansible on homelab or a VPS. Reuse the existing Coolify deployment; Google Cloud is excluded. Do not introduce an enterprise platform or parallel provider graph.
+- Use a provider-neutral application with ordinary container deployment through operator-owned automation on a compatible host or VPS. Google Cloud is excluded. Do not introduce an enterprise platform or parallel provider graph.
 - The napplet and ContextVM ecosystems are experimental and evolving, so protocol/package versions and authoritative constraints must be verified against current official sources during planning.
 
 ## Constraints

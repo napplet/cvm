@@ -1,6 +1,8 @@
 # Current infrastructure direction
 
-Provider-neutral application. Simple Ansible/container deployment to the existing homelab or a VPS. Google Cloud is excluded. Do not invent a separate "non-Google" graph, authorization schema, parallel runtime, cluster, or custom storage service. Reuse existing interfaces and configure their adapters. Latest user direction supersedes older Google selections and enterprise topology plans. See `.planning/phases/07-admission-slo-resilience-launch-safety/07-NO-GOOGLE-CLOUD-DECISION.md`.
+Provider-neutral application. Simple Ansible/container deployment to an operator-selected host or VPS. Google Cloud is excluded. Do not invent a separate "non-Google" graph, authorization schema, parallel runtime, cluster, or custom storage service. Reuse existing interfaces and configure their adapters. Latest user direction supersedes older Google selections and enterprise topology plans. See `.planning/phases/07-admission-slo-resilience-launch-safety/07-NO-GOOGLE-CLOUD-DECISION.md`.
+
+Keep application source, container definitions and portable configuration examples here. Host inventories, Ansible playbooks, private domains, machine names, deployment records and links to private infrastructure repositories belong in a separate operator-owned deployment repository. Public documentation must work without access to that repository.
 
 ## Code discovery
 
@@ -30,14 +32,14 @@ The generation core is transport-neutral. ContextVM over Nostr is the only exter
 - **Security**: Treat prompts, generated code, tool output, dependencies, and napplet runtime messages as untrusted; enforce layered input, agent, filesystem/network, capability, output, and publication controls.
 - **Key custody**: The CVM never receives or stores a user's Nostr private key.
 - **Deployment**: Use `@napplet/cli` and its manifest/deployment contract rather than reimplementing publication.
-- **Infrastructure**: Provider-neutral adapters; container deployment through Ansible on homelab or a VPS. Reuse the existing Coolify service. Google Cloud is excluded. Keep infrastructure simple.
+- **Infrastructure**: Provider-neutral adapters; container deployment through Ansible on homelab or a VPS. Google Cloud is excluded. Keep infrastructure simple.
 
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:research/STACK.md -->
 ## Technology Stack
 
-TypeScript and Bun; PostgreSQL for transactional persistence; existing model, object-storage and worker ports; ContextVM over Nostr; pinned napplet CLI/SDK/Chromium. Configure provider adapters at bootstrap. Use ordinary container deployment with existing Coolify or Ansible on a homelab/VPS. See `docs/architecture/provider-neutral-deployment.md`.
+TypeScript and Bun; PostgreSQL for transactional persistence; existing model, object-storage and worker ports; ContextVM over Nostr; pinned napplet CLI/SDK/Chromium. Configure provider adapters at bootstrap. Use ordinary container deployment with operator-owned automation on any compatible host. See `docs/architecture/provider-neutral-deployment.md`.
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->

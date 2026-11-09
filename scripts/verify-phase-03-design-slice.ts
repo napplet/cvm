@@ -1,4 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { canonicalJson } from "../src/promotion/schema";
 import { validatePhase03DesignEvidence, writePhase03DesignEvidence, type Phase03Check, type Phase03Observation } from "../src/verification/phase-03-design-evidence";
 
@@ -44,7 +46,7 @@ async function inheritedModalObservation(): Promise<Phase03Observation> {
 run("bun", ["test"]);
 run("bun", ["run", "eval:phase-03"]);
 validatePackageIntake(JSON.parse(await readFile("evidence/phase-03/package-intake.json", "utf8")));
-run("node", ["/Users/sandwich/.codex/gsd-core/bin/gsd-tools.cjs", "check", "api-coverage.verify-pre", ".planning/phases/03-contextvm-funding-funded-admission"]);
+run("node", [process.env.GSD_TOOLS ?? join(homedir(), ".codex/gsd-core/bin/gsd-tools.cjs"), "check", "api-coverage.verify-pre", ".planning/phases/03-contextvm-funding-funded-admission"]);
 for (const path of ["src/funding/funding-service.ts", "src/persistence/funding-store.ts", "src/phase-03/contracts.ts"]) {
   if (/@contextvm\/sdk|nostr|cep-?8|@cashu\/cashu-ts|\bmodal\b/iu.test(await Bun.file(path).text())) throw new Error(`import firewall failed: ${path}`);
 }

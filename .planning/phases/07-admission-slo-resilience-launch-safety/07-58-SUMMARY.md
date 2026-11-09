@@ -13,7 +13,7 @@ key-files:
   created:
     - docs/runbooks/production-architecture.md
     - docs/runbooks/production-migration.md
-    - /Users/sandwich/Develop/homelab/ops/cvm/production-architecture.md
+    - $HOME/Develop/homelab/ops/cvm/production-architecture.md
   modified: []
 decisions:
   - Keep private Beta as development evidence and data source while production construction remains blocked.
@@ -56,7 +56,7 @@ Documented the receipt-gated production topology and a backup-first migration pa
 
 ## Remaining Runtime and Evidence Work
 
-- Implement and test the planned root CVM production commands; current `./homelab cvm` commands remain Beta-only.
+- Implement and test the planned root CVM production commands; current `<operator-deployment-command>` commands remain Beta-only.
 - Build the receipt-gated production configuration and provision it only after a candidate-bound authorization receipt validates.
 - Capture a consistent Beta backup, quiesce/checkpoint active work, and restore into a fresh isolated instance with row, object-generation, digest, identity, and migration comparisons.
 - Measure equivalent Modal and Fly cohorts, run the eight certification suites, and collect the required admission, restore, security, payment-model, and publication evidence.

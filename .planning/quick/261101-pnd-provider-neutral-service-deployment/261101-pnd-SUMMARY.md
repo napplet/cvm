@@ -8,10 +8,10 @@ verifier, preview and publication classes. Migrations are a separate command
 No Google dependency, certification or migration machinery runs at startup.
 
 Deployment: `infra/service/compose.yaml` (PostgreSQL, relay, private build
-engine with gVisor, service, optional test rails/Caddy) installed by the homelab
-playbook `ops/cvm/ansible/deploy.yml` (`./homelab cvm production …`).
+engine with gVisor, service, optional test rails/Caddy). Host automation and
+inventories are maintained separately by the operator.
 
-Live evidence on beta (test realm, private names via alpha Traefik), 2026-11-01:
+Recorded deployment evidence (test realm), 2026-11-01:
 - Worker boundary probe under runsc: uid 65532, CapEff 0, no_new_privs, read-only
   root, only loopback; DNS/public/private/metadata egress denied; full
   conformance build passed.
@@ -23,7 +23,7 @@ Live evidence on beta (test realm, private names via alpha Traefik), 2026-11-01:
   two user Blossom servers and announced. Worker start ~17 ms after the model step.
 - Full stack stop/start: project reopened, same balance, no model call.
 - Upgrade with automatic pre-upgrade backup; rollback to the previous revision.
-- Backup snapshot captured through the homelab backup runner's remote volume
+- Backup snapshot captured through an external backup collector's volume
   path with all checksums intact; isolated restore verified identity, 56 tables /
   672 rows, 12 artifacts, ledger invariant, and project reopen (70 s restore).
 
@@ -40,6 +40,5 @@ Paid generation (after OpenAI credits were added), revision c5f06287c31e:
 Not complete:
 - Real-money realm: needs a receive-only NWC connection, two real Cashu mints and
   public DNS/ingress. Not deployed; not production-ready.
-- Homelab backup runner on alpha must be updated after the homelab branch merges
-  (`./homelab backup install-runner`) to include the CVM volume nightly.
+- Operators must configure and verify scheduled off-host backup collection.
 - p95 startup measurement under concurrent load was not run.

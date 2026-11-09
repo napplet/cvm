@@ -128,7 +128,7 @@ Work autonomously until these conditions are satisfied or a genuine external dep
 ## Initial current-state observations
 
 - CVM main and latest finished Coolify deployment: `24252f744b8cd5f33a216c264a658623b98b7a42`; deployment `yzuxxcgg9g5li8pk4umujulp`, finished 2026-10-27T12:03:11Z.
-- `./homelab cvm inspect`, `runtime`, and `verify` passed read-only checks: existing app healthy, signed WSS service key `715bd434527b8e1fd73201bb48ec9b91444229250798c4bbc1c24c32320e4bbf`, provider `ChatGPT subscription · local test sats`. No generation was dispatched.
+- `<operator-deployment-command> inspect`, `runtime`, and `verify` passed read-only checks: existing app healthy, signed WSS service key `715bd434527b8e1fd73201bb48ec9b91444229250798c4bbc1c24c32320e4bbf`, provider `ChatGPT subscription · local test sats`. No generation was dispatched.
 - Newer graph project `Users-sandwich-Develop-napplet-cvm` traces only test callers for `materializePreapproval` and `createProductionOperationalDependencies`. Homelab has no graph index.
 - Production refusal tests: 18 passed, 90 assertions; this proves refusal behavior only.
 - `release:certify -- --candidate toolchains/candidates/initial.json --request` exits 1 with `local_setup_required`, all reported effect counters zero. This is not a reviewable production authorization request.

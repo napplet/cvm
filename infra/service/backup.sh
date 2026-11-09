@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Consistent napplet-cvm snapshot into a Docker volume that the host's backup
-# system (Borg on homelab) collects. Order matters: the PostgreSQL dump is a
+# system collects. Order matters: the PostgreSQL dump is a
 # single transactionally consistent snapshot; immutable storage objects are
 # copied afterwards, so every object referenced by the dump is present.
 #   backup.sh <root> [volume]

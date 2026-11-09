@@ -1,11 +1,11 @@
-# napplet-cvm service stack for one host (homelab machine or VPS).
-# Rendered inputs (by Ansible or by hand):
+# napplet-cvm service stack for one compatible Linux host.
+# Operator-supplied inputs:
 #   ${NAPPLET_CVM_ROOT}/config/service.json, model-pricing.json   (non-secret)
 #   ${NAPPLET_CVM_ROOT}/secrets/*                                (0600 files)
 #   ${NAPPLET_CVM_ROOT}/data/{postgres,storage,relay}            (persistent)
 # Only the service port is published; PostgreSQL, the relay and the build
 # engine stay on the private stack network. TLS terminates at the host's
-# existing reverse proxy (Traefik on homelab, or the optional Caddy profile).
+# reverse proxy, or the optional Caddy profile.
 name: ${NAPPLET_CVM_PROJECT:-napplet-cvm}
 
 x-restart: &restart
@@ -146,7 +146,7 @@ services:
       test-mint: { condition: service_started }
       relay: { condition: service_healthy }
 
-  # VPS ingress: TLS for the three service names. Homelab uses its existing Traefik.
+  # Optional ingress: TLS for the three operator-configured service names.
   caddy:
     <<: *restart
     profiles: [caddy]

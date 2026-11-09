@@ -5,12 +5,12 @@ status: complete
 
 User confirmed existing ChatGPT account + test credits, with production deferred.
 
-- Coolify app `napplet-cvm` (`x13wc0i56wce31hkg4jrtmsq`) on `beta-ssh`.
-- Workspace: https://cvm.lab.sandwich.farm; separate preview and Blossom origins.
+- Coolify app `napplet-cvm` (`operator-application-id`) on `operator-host`.
+- Workspace: https://cvm.example.org; separate preview and Blossom origins.
 - Source: private Gogs `owner/napplet-cvm`, branch `main`; source implementation merged in napplet/cvm PR #2. Homelab lifecycle/runbook merged in PRs #114, #116 and #117.
 - Persistent private host state at `/srv/homelab/cvm/state`; dedicated engine volume retains database/payment volumes and images. Credentials imported over SSH, never committed. A persistent OS lock fences concurrent control processes.
 - Native AMD64 worker checksums, official nested cgroup initialization, network-blocked non-root constrained workers, strict configured HTTPS preview-origin projection and sandboxed public artifact responses.
-- Root commands: `./homelab cvm open`, `admin`, `login`, `deploy`, `inspect`, `deployment`, `runtime`, `verify`, `logs`, `restart`, `smoke --allow-chatgpt-usage`, `smoke --restore-only`.
+- Root commands: `<operator-deployment-command> open`, `admin`, `login`, `deploy`, `inspect`, `deployment`, `runtime`, `verify`, `logs`, `restart`, `smoke --allow-chatgpt-usage`, `smoke --restore-only`.
 
 ## Verification
 

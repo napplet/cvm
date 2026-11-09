@@ -1,127 +1,160 @@
-# Service deployment, backup, restore and rollback
+# Container deployment
 
-The CVM is one containerized service. A host — a homelab machine or a VPS — runs
-one Docker Compose stack, installed and upgraded by a small Ansible playbook in
-the homelab repository (`ops/cvm/ansible`). Hosts differ only by inventory.
+This repository provides application images, `infra/service/compose.yaml`,
+a configuration schema and backup/restore tools. Keep Ansible playbooks,
+inventories, DNS records, host access, secret provisioning and scheduled backup
+collection in a separate deployment repository owned by the operator.
+No private infrastructure repository or provider-specific operator CLI is required.
 
-## What runs
+## Requirements and configuration
 
-| Container | Purpose | Persistent data |
-| --- | --- | --- |
-| `cvm` | `scripts/production.ts`: ContextVM service, static workspace, preview and Blossom origins | `data/storage` (sealed artifacts, worker results, published copies) |
-| `postgres` | PostgreSQL 17, the canonical migration sequence | `data/postgres` |
-| `relay` | Nostr relay the service listens on; exposed as `wss://<public>/relay` | `data/relay` (ephemeral events) |
-| `engine` | Private Docker engine for untrusted builds. Workers run under gVisor (`runsc`), `--network none`, read-only root, all capabilities dropped, uid 65532, CPU/memory/PID limits | engine image cache (rebuildable) |
-| `test-mint`, `test-wallet` | Test realm only: FakeWallet Cashu mint and receive-only NWC wallet | test rail state |
-| `caddy` | VPS only: TLS for the three names | ACME state |
+The supplied stack targets Linux AMD64 with Docker Engine and Compose. It runs
+PostgreSQL 17, a Nostr relay, a dedicated gVisor build engine and the CVM service.
+The engine needs privileged container support; the application never receives
+the host Docker socket. Untrusted workers use `runsc`, no network, read-only
+roots, dropped capabilities and resource limits. This is one host with no
+replication or automatic failover.
 
-Configuration is mounted at `/etc/napplet-cvm/service.json` (one adapter per concern:
-PostgreSQL, filesystem storage, OpenAI Responses, Docker worker runtime, NIP-47 +
-Cashu rails). Secrets are files under `/run/secrets/napplet-cvm`: `database_url`,
-`service_seed` (defines the service's Nostr identity and server-side keys),
-`openai_api_key`, `nwc_uri`. Nothing Google-specific is required.
+Choose a service root (the examples use `/srv/napplet-cvm`) with this layout:
 
-`realm: test` balances are test credits. `realm: real` holds real money and
-refuses test rails, private mint routes, plaintext relays and `runc`. Each
-database records its realm once (`service_realm`); a test database can never be
-started as the real-money service, and a database with ledger history cannot be
-initialized as real.
-
-## Deploy or upgrade
-
-```sh
-cd ~/Develop/homelab
-./homelab cvm production deploy --revision <40-hex commit pushed to a remote branch>
-./homelab cvm production status
+```text
+/srv/napplet-cvm/
+  current -> releases/<revision>     # clean source checkout
+  releases/<revision>/
+  compose.env
+  config/service.json
+  config/model-pricing.json
+  secrets/postgres_password
+  secrets/database_url
+  secrets/service_seed
+  secrets/openai_api_key
+  secrets/nwc_uri
+  data/postgres/
+  data/storage/
+  data/relay/
 ```
 
-The playbook: archives exactly that commit (never the working tree), unpacks it
-to `releases/<sha>`, takes a backup when the running revision changes, builds
-the images, starts PostgreSQL/relay/engine, loads the worker images into the
-engine, runs `scripts/migrate.ts` (canonical migrations + realm marker, never at
-service startup), starts the service, checks `migrate.ts --check` and records
-`deployed.json` (`revision`, `previous`, `servicePubkey`). Generated secrets are
-created once and never rotated by a deploy.
+Use a reviewed Git revision. `compose.env` supplies the paths and network values:
 
-Operator inputs live in `~/.config/napplet-cvm` (mode 0600): `openai_api_key`,
-and for the real realm `nwc_uri` (a **receive-only** NWC connection:
-`make_invoice`, `lookup_invoice`). The model pricing document is regenerated on
-each deploy by `scripts/model-pricing.ts` from OpenAI's published price table and
-a BTC-USD quote, with captured bytes and digests; it is valid for 72 hours, so
-redeploy (or restart after regenerating) at least every three days.
-
-For a VPS copy `inventory/vps.example.yml`, set the host, origins, mints and
-`cvm_realm`, point DNS at the host, and run the playbook with that inventory.
-
-## Verify the user flow
-
-```sh
-./homelab cvm production flow --flow-dir ~/.local/state/napplet-cvm-flow --phase full
-./homelab cvm production flow --flow-dir ~/.local/state/napplet-cvm-flow --phase reopen
+```dotenv
+NAPPLET_CVM_ROOT=/srv/napplet-cvm
+NAPPLET_CVM_PROJECT=napplet-cvm
+NAPPLET_CVM_REVISION=REPLACE_WITH_GIT_REVISION
+NAPPLET_CVM_BIND=127.0.0.1:18871
+NAPPLET_CVM_DNS=REPLACE_WITH_REACHABLE_DNS_SERVER_IP
 ```
 
-`scripts/service-flow.ts` acts as a user with its own key: signed, encrypted
-ContextVM over the public relay; insufficient-funds pause; Lightning (payable
-BOLT11 returned to the requester) and Cashu top-ups with replay; resume of the
-saved action; metered generation with exact ledger reconciliation; sandboxed
-preview from the preview origin; revision and identical replay without a
-second charge; another identity denied; user-signed publication copied to two
-user-controlled Blossom servers via the `@napplet/cli` upload authorization.
-`reopen` reopens the same artifact with the same balance and no model call.
+Start from `infra/service/service.example.json`,
+validated by `src/service/config.ts`. Replace all example origins, mint URLs,
+policy identifiers and image selections with values appropriate to your
+installation. The three HTTPS origins serve the workspace, isolated preview
+and Blossom artifacts. Route their traffic to the service listener; route
+`/relay` WebSocket traffic to the relay container. Keep administrative access
+private. The optional `caddy` profile reads an operator-supplied
+`config/Caddyfile`; an existing reverse proxy can provide TLS instead.
 
-## Backup
+Secrets are UTF-8 files under `secrets/`, never configuration values or source
+files. Use mode 0600 and directories readable only by the operator and required
+containers. `database_url` must match the PostgreSQL credentials and database;
+`service_seed` is a persistent 32-byte hexadecimal seed defining service identity
+and encryption keys. `nwc_uri` must authorize only `make_invoice` and
+`lookup_invoice`. Preserve these files through upgrades and restores.
+Create data directories with ownership suitable for each pinned container
+(PostgreSQL, relay and application), rather than opening them to all users.
 
-`backup.sh` (systemd timer, daily 02:30, and before every revision change) writes
-`database.dump` (one transactional `pg_dump`), then `storage.tar`, `state.tar`
-(config, secrets, `deployed.json`), row counts, a manifest and `SHA256SUMS` into the
-Docker volume `napplet_cvm_backup` (latest three kept). On homelab the existing
-Borg backup collects that volume from beta (`ops/backup/sources.json`, service
-`napplet-cvm`). The snapshot contains secrets; Borg encrypts it.
+`realm: test` balances are test credits. `realm: real` requires a metered model,
+TLS public relay, two independent real Cashu mints, a sandboxed worker runtime
+and a fresh database. Its immutable `service_realm` marker prevents promoting
+a test ledger or prior accounting history into real money. The `test-rails`
+Compose profile is for test deployments only and requires additional test-wallet
+and mint secrets; inspect its mounts before enabling it.
 
-```sh
-./homelab cvm production backup
-```
+## Build, migrate and start
 
-## Restore test (required after changes to data or deployment)
-
-```sh
-./homelab cvm production restore-test --flow-dir ~/.local/state/napplet-cvm-flow
-```
-
-`restore-test.sh` restores the latest snapshot into an isolated, unrouted stack
-(`/srv/napplet-cvm-restore-test`, separate project, network, relay and engine),
-checks `migrate.ts --check`, starts the service, runs `scripts/verify-restore.ts`
-(identity, realm, per-table row counts, every artifact file re-read with a
-verified digest, ledger vs. balance projection) and reopens the user's project
-through the restored service. It then removes the isolated stack.
-
-To recover for real: stop the stack, move `data/` aside, extract the snapshot's
-`state.tar` and `storage.tar` into the root, `pg_restore` `database.dump` into a
-fresh `postgres`, and deploy the revision named in its manifest.
-
-## Rollback
+Run these commands on the deployment host from the selected checkout. The
+operator supplies files and ownership described above first:
 
 ```sh
-./homelab cvm production rollback      # redeploys deployed.json "previous"
+cd /srv/napplet-cvm/current
+export NAPPLET_CVM_ROOT=/srv/napplet-cvm
+compose() {
+  docker compose --env-file "$NAPPLET_CVM_ROOT/compose.env" \
+    -f infra/service/compose.yaml "$@"
+}
+compose build cvm engine
+docker build -t napplet-cvm/dev-worker:development infra/dev-ui
+docker build -t napplet-cvm/dev-publication:development infra/dev-publication
+compose up -d --wait postgres relay engine
+docker save napplet-cvm/dev-worker:development napplet-cvm/dev-publication:development \
+  | compose exec -T engine docker --host unix:///run/cvm-docker/docker.sock load
+compose run --rm --no-deps --entrypoint bun cvm scripts/migrate.ts
+compose run --rm --no-deps --entrypoint bun cvm scripts/migrate.ts --check
+compose up -d cvm
+compose ps
 ```
 
-Migrations are append-only. A revision refuses a database migrated by a newer
-revision (`SERVICE_MIGRATION_UNKNOWN`), so rolling back across a schema change
-means restoring the pre-upgrade snapshot that the deploy took, then deploying the
-previous revision. Rollback never replays payments or reissues money.
+Generate the non-secret pricing document with `bun scripts/model-pricing.ts`
+and mount its output at `config/model-pricing.json` before starting the service.
+This command fetches provider prices and an exchange-rate quote. Inspect the
+script's options and retain captured price sources. Pricing expires after
+72 hours. Refresh requires restart, and recovery across changed price/profile
+identifiers is an outstanding launch limitation; do not assume a routine
+refresh preserves resumability until that behavior is fixed and verified.
 
-## Availability, honestly
+The normal entrypoint is `scripts/production.ts`. It reads
+`/etc/napplet-cvm/service.json` and `/run/secrets/napplet-cvm/*`; it never runs
+migrations implicitly. Readiness is reported at `/health`. Configure persistent
+storage, routing, secret creation, service supervision and deployment records
+in your deployment repository.
 
-One host, one PostgreSQL, no replica, no automatic failover. A host or disk loss
-means restoring the latest snapshot (at most one day old, plus pre-upgrade
-snapshots) onto a host and redeploying; work since that snapshot is lost and
-in-flight top-ups/generations reconcile from the provider on restart. Unknown
-model and payment outcomes are reconciled before retry; they never charge twice.
-Accepted work is not queued durably: if the service restarts mid-generation the
-action is recovered or resumed explicitly by the user.
+## Verify a deployment
 
-## Private Beta (unchanged)
+The portable flow driver uses signed ContextVM requests and a client-owned key:
 
-The existing Coolify CVM (`./homelab cvm deploy`) remains the private
-development/test-credit service with the ChatGPT workflow. It is separate from
-this stack and keeps its own data.
+```sh
+bun scripts/service-flow.ts --origin https://cvm.example.org \
+  --identity ./flow/user.key --state ./flow/state.json --phase full \
+  --cashu-token-file ./flow/top-up.token
+bun scripts/service-flow.ts --origin https://cvm.example.org \
+  --identity ./flow/user.key --state ./flow/state.json --phase reopen
+```
+
+The full flow can spend model credits and funds: review its configured maximum,
+provide a bounded Cashu token and pay the returned Lightning request when
+required. Test rails settle only test balances. Reopening checks the existing
+artifact and balance without generating another model response. Preserve the
+client key and state locally; never give the service a user's signing key.
+
+## Backup, restore and rollback
+
+`infra/service/backup.sh <root> [volume]` creates a transactional PostgreSQL dump,
+storage archive, configuration/secrets archive, manifest and checksums in a
+Docker backup volume. It expects `current`, `compose.env` and `deployed.json`
+(an operator-created deployment record) under the chosen root. Execute it with
+permissions to access Docker volume data. The default volume is
+`napplet_cvm_backup` and the default retention is three snapshots.
+
+The snapshot includes secrets. Configure encrypted off-host collection and a
+schedule in your deployment repository, verify collection and test restoration.
+The application repository does not install a timer or configure a backup host.
+Quiesce writers during verification if comparing row counts captured separately
+from the database dump. Single-host loss requires recovery from the last
+successfully collected snapshot; recovery time and data loss depend on your
+measured restore procedure and backup interval.
+
+`infra/service/restore-test.sh <backup-dir> [restore-root] [flow-dir]` verifies
+checksums and restores an isolated stack with separate data, network and port.
+It requires the recorded source release and worker images on the host; see the
+script's `NAPPLET_CVM_LIVE_ROOT`, restore-root, project and port options. It
+verifies identity, schema, artifact integrity, ledger projection and optionally
+reopens a saved project. Test this on a compatible host before relying on it.
+
+For actual recovery, stop application writers, preserve the damaged data for
+inspection, restore the dump into a fresh database and restore storage,
+configuration and secrets from the same snapshot. Start the recorded revision
+and verify identity, accounting, artifacts and client reopen.
+
+Take a backup before upgrading. Migrations are append-only: an older revision
+refuses a database with unknown newer migrations. Rollback across schema changes
+requires restoring the corresponding pre-upgrade snapshot before starting the
+older revision. A rollback must not reissue payments or model operations.

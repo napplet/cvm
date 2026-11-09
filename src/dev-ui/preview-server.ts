@@ -1,13 +1,30 @@
 import { extname } from "node:path";
-import type { LocalArtifactRepository } from "../dev/local-artifact-repository";
+import type { LocalArtifactRepository, SealedArtifact } from "../dev/local-artifact-repository";
 import type { LocalPreviewGrantStore } from "../dev/local-preview-grant-store";
 
 const mime = new Map([[".html", "text/html; charset=utf-8"], [".js", "text/javascript; charset=utf-8"], [".css", "text/css; charset=utf-8"], [".json", "application/json; charset=utf-8"], [".svg", "image/svg+xml"]]);
 const pajaRoutes = new Set(["/", "/__kehto/config.json", "/__kehto/target.html", "/__kehto/target-cors.json", "/__kehto/browser-host.js"]);
-const collapsedConsole = `<script>try { localStorage.setItem('kehto:paja:console:v1', 'collapsed'); } catch {} window.addEventListener('load', () => { const toggle = document.getElementById('paja-console-toggle'); if (toggle?.getAttribute('aria-expanded') === 'true') toggle.click(); }, { once: true });</script>`;
-// A presentation switch for the product workspace. It changes no sandbox,
-// simulation, grant, capability or message policy; /dev keeps Paja controls.
-const workspaceChrome = `<style>html[data-preview-presentation="workspace"] body { grid-template-rows: minmax(0, 1fr); } html[data-preview-presentation="workspace"] .bar, html[data-preview-presentation="workspace"] .console { display: none !important; } html[data-preview-presentation="workspace"] main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }</style>`;
+// Paja owns the drawer and its chevron. Seed a compact first visit without
+// overriding a viewer who has deliberately expanded or collapsed it before.
+const initialConsolePreference = `<script>try { const key = 'kehto:paja:console:v1'; if (localStorage.getItem(key) === null) localStorage.setItem(key, 'collapsed'); } catch {}</script>`;
+type PajaWindowIdentity = Readonly<{ id: string; dTag: string; aggregateHash: string }>;
+
+function pajaWindowIdentity(artifact: SealedArtifact): PajaWindowIdentity {
+  // The record identity commits the verified owner and artifact facts, while the
+  // aggregate preserves the exact sealed byte identity Paja uses for isolation.
+  const artifactDigest = artifact.artifactId.slice("artifact:sha256:".length);
+  return Object.freeze({ id: `cvm-preview-${artifactDigest}`, dTag: `preview-${artifactDigest}`, aggregateHash: artifact.aggregateSha256 });
+}
+function targetPajaWindowIdentity(targetUrl: string): PajaWindowIdentity {
+  const digest = new Bun.CryptoHasher("sha256").update(targetUrl).digest("hex");
+  return Object.freeze({ id: `cvm-preview-target-${digest}`, dTag: `preview-target-${digest}`, aggregateHash: digest });
+}
+function withPajaWindowIdentity(value: unknown, identity: PajaWindowIdentity): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("PAJA_CONFIG_INVALID");
+  const config = value as Record<string, unknown>; const window = config.window;
+  if (!window || typeof window !== "object" || Array.isArray(window)) throw new Error("PAJA_CONFIG_INVALID");
+  return { ...config, window: { ...(window as Record<string, unknown>), ...identity } };
+}
 export type PreviewServer = Readonly<{ url: string; openPaja(token: string): Promise<string>; openTarget(targetUrl: string): Promise<string>; handlePublic(request: Request): Promise<Response | undefined>; close(): Promise<void> }>;
 /** Static/opaque-grant boundary only. There are deliberately no application commands here. */
 export async function createPreviewServer(input: Readonly<{ publicOrigin?: string; repository: LocalArtifactRepository; grants: LocalPreviewGrantStore; paja: Readonly<{ startPajaServer(options: unknown): Promise<{ url: string; close(): Promise<void> }>; domains: readonly string[] }> }>): Promise<PreviewServer> {
@@ -24,22 +41,24 @@ export async function createPreviewServer(input: Readonly<{ publicOrigin?: strin
     } catch { return new Response("not found", { status: 404 }); }
   } });
   const url = `http://127.0.0.1:${server.port}`;
-  async function openTarget(targetUrl: string): Promise<string> {
-    const host = await input.paja.startPajaServer({ options: { host: "127.0.0.1", port: 0, targetUrl, simulation: { capabilities: { domains: Object.fromEntries(input.paja.domains.map((domain) => [domain, false])) }, acl: { mode: "deny" }, firewall: { mode: "deny" }, identity: { mode: "anonymous" }, relay: { mode: "disabled" }, storage: { mode: "disabled" }, cache: { mode: "disabled" }, upload: { mode: "disabled" }, media: { enabled: false }, notifications: { enabled: false, grant: false }, intent: { enabled: false }, cvm: { enabled: false } } } });
-    // Paja 0.19 has a persisted drawer preference but no initial-state option.
-    // Initialize it before its module runs, on a separate loopback preview origin.
+  async function openTarget(targetUrl: string, identity = targetPajaWindowIdentity(targetUrl)): Promise<string> {
+    // Keep Paja's concrete default host composition: it performs its own
+    // browser/service availability checks and presents its own permission UI.
+    const host = await input.paja.startPajaServer({ options: { host: "127.0.0.1", port: 0, targetUrl } });
     const upstream = new URL(host.url);
     if (upstream.protocol !== "http:" || upstream.hostname !== "127.0.0.1") { await host.close(); throw new Error("PAJA_LOOPBACK_REQUIRED"); }
     const minimized = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const requestUrl = new URL(request.url);
       const path = requestUrl.pathname;
-      const workspace = requestUrl.searchParams.get("presentation") === "workspace";
       if (request.method !== "GET" || !pajaRoutes.has(path)) return new Response("not found", { status: 404 });
       try {
         const response = await fetch(new URL(path, upstream), { redirect: "error" });
+        if (path === "/__kehto/config.json" && response.ok) {
+          return Response.json(withPajaWindowIdentity(await response.json(), identity), { status: response.status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+        }
         const forwarded = new Response(response.body, { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
         if (path !== "/" || !response.ok) return forwarded;
-        return new HTMLRewriter().on("html", { element(element) { element.setAttribute("data-paja-console", "collapsed"); if (workspace) element.setAttribute("data-preview-presentation", "workspace"); } }).on("head", { element(element) { element.prepend(collapsedConsole + (workspace ? workspaceChrome : ""), { html: true }); } }).transform(forwarded);
+        return new HTMLRewriter().on("head", { element(element) { element.prepend(initialConsolePreference, { html: true }); } }).transform(forwarded);
       } catch { return new Response("preview unavailable", { status: 502 }); }
     } });
     hosts.push({ async close() { minimized.stop(true); await host.close(); } });
@@ -69,5 +88,10 @@ export async function createPreviewServer(input: Readonly<{ publicOrigin?: strin
     const externalTarget = `${input.publicOrigin}/cvm-artifacts/${host.targetUrl.slice(`${url}/preview/`.length)}`;
     return new Response((await response.text()).replaceAll(host.targetUrl, externalTarget), { status: response.status, headers: response.headers });
   }
-  return Object.freeze({ url, openTarget, handlePublic, openPaja: (token: string) => openTarget(`${url}/preview/${encodeURIComponent(token)}/index.html`), async close(): Promise<void> { await Promise.all(hosts.map((host) => host.close())); server.stop(true); } });
+  async function openPaja(token: string): Promise<string> {
+    const grant = await input.grants.authorize({ token, path: "index.html" }); const artifact = grant && await input.repository.get(grant.artifactId);
+    if (!artifact) throw new Error("PREVIEW_GRANT_UNAVAILABLE");
+    return openTarget(`${url}/preview/${encodeURIComponent(token)}/index.html`, pajaWindowIdentity(artifact));
+  }
+  return Object.freeze({ url, openTarget, handlePublic, openPaja, async close(): Promise<void> { await Promise.all(hosts.map((host) => host.close())); server.stop(true); } });
 }

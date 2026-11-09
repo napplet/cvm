@@ -89,6 +89,8 @@ jobs:
         run: bunx --package typescript@5.9.3 tsc --noEmit --pretty false
       - name: Install pinned Chromium and Linux browser libraries
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Preview host domains and local relay data flow
+        run: bun test tests/dev-ui/preview-server.domains.test.ts tests/dev-ui/homelab-preview.test.ts --timeout 30000
       - name: Mounted billing recovery and Modal collector retain original report-only authority
         run: bun test tests/release/billing-recovery-bootstrap.test.ts tests/release/bigquery-usage-report.test.ts tests/release/modal-billing-report.test.ts tests/production/mounted-authoritative-billing.test.ts tests/production/mounted-modal-billing.test.ts tests/production/gcs-immutable-create.test.ts --timeout 15000
       - name: Byte ownership, transaction results and preserved evidence contracts

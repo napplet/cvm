@@ -135,7 +135,7 @@ if (product) {
 }
 async function refresh(): Promise<void> { if (client) setBalance(await client.accountStatus()); }
 async function preview(action: any): Promise<void> { sessionVersion = action.sessionVersion; if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; currentVersion = version; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); product?.actionCharge(action.confirmedSpend); product?.completed(version); }
-async function hydrateSession(sessionId: string): Promise<boolean> {
+async function hydrateSession(sessionId: string, preservePreview = false): Promise<boolean> {
   costSessionId = sessionId;
   const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return false;
   versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
@@ -143,6 +143,11 @@ async function hydrateSession(sessionId: string): Promise<boolean> {
   currentVersion = versions.find(v => v.artifactId === status.session.latestVerifiedArtifact?.id);
   renderVersions(); renderDurableTimeline(status.session); const latest = currentVersion;
   const repair = typeof status.session.failedValidationOperationId === "string" ? { sessionId, expectedVersion: status.session.version, operationId: status.session.failedValidationOperationId } : undefined;
+  // Refresh failure/repair facts without reissuing a grant or reloading the
+  // already verified iframe: its URL and in-memory applet state stay intact.
+  if (preservePreview && selected?.sessionId === sessionId && byId<HTMLIFrameElement>("preview").getAttribute("src")) {
+    product?.sessionState(status.session.state); product?.repairAvailable(repair); await refreshCosts(); return true;
+  }
   if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); product?.repairAvailable(repair); await refreshCosts(); return true; }
   await selectVersion(latest);
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
@@ -262,7 +267,7 @@ async function runGeneration(request: GenerationRequest): Promise<any> {
       } catch { /* The original generation result remains authoritative. */ }
     }
     if (interrupted) result.code += " · This attempt couldn’t finish. Your saved version and draft are safe. You can send your change again or edit it first. No local test charge was taken for this attempt; your subscription may still have counted its usage.";
-    if (typeof result?.sessionId === "string") await hydrateSession(result.sessionId).catch(() => undefined);
+    if (typeof result?.sessionId === "string") await hydrateSession(result.sessionId, true).catch(() => undefined);
   }
   return result;
 }

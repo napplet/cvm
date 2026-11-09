@@ -6,11 +6,11 @@ test("homelab preview proxies registered hosts and grant-bound bytes only", asyn
   const upstreams: ReturnType<typeof Bun.serve>[] = [];
   const preview = await createPreviewServer({
     publicOrigin: "https://cvm.lab.example",
-    repository: { read: async ({ path }: any) => path === "index.html" ? { bytes, file: { path } } : undefined } as any,
+    repository: { get: async () => ({ artifactId: "artifact:sha256:" + "a".repeat(64), ownerId: "b".repeat(64), aggregateSha256: "c".repeat(64) }), read: async ({ path }: any) => path === "index.html" ? { bytes, file: { path } } : undefined } as any,
     grants: { authorize: async ({ token, path }: any) => token === "allowed" && path === "index.html" ? { artifactId: "artifact" } : undefined } as any,
     paja: { domains: [], async startPajaServer({ options }: any) {
       const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
-        if (new URL(request.url).pathname === "/__kehto/config.json") return Response.json({ target: { url: options.targetUrl } });
+        if (new URL(request.url).pathname === "/__kehto/config.json") return Response.json({ window: { id: "kehto-paja-window", dTag: "dev-target", aggregateHash: "paja" }, target: { url: options.targetUrl } });
         return new Response('<html><head></head><body><script src="./__kehto/browser-host.js"></script></body></html>', { headers: { "content-type": "text/html" } });
       } }); upstreams.push(server);
       return { url: `http://127.0.0.1:${server.port}`, async close() { server.stop(true); } };
@@ -20,7 +20,7 @@ test("homelab preview proxies registered hosts and grant-bound bytes only", asyn
     const url = await preview.openPaja("allowed");
     expect(url).toMatch(/^https:\/\/cvm.lab.example\/cvm-preview\/[a-f0-9-]+\/$/);
     const page = await preview.handlePublic(new Request(url + "?presentation=workspace"));
-    expect(page?.status).toBe(200); expect(await page!.text()).toContain("data-preview-presentation=\"workspace\"");
+    expect(page?.status).toBe(200); expect(await page!.text()).toContain("browser-host.js");
     const config = await preview.handlePublic(new Request(url + "__kehto/config.json"));
     expect((await config!.json()).target.url).toBe("https://cvm.lab.example/cvm-artifacts/allowed/index.html");
     const asset = await preview.handlePublic(new Request("https://cvm.lab.example/cvm-artifacts/allowed/index.html"));

@@ -52,7 +52,7 @@ export const TopUpArgumentsSchema = z.object({
   credits: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)).optional(),
   maxFee: z.string().regex(/^[0-9]+$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)).optional(),
   topUpId: z.string().min(1).optional(),
-}).strict().refine(value => value.amount !== undefined || value.credits !== undefined, "credit target or legacy amount required");
+}).strict().refine(value => (value.amount === undefined) !== (value.credits === undefined), "use exactly one credit target or legacy amount");
 export const FundedAdmissionArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),

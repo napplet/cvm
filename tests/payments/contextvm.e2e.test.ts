@@ -69,6 +69,8 @@ test("signed ContextVM supports independent payment adapters, one credit per eve
   expect((await funding.status({ pubkey: original.pubkey })).available).toBe("200");
   const forged = await transport.call("top_up", { ...args, principal: { pubkey: "cd".repeat(32) } }, args.pmi);
   expect(forged.response).toHaveProperty("error"); expect(verified).toBe(3);
+  const ambiguous = await transport.call("top_up", { ...args, amount: "1" }, args.pmi);
+  expect(ambiguous.response).toHaveProperty("error"); expect(verified).toBe(3);
   const unavailable = await transport.call("top_up", { ...args, pmi: "other-method" }, "other-method");
   expect(unavailable.response).toHaveProperty("error");
   const status = await transport.call("account_status", {});

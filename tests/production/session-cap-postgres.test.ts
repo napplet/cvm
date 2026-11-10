@@ -8,7 +8,7 @@ import { Pool } from "pg";
 import { FundingService } from "../../src/funding/funding-service";
 import { SessionCapApprovalService } from "../../src/funding/session-cap";
 import { ContinuationService } from "../../src/continuity/continuation-service";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import type { MeteredFundingTransaction } from "../../src/persistence/funding-store";
 import { ModelProfileSchema, PriceCardSchema, PHASE_04_DETERMINISTIC_PRICE_CARD, maximumOperationCharge } from "../../src/model/price-card";

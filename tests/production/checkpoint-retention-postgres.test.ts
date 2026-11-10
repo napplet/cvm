@@ -19,7 +19,7 @@ import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-re
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { GcsObjectStoreAdapter, type VersionedObjectClientPort } from "../../src/continuity/object-store";
 import { FundingService } from "../../src/funding/funding-service";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import type { ContinuationWorkerPort } from "../../src/phase-02/contracts";
 

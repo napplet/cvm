@@ -10,7 +10,7 @@ import { matchFilters, type Filter } from "nostr-tools/filter";
 import { verifyEvent } from "nostr-tools/pure";
 import { openContextVmRelayTransport } from "../../../src/release/deployment/contextvm-client";
 import { PostgresOperationJournal } from "../../../src/release/deployment/postgres-operation-journal";
-import { PostgresFundingDatabase } from "../../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../../src/persistence/postgres-sql-funding-store";
 import { FundingService } from "../../../src/funding/funding-service";
 import { SessionCapApprovalService } from "../../../src/funding/session-cap";

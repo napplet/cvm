@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { createContextVmDeploymentClient } from "../../src/release/deployment/contextvm-client";
-import { createPaymentDeploymentClients } from "../../src/release/deployment/payment-clients";
+import { createPaymentClientFamiliesFixture as createPaymentDeploymentClients } from "../fixtures/payment-client-families";
 import { createVertexDeploymentClient } from "../../src/release/deployment/vertex-client";
 import { registerDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
@@ -23,17 +23,6 @@ test("contextvm: records only the official SDK correlation and a service-owned k
   expect(correlation.invocationSha256).toMatch(/^[a-f0-9]{64}$/u);
   expect(JSON.stringify(correlation)).not.toMatch(/nsec|private|secret/i);
   expect(() => createContextVmDeploymentClient({ serviceKeyReference: "nsec1-do-not-import", relaySetReference: "relay-set:primary", relaySetSha256: digest("a") })).toThrow("DEPLOYMENT_SECRET_REFERENCE_INVALID");
-});
-
-test("payments: keep NWC and Cashu consent references distinct and reconcile only the original top-up", async () => {
-  const clients = createPaymentDeploymentClients({
-    nwcConnectionReference: "nwc:consent:wallet-one",
-    cashuWalletReference: "cashu:funded-wallet:one",
-  });
-  expect(clients.nwc.discovery()).toEqual({ rail: "nwc_lightning", consentReference: "nwc:consent:wallet-one" });
-  expect(clients.cashu.discovery()).toEqual({ rail: "cashu", consentReference: "cashu:funded-wallet:one" });
-  expect(await clients.nwc.reconcileOriginal({ originalOperationId: "topup-one", receiptOperationId: "topup-one" })).toEqual({ status: "reconciled", originalOperationId: "topup-one" });
-  await expect(clients.cashu.reconcileOriginal({ originalOperationId: "topup-one", receiptOperationId: "topup-other" })).resolves.toEqual({ status: "blocked", originalOperationId: "topup-one" });
 });
 
 test("vertex: binds a Gemini request to the shared loopback Google client and never reads ambient ADC", async () => {

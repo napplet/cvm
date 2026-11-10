@@ -3,6 +3,9 @@ import { open } from "node:fs/promises";
 import { hkdfSync } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
+import { PaymentModuleConfigSchema } from "../payments/loader";
+import { CreditAmountSchema } from "../payments/contracts";
+import { allowlistedPubkey } from "../payments/free-access";
 
 /** Fixed container mounts. Hosts differ by inventory, not by code paths. */
 export const SERVICE_CONFIG_PATH = "/etc/napplet-cvm/service.json";
@@ -30,12 +33,10 @@ export const ServiceConfigSchema = z.object({
   relay: z.object({ url: wsUrl }).strict(),
   database: z.object({ adapter: z.literal("postgresql"), maxConnections: z.number().int().min(2).max(64).default(10), statementTimeoutMs: z.number().int().min(1000).max(60_000).default(5000) }).strict(),
   storage: z.object({ adapter: z.literal("filesystem"), root: absolute }).strict(),
-  funding: z.object({
-    nwc: z.object({ adapter: z.literal("nip47-receive-only") }).strict(),
-    cashu: z.object({ mintPolicyVersion: z.string().regex(/^[a-z0-9][a-z0-9.-]{2,63}$/u), /** The Cashu mint policy requires at least two independent mints. */
-    mints: z.array(z.object({ url: https, route: z.string().url().optional() }).strict()).min(2).max(8) }).strict(),
-    reserveSat: z.string().regex(/^[1-9][0-9]{0,8}$/u).default("3750"),
-  }).strict(),
+  funding: z.discriminatedUnion("mode", [
+    z.object({ mode: z.literal("adapters"), adapters: z.array(PaymentModuleConfigSchema).min(1).max(16), reserveSat: CreditAmountSchema.default("3750") }).strict(),
+    z.object({ mode: z.literal("free"), allowlist: z.array(z.string().refine(value => { try { allowlistedPubkey(value); return true; } catch { return false; } })).min(1).max(1024), maximumCredits: CreditAmountSchema, reserveSat: CreditAmountSchema.default("3750") }).strict(),
+  ]),
   model: z.discriminatedUnion("adapter", [
     z.object({
       adapter: z.literal("openai-responses"),
@@ -55,7 +56,6 @@ export const ServiceConfigSchema = z.object({
 }).strict().superRefine((config, ctx) => {
   if (config.realm !== "real") return;
   if (new URL(config.origins.relay).protocol !== "wss:") ctx.addIssue({ code: "custom", path: ["origins", "relay"], message: "real realm requires wss" });
-  if (config.funding.cashu.mints.some((mint) => mint.route)) ctx.addIssue({ code: "custom", path: ["funding", "cashu", "mints"], message: "real realm mints cannot be privately routed" });
   if (config.model.adapter !== "openai-responses") ctx.addIssue({ code: "custom", path: ["model", "adapter"], message: "real realm requires a metered provider" });
   if (config.worker.runtime === "runc") ctx.addIssue({ code: "custom", path: ["worker", "runtime"], message: "real realm requires a sandboxed OCI runtime" });
 });
@@ -96,7 +96,7 @@ export async function loadServiceConfig(path = SERVICE_CONFIG_PATH): Promise<Ser
 }
 
 /** Secret files mounted by the deployment. Values never enter config or logs. */
-export const SERVICE_SECRET_NAMES = ["database_url", "service_seed", "nwc_uri", "openai_api_key"] as const;
+export const SERVICE_SECRET_NAMES = ["database_url", "service_seed", "openai_api_key"] as const;
 export type ServiceSecretName = typeof SERVICE_SECRET_NAMES[number];
 
 export class ServiceSecrets {

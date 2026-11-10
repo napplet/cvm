@@ -17,7 +17,7 @@ import { registerProductionPricing } from "../../src/production/pricing-catalog"
 import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { ContinuationService } from "../../src/continuity/continuation-service";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { MeteredGenerationService, StartSessionCommandSchema, type SessionActionResult } from "../../src/phase-04/metered-generation-service";
 import { ProductionSourceProposalStore, assertProductionSourceProposalSchema } from "../../src/production/source-proposal-store";

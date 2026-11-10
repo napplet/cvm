@@ -2,7 +2,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { DevPayments } from "../../scripts/dev-payments";
 
-const root = resolve(import.meta.dir, "../..");
+const root = process.env.NAPPLET_CVM_APPLICATION_ROOT ?? resolve(import.meta.dir, "../..");
 const runIdPattern = /^[a-z0-9][a-z0-9-]{0,47}$/u;
 type Environment = Readonly<Record<string, string | undefined>>;
 

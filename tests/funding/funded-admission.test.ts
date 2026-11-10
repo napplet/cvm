@@ -6,13 +6,6 @@ import { AccountStatusService } from "../../src/funding/account-status";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import type { FundingStore, FundingTransaction } from "../../src/persistence/funding-store";
-import { createFundedCore } from "../../src/phase-03/funded-core";
-import cashuFixture from "../fixtures/cashu-phase-03.json";
-import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
-import { CashuTsSettlementAdapter, FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
-import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
-import { probePromotedCliPreSignedRoute } from "../../src/publication/napplet-cli-source-contract";
-import sourceFixture from "../fixtures/phase-06-cli-source-contract.json" with { type: "json" };
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "b".repeat(64) };
@@ -78,9 +71,6 @@ class FailAvailableAndPreFenceStore implements FundingStore {
 }
 
 describe("FundedAdmissionService", () => {
-  test("requires a stable status cursor secret for a production generation composition", () => {
-    expect(() => createFundedCore({ meteredService: {} as never })).toThrow("PRODUCTION_STATUS_CURSOR_SECRET_REQUIRED");
-  });
 
   test("requires immediately usable capacity before taking a bounded cap hold", async () => {
     const store = new TransactionalMemoryFundingStore();
@@ -160,23 +150,6 @@ describe("FundedAdmissionService", () => {
 
   });
 
-  test("projects only the authenticated account and declares offline provider surfaces", async () => {
-    const store = new TransactionalMemoryFundingStore();
-    const funding = new FundingService(store);
-    await funding.execute(creditCommand());
-    const status = new AccountStatusService({
-      store,
-      sessions: { list: async () => ({ active: [{ id: "session:active" }], resumable: [{ id: "session:resume" }], pendingActions: [{ id: "action:pending", state: "authorized" }] }) },
-    });
-    const own = await status.status(principal);
-    expect(own).toMatchObject({ available: "300", held: "0", activeSessions: [{ id: "session:active" }], resumableSessions: [{ id: "session:resume" }], pendingActions: [{ id: "action:pending", state: "authorized" }] });
-    expect(JSON.stringify(own)).not.toMatch(/token|proof|preimage|invoice|secret|private/i);
-    expect((await status.status({ pubkey: "c".repeat(64) })).available).toBe("0");
-    const offline = createFundedCore({ testOnly: true, store, capacity: { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined } });
-    expect(offline.mode).toBe("offline_design_ready");
-    expect(offline.externalSurfaces).toEqual(expect.objectContaining({ modal: "unselected", contextvm: "blocked", lightning: "blocked", cashu: "blocked", postgres: "blocked" }));
-  });
-
   test("aggregates owner-scoped pending, failed, reconciliation, and credited rail lifecycle state", async () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);
@@ -203,47 +176,6 @@ describe("FundedAdmissionService", () => {
     ]);
     expect(JSON.stringify(own)).not.toMatch(/token|proof|preimage|invoice|secret|private/i);
     expect((await status.status({ pubkey: "c".repeat(64) })).topUps).toEqual([]);
-  });
-
-  test("production composition rejects structural durability claims without a database-owned encrypted vault", () => {
-    const pool = { connect: async () => { throw new Error("unused"); } };
-    const transport: ContextVmTransportPort = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
-    const capacity: ReadyCapacityPort = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
-    const forgedLightning = { durable: true, begin: async () => ({ topUpId: "forged", state: "pending" }) };
-    const forgedCashu = { durable: true, submit: async () => ({ topUpId: "forged", state: "verifying" }) };
-    expect(() => createFundedCore({ postgresPool: pool, transport, capacity, lightning: forgedLightning, cashu: forgedCashu } as never)).toThrow("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
-  });
-
-  test("production composition builds both durable rails around one database-owned AES-GCM vault", () => {
-    const pool = { connect: async () => { throw new Error("unused"); } };
-    const transport: ContextVmTransportPort = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
-    const capacity: ReadyCapacityPort = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
-    const lightningReceiver = new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:compose", invoice: "lnbc-compose", invoiceIdentity: "compose", paymentHash: "compose", amount: "20", unit: "sat", expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…compose" } });
-    const railOptions = { postgresPool: pool, transport, capacity, lightningReceiver, cashuProvider: new CashuTsSettlementAdapter(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
-    expect(createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(32).fill(8) }).mode).toBe("configured");
-    expect(() => createFundedCore({ ...railOptions, cashuProvider: new FakeCashuSettlementPort(), protectedMaterialKey: new Uint8Array(32).fill(8) })).toThrow("PRODUCTION_CASHU_CUSTODY_ADAPTER_REQUIRED");
-    expect(() => createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(31) })).toThrow("PROTECTED_MATERIAL_KEY_INVALID");
-  });
-
-  test("funded composition announces publication only for the fully validated promoted source contract", () => {
-    const pool = { connect: async () => { throw new Error("unused"); } };
-    const capacity: ReadyCapacityPort = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
-    const publication = { createIntent: async () => ({}), submitSignedManifest: async () => ({}), status: async () => ({}), reconcile: async () => ({}) };
-    const source = probePromotedCliPreSignedRoute(sourceFixture);
-    if (source.status !== "available") throw new Error("FIXTURE_PROMOTED_SOURCE_REQUIRED");
-    const announcementFor = (publicationSourceContract: unknown) => {
-      const configured: ContextVmAnnouncement[] = [];
-      const transport: ContextVmTransportPort = { configureAnnouncement: (value) => { configured.push(value); }, onInbound: () => undefined, canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
-      const options = { postgresPool: pool, transport, capacity, publication, publicationSourceContract, lightningReceiver: new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:publication-contract", invoice: "lnbc-contract", invoiceIdentity: "contract", paymentHash: "contract", amount: "20", unit: "sat" as const, expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…contract" } }), cashuProvider: new CashuTsSettlementAdapter(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), protectedMaterialKey: new Uint8Array(32).fill(8), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
-      createFundedCore(options);
-      const announcement = configured[0];
-      if (!announcement) throw new Error("FIXTURE_ANNOUNCEMENT_REQUIRED");
-      return announcement;
-    };
-    const isAvailable = (announcement: ReturnType<typeof announcementFor>) => announcement.metadata.tools.find((tool) => tool.name === "publication");
-    expect(isAvailable(announcementFor(source))).toEqual({ name: "publication", available: true, planned: false, invocable: true });
-    expect(isAvailable(announcementFor({ status: "available", liveExecution: "not_observed" }))).toEqual({ name: "publication", available: false, planned: true, invocable: false });
-    expect(isAvailable(announcementFor({ ...source, identity: { ...source.identity, sourceCommit: "0".repeat(40) } }))).toEqual({ name: "publication", available: false, planned: true, invocable: false });
   });
 
   test("bounds capacity-provider waits and persists an ambiguous outcome", async () => {

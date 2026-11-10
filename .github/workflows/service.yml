@@ -42,7 +42,7 @@ jobs:
       - name: Whole project with the pinned compiler
         run: bunx --package typescript@5.9.3 tsc --noEmit --pretty false
       - name: Config, realm, canonical migrations on real PostgreSQL, payment requests, model refusals, expiry, relays
-        run: bun test tests/service tests/funding/lightning-top-up.test.ts tests/dev/model-gateway-rejection.test.ts tests/dev/validation-failure.test.ts tests/dev/chatgpt-model-gateway.test.ts tests/dev/worker-diagnostic.test.ts tests/phase-04/automatic-validation-repair.test.ts tests/continuity/pending-action-expiry.test.ts tests/dev/publication-service-relay.test.ts tests/dev/funding.test.ts tests/contextvm --timeout 120000
+        run: bun test tests/service tests/dev/model-gateway-rejection.test.ts tests/dev/validation-failure.test.ts tests/dev/chatgpt-model-gateway.test.ts tests/dev/worker-diagnostic.test.ts tests/phase-04/automatic-validation-repair.test.ts tests/continuity/pending-action-expiry.test.ts tests/dev/publication-service-relay.test.ts tests/payments tests/contextvm --timeout 120000
       - name: Service image boots fail-closed without mounted configuration
         run: |
           docker build -f infra/service/Dockerfile -t napplet-cvm/service:ci .

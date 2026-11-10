@@ -1,23 +1,25 @@
 import { canonicalJson } from "../src/promotion/schema";
-import { OPENAI_PRICING_MARKDOWN, satsPerToken } from "../src/dev/openai-price-sync";
+import { creditsPerToken } from "../src/payments/pricing";
+const OPENAI_PRICING_MARKDOWN = "https://developers.openai.com/api/docs/pricing.md";
 import { ModelProfileSchema, PriceCardSchema } from "../src/model/price-card";
 import { configuredProviderFromEnvironment } from "../src/dev/development-model-gateway";
 
-/**
- * Builds the mounted model pricing document for the OpenAI Responses adapter
- * from two captured public sources: OpenAI's Standard price table and an
- * executable BTC-USD market quote. Both are stored byte-for-byte with their
- * digests so every charge is attributable. Rates convert to sats and charges
- * round up. Input and output (including cached and reasoning tokens) are
- * billed at their published rates; nothing is discounted.
- *
- *   bun scripts/model-pricing.ts [--model gpt-5-mini] [--fresh-hours 72] > model-pricing.json
+/** Capture provider prices and normalize them into operator-defined credits.
+ * bun scripts/model-pricing.ts --credits-per-usd 1000/1 --policy-id credits-v1
+ * Each immutable price card retains the exact ratio and provider source bytes.
  */
 const arg = (name: string) => { const index = process.argv.indexOf(`--${name}`); return index > 0 ? process.argv[index + 1] : undefined; };
 const model = arg("model") ?? "gpt-5-mini";
 const freshHours = Number(arg("fresh-hours") ?? "72");
 if (!["gpt-5-mini", "gpt-5-mini-2025-08-07"].includes(model) || !Number.isInteger(freshHours) || freshHours < 1 || freshHours > 168) throw new Error("MODEL_PRICING_USAGE");
-const BTC_USD_TICKER_URL = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD";
+const ratioText = arg("credits-per-usd");
+const policyId = arg("policy-id");
+if (!ratioText || !/^[1-9][0-9]{0,35}\/[1-9][0-9]{0,35}$/u.test(ratioText) || !policyId || !/^[a-z][a-z0-9._-]{0,95}$/u.test(policyId)) throw new Error("CREDIT_PRICING_POLICY_REQUIRED");
+const [numerator, denominator] = ratioText.split("/") as [string, string];
+const ratio = { numerator, denominator };
+const policyBytes = canonicalJson({ id: policyId, creditsPerUsd: ratio });
+const policyUrl = `urn:napplet-cvm:credit-policy:${policyId}`;
+const conversion = { text: policyBytes, sha256: new Bun.CryptoHasher("sha256").update(policyBytes).digest("hex") };
 
 /** Every table in the first "Standard pricing data" section; exactly one row may match. */
 function standardPrices(markdown: string, name: string): { inputUsdPerMillion: string; outputUsdPerMillion: string } {
@@ -53,14 +55,10 @@ async function capture(url: string, accept: string): Promise<{ text: string; sha
 
 const observedAt = new Date();
 const freshUntil = new Date(observedAt.getTime() + freshHours * 3_600_000).toISOString();
-const [pricing, ticker] = await Promise.all([capture(OPENAI_PRICING_MARKDOWN, "text/markdown"), capture(BTC_USD_TICKER_URL, "application/json")]);
+const pricing = await capture(OPENAI_PRICING_MARKDOWN, "text/markdown");
 const prices = standardPrices(pricing.text, model.replace(/-2025-08-07$/u, ""));
-const quote = JSON.parse(ticker.text) as { error?: unknown[]; result?: Record<string, { c?: [string, string] }> };
-const last = Object.values(quote.result ?? {})[0]?.c?.[0];
-if ((quote.error && quote.error.length) || !last || !/^\d{1,9}(\.\d{1,8})?$/u.test(last)) throw new Error("BTC_USD_QUOTE_INVALID");
-const usdPerBtc = last.replace(/(\.\d*?)0+$/u, "$1").replace(/\.$/u, "");
-const input = satsPerToken(prices.inputUsdPerMillion, usdPerBtc);
-const output = satsPerToken(prices.outputUsdPerMillion, usdPerBtc);
+const input = creditsPerToken(prices.inputUsdPerMillion, ratio);
+const output = creditsPerToken(prices.outputUsdPerMillion, ratio);
 const source = (url: string, sha256: string) => ({ url, capturedBytesSha256: sha256, observedAt: observedAt.toISOString(), effectiveAt: observedAt.toISOString(), freshUntil });
 // The authoring guidance alone is ~61 KB; the request guard compares bytes to tokens.
 const maximumInputTokens = "128000";
@@ -70,12 +68,12 @@ const cardBody = {
   supportedDimensions: ["input_tokens", "output_tokens"], rates: { input_tokens: input, output_tokens: output, cached_tokens: input, reasoning_tokens: output },
   ceilings: { inputTokens: maximumInputTokens, outputTokens: maximumOutputTokens },
   validity: { notBefore: observedAt.toISOString(), notAfter: freshUntil },
-  sources: { provider: source(OPENAI_PRICING_MARKDOWN, pricing.sha256), conversion: source(BTC_USD_TICKER_URL, ticker.sha256) },
+  sources: { provider: source(OPENAI_PRICING_MARKDOWN, pricing.sha256), conversion: source(policyUrl, conversion.sha256) },
 };
 const cardId = `openai-${model}-${new Bun.CryptoHasher("sha256").update(canonicalJson(cardBody)).digest("hex").slice(0, 32)}`;
 const priceCard = PriceCardSchema.parse({ ...cardBody, id: cardId, version: cardId });
 const profile = ModelProfileSchema.parse({ id: `profile-${cardId}`, provider: "openai_responses", model, priceCardId: cardId, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: maximumInputTokens }, { dimension: "output_tokens", units: maximumOutputTokens }], deadlineMs: 300_000 });
-const document = { model, profile, priceCard, priceSources: { provider: { url: OPENAI_PRICING_MARKDOWN, capturedBytes: pricing.text, sha256: pricing.sha256 }, conversion: { url: BTC_USD_TICKER_URL, capturedBytes: ticker.text, sha256: ticker.sha256 } }, basis: { inputUsdPerMillion: prices.inputUsdPerMillion, outputUsdPerMillion: prices.outputUsdPerMillion, usdPerBtc } };
+const document = { model, profile, priceCard, priceSources: { provider: { url: OPENAI_PRICING_MARKDOWN, capturedBytes: pricing.text, sha256: pricing.sha256 }, conversion: { url: policyUrl, capturedBytes: conversion.text, sha256: conversion.sha256 } }, basis: { inputUsdPerMillion: prices.inputUsdPerMillion, outputUsdPerMillion: prices.outputUsdPerMillion, creditsPerUsd: ratio, policyId } };
 // Validate exactly as the service will, without a credential.
 await configuredProviderFromEnvironment({ apiKey: "validation-only", model, profile, priceCard, priceSources: document.priceSources });
 console.log(JSON.stringify(document));

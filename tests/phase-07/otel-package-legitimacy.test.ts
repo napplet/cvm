@@ -21,8 +21,8 @@ const scriptPath = `${repositoryRoot}/scripts/verify-phase-07-otel-packages.ts`;
 async function approvalFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-otel-approval-"));
   await Promise.all([
-    cp(packageJsonPath, join(root, "package.json")),
-    cp(bunLockPath, join(root, "bun.lock")),
+    cp(`${repositoryRoot}/tests/fixtures/otel-approved-root/package.json`, join(root, "package.json")),
+    cp(`${repositoryRoot}/tests/fixtures/otel-approved-root/bun.lock`, join(root, "bun.lock")),
     cp(`${repositoryRoot}/infra/otel/collector.yaml`, join(root, "infra/otel/collector.yaml"), { recursive: true }),
     cp(`${repositoryRoot}/infra/production/collector.Dockerfile`, join(root, "infra/production/collector.Dockerfile"), { recursive: true }),
     cp(`${repositoryRoot}/evidence/certification`, join(root, "evidence/certification"), { recursive: true }),
@@ -184,11 +184,13 @@ test("approval, pending, rejected, and drift records fail closed before approval
   }
 });
 
-test("approval-dependent root pins pass only for the current delegated approval", async () => {
+test("approval-dependent gates reject the changed application root until its separate approval is renewed", async () => {
   const approved = await approvalCli(repositoryRoot);
   const pins = await approvalCli(repositoryRoot, "--verify-root-pins");
-  expect(approved.code).toBe(0);
-  expect(pins.code).toBe(0);
+  expect(approved.code).not.toBe(0);
+  expect(pins.code).not.toBe(0);
+  expect(approved.stderr).toContain("APPROVAL_INPUT_DIGEST_DRIFT");
+  expect(pins.stderr).toContain("APPROVAL_INPUT_DIGEST_DRIFT");
 });
 
 test("a current-root renewal review measures the derived image without rewriting historic approval authority", async () => {

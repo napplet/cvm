@@ -1,3 +1,6 @@
+import { configurePaymentDiscovery } from "../payments/discovery";
+import { developmentCapacity, durableTimeline, safeGenerationDiagnostic } from "../service/shared";
+export { developmentCapacity, durableTimeline, safeGenerationDiagnostic } from "../service/shared";
 import { EncryptionMode } from "@contextvm/sdk/core";
 import { recoverRecordedReceipt } from "../dev/receipt-recovery";
 import { assertDevelopmentRootManifests } from "../dev/root-manifests";
@@ -24,7 +27,6 @@ import { DevelopmentChatGptRoutes } from "./chatgpt-routes";
 import type { ModelGateway } from "../model/model-gateway";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Wallet, getEncodedToken } from "@cashu/cashu-ts";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
 import { NostrServerTransport } from "@contextvm/sdk/transport";
 import { developmentStack, type DevPayments } from "../../scripts/dev-payments";
@@ -71,61 +73,16 @@ export type DevelopmentContextVmServer = Readonly<{
   close(): Promise<void>;
 }>;
 
-export function developmentCapacity(readiness: DevelopmentRuntimeReadiness): ReadyCapacityPort {
-  const reservations = new Map<string, Readonly<{ reference: string; expiresAt: string; binding: string }>>();
-  return {
-    async reserveNow(input) {
-      const found = reservations.get(input.intentReference);
-      const reservation = found ?? Object.freeze({ reference: `development-ready:${input.intentReference}`, expiresAt: new Date(Date.now() + 120_000).toISOString(), binding: input.expectedSessionBindingDigest });
-      reservations.set(input.intentReference, reservation);
-      return { status: "available" as const, reference: reservation.reference, expiresAt: reservation.expiresAt, usable: true as const, ready: { intentReference: input.intentReference, leaseReference: reservation.reference, sessionBindingDigest: reservation.binding, imageDigest: readiness.imageDigest, readinessProbeDigest: readiness.readinessProbeDigest, readyMonotonicMs: readiness.readyMonotonicMs } };
-    },
-    async observe(input) {
-      const reservation = reservations.get(input.intentReference);
-      if (!reservation || reservation.reference !== input.reference || reservation.binding !== input.expectedSessionBindingDigest) return { status: "unknown" as const, ...(input.reference ? { reference: input.reference } : {}) };
-      return { status: "available" as const, reference: reservation.reference, expiresAt: reservation.expiresAt, usable: true as const, ready: { intentReference: input.intentReference, leaseReference: reservation.reference, sessionBindingDigest: reservation.binding, imageDigest: readiness.imageDigest, readinessProbeDigest: readiness.readinessProbeDigest, readyMonotonicMs: readiness.readyMonotonicMs } };
-    },
-    async release(input) { reservations.delete(input.intentReference); },
-  };
-}
-
 async function sha256File(path: string): Promise<string> {
   return new Bun.CryptoHasher("sha256").update(await Bun.file(path).arrayBuffer()).digest("hex");
 }
 
 async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amount: number): Promise<string> {
-  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 10_000) throw new Error("DEV_CASHU_FAUCET_AMOUNT_INVALID");
-  const wallet = new Wallet(config.mintUrl);
-  await wallet.loadMint();
-  const quote = await wallet.createMintQuoteBolt11(amount);
-  const proofs = await wallet.mintProofsBolt11(amount, quote);
-  const localToken = getEncodedToken({ mint: config.mintUrl, unit: "sat", proofs });
-  return new TextDecoder().decode(app.applicationToken(localToken));
+  const { legacyPaymentModule } = await import("../payments/legacy-module");
+  const module = await legacyPaymentModule("src/faucet.ts", ["mintCashuToken"]);
+  return (module.mintCashuToken as (app: DevelopmentFunding, config: DevPayments, amount: number) => Promise<string>)(app, config, amount);
 }
 
-export function safeGenerationDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : "GENERATION_ERROR_REDACTED";
-  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined;
-  const safe = (value: string | undefined) => value && /^[A-Z][A-Z0-9_:-]{2,159}$/u.test(value) ? value : undefined;
-  return safe(cause) ?? safe(message) ?? "GENERATION_ERROR_REDACTED";
-}
-
-export async function durableTimeline(app: Pick<DevelopmentFunding, "pool">, accountId: string, sessionId: string): Promise<readonly Readonly<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: string; detail: string }>[]> {
-  const rows = await app.pool.query<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: Date | string; detail: string }>(`
-    SELECT 'source_recorded'::text AS stage, sp.created_at AS at, 'Source proposal recorded' AS detail FROM source_proposals sp WHERE sp.account_id=$1 AND sp.session_id=$2
-    UNION ALL SELECT 'provider_recorded'::text, po.created_at, 'Provider receipt recorded' FROM provider_observations po JOIN source_proposals sp ON sp.operation_id=po.operation_id WHERE sp.account_id=$1 AND sp.session_id=$2
-    UNION ALL SELECT 'provider_recorded'::text, ma.settled_at, 'Provider usage receipt committed' FROM usage_receipts ur JOIN metered_actions ma ON ma.id=ur.action_id WHERE ma.account_id=$1 AND ma.session_id=$2 AND ma.settled_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM provider_observations po WHERE po.operation_id=ma.operation_id)
-    UNION ALL SELECT 'worker_completed'::text, wr.completed_at, 'Isolated worker output persisted' FROM development_worker_results wr WHERE wr.account_id=$1 AND wr.session_id=$2 AND wr.completed_at IS NOT NULL
-    UNION ALL SELECT 'artifact_verified'::text, da.created_at, 'Verified artifact sealed' FROM development_artifacts da WHERE da.account_id=$1 AND da.session_id=$2
-    UNION ALL SELECT 'ledger_settled'::text, bli.committed_at, 'Metered ledger settled' FROM billing_line_items bli WHERE bli.account_id=$1 AND bli.session_id=$2 AND bli.kind IN ('receipt','debit')
-    ORDER BY at, stage`, [accountId, sessionId]);
-  return Object.freeze(rows.rows.map((row) => Object.freeze({ stage: row.stage, at: new Date(row.at).toISOString(), detail: row.detail })));
-}
-
-/**
- * Local development surface: assets, safe bootstrap facts, and model controls.
- * Account and payment commands always pass through ContextVM over the relay.
- */
 export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number; chatGptFetch?: ChatGptFetch }> = {}): Promise<DevelopmentContextVmServer> {
   if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
   const stack = options.testMode ? developmentStack(true) : undefined;
@@ -150,6 +107,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
   const bridge = new ContextVmSdkBridge(transport, ["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]);
   const progress = new DevelopmentProgressTransport(bridge);
+  configurePaymentDiscovery(bridge, app.payments.methods);
   remixImports = new DevelopmentRemixImports(app.pool, new LocalRemixSourceImporter(readiness.imageDigest), state => progress.emit("source_import", state));
   const accountStatus = new AccountStatusService({
     store: app.database.funding,
@@ -353,7 +311,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       }
     },
   };
-  new ContextVmFundingAdapter({ publicPreviewOrigin: process.env.NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN, service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
+  new ContextVmFundingAdapter({ publicPreviewOrigin: process.env.NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN, service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, payments: app.payments, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
     await interrupted.recover(await accountIdForPrincipal(query.principal), query.sessionId);
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;
@@ -376,7 +334,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         return { status: "failed", code, detail: details[code] ?? "The starting applet could not be verified. Check its address and try again; no generation was started." };
       }
     }),
-    service_info: async (input, pubkey) => { ServiceInfoArgumentsSchema.parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, estimates: await readGenerationEstimates(app.pool, pubkey, runtime.pricing, actionCeilingSat).catch(() => null), available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
+    service_info: async (input, pubkey) => { ServiceInfoArgumentsSchema.parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, estimates: await readGenerationEstimates(app.pool, pubkey, runtime.pricing, actionCeilingSat).catch(() => null), paymentMode: "adapters", paymentMethods: app.payments.methods, creditLabel: "credits", available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
     development_faucet: async input => { const { amount } = DevelopmentFaucetArgumentsSchema.parse(input); return { token: await mintCashuToken(app, config, Number(amount)) }; },
     development_publication: (input, pubkey) => publication.handle(input, pubkey),
     operation_diagnostic: async (input, pubkey) => {

@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { Pool } from "pg";
 import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { ProductionContinuationCoordinator } from "../../src/production/continuation-coordinator";

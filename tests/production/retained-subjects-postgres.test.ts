@@ -6,7 +6,7 @@ import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding
 import { bindAccountingRealmPool, createAccountingRealm } from "../../src/funding/accounting-realm";
 import { FundingService } from "../../src/funding/funding-service";
 import { SessionCapApprovalService } from "../../src/funding/session-cap";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import { PostgresSqlFundingStore } from "../../src/persistence/postgres-sql-funding-store";
 import { ContinuationService } from "../../src/continuity/continuation-service";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";

@@ -1,6 +1,6 @@
 ---
 id: 261110-dtq
-status: in_progress
+status: complete
 ---
 
 # Decouple payment implementations from CVM

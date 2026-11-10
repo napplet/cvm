@@ -5,7 +5,7 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 status: in_progress
 stopped_at: authoring tools and offline visual libraries verified; real-money activation remains incomplete
-last_updated: "2026-11-09"
+last_updated: "2026-11-10"
 progress:
   total_phases: 7
   completed_phases: 6
@@ -28,6 +28,7 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 
 | Task | Result |
 | --- | --- |
+| 261110-dtq | Generic credits, multiple external payment adapters and allowlisted free access; existing payments extracted privately and deployed with preserved identities/state. Original homelab live generation and reopen pass. Separate API service payment checks pass; its full generation is blocked by operator credential HTTP 401. See quick-task summary and verification. |
 | 261031-vgz | Remove speculative infrastructure architecture and simplify affected mainline history; see quick-task summary. |
 | 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified. See quick-task summary. |
 | 261109-i83 | Container startup diagnostics and complete control-image packaging; focused regression and offline runtime probes. Hosted validation is tracked on PR #114. |

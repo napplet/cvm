@@ -88,6 +88,14 @@ export class DevelopmentContextVmClient {
 
   async accountStatus(): Promise<any> { return this.callTool("account_status", {}); }
 
+  async fundPayment(input: Readonly<{ method: string; amount: string; token?: string; maxFee?: string }>): Promise<any> {
+    this.#client?.setClientPmis([input.method]);
+    const args = { idempotencyKey: `browser:payment:${crypto.randomUUID()}`, pmi: input.method, mode: "transparent", credits: input.amount, ...(input.maxFee !== undefined ? { maxFee: input.maxFee } : {}) };
+    const tags: PaymentTag[] = [["pmi", input.method], ["payment_interaction", "transparent"]];
+    if (input.token) tags.push(["direct_payment", input.method, input.token]);
+    return this.callTool("top_up", args, tags);
+  }
+
   async fundCashu(amount: string, feeCeiling?: string): Promise<any> {
     const { token } = await this.callTool("development_faucet", { amount });
     if (typeof token !== "string") throw new Error("LOCAL_CASHU_FAUCET_UNAVAILABLE");
@@ -133,7 +141,7 @@ export class DevelopmentContextVmClient {
 
   async sessionStatus(sessionId: string): Promise<any> { return this.callTool("session_status", { sessionId }); }
 
-  async reviseSession(input: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; idempotencyKey?: string }>): Promise<any> {
+  async reviseSession(input: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; repairOperationId?: string; idempotencyKey?: string }>): Promise<any> {
     return this.callTool("revise_session", { ...input, idempotencyKey: input.idempotencyKey ?? `browser:revision:${crypto.randomUUID()}` });
   }
 

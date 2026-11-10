@@ -34,6 +34,7 @@ export const StartSessionCommandSchema = z.object({
 /** A continuation is always a new paid action; callers cannot supply an artifact or workspace authority. */
 export const ReviseSessionCommandSchema = z.object({
   principal: PrincipalSchema, sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1),
+  repairOperationId: z.string().min(1).optional(),
   expectedVersion: z.number().int().nonnegative(), maximum: DecimalSchema, policyVersion: z.string().min(1), revision: z.string(),
 }).strict();
 /** Internal coordinator command. A client cannot select repair as a worker tool. */
@@ -88,7 +89,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; retainedPricing?: RetainedGenerationPricing; recoveryCommands?: GenerationCommandProtector; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; retainedPricing?: RetainedGenerationPricing; recoveryCommands?: GenerationCommandProtector; automaticValidationRepair?: boolean; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
 
   /** Internal continuation consumer. Decrypt and check retained compatibility
    * before the resume authority reserves funds or allocates a worker. This
@@ -233,9 +234,9 @@ export class MeteredGenerationService {
     const fingerprint = await hash({ accountId, command }); const key = `${accountId}\u0000${command.idempotencyKey}`;
     const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
     if (recorded?.fingerprint !== undefined && recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-    if (recorded?.result) return SessionActionResultSchema.parse(recorded.result);
+    if (recorded?.result) return this.#repairValidationFailure(command, SessionActionResultSchema.parse(recorded.result));
     const active = this.#inFlight.get(key); if (active) return active;
-    const run = this.execute(command, accountId, fingerprint).finally(() => this.#inFlight.delete(key));
+    const run = this.execute(command, accountId, fingerprint).then(result => this.#repairValidationFailure(command, result)).finally(() => this.#inFlight.delete(key));
     this.#inFlight.set(key, run); return run;
   }
 
@@ -253,9 +254,9 @@ export class MeteredGenerationService {
     const fingerprint = await hash({ accountId, command }); const key = `${accountId}\u0000${command.idempotencyKey}`;
     const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
     if (recorded?.fingerprint !== undefined && recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-    if (recorded?.result) return SessionActionResultSchema.parse(recorded.result);
+    if (recorded?.result) return this.#repairValidationFailure(command, SessionActionResultSchema.parse(recorded.result));
     const active = this.#inFlight.get(key); if (active) return active;
-    const run = this.execute(command, accountId, fingerprint, { bypassLegacyContinuation: true }).finally(() => this.#inFlight.delete(key));
+    const run = this.execute(command, accountId, fingerprint, { bypassLegacyContinuation: true }).then(result => this.#repairValidationFailure(command, result)).finally(() => this.#inFlight.delete(key));
     this.#inFlight.set(key, run); return run;
   }
 
@@ -274,7 +275,7 @@ export class MeteredGenerationService {
     const idempotencyKey = `${accountId}\u0000${command.idempotencyKey}`;
     const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
     if (recorded?.fingerprint !== undefined && recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-    if (recorded?.result) return SessionActionResultSchema.parse(recorded.result);
+    if (recorded?.result) return this.#repairValidationFailure(command, SessionActionResultSchema.parse(recorded.result));
     const active = this.#inFlight.get(idempotencyKey); if (active) return active;
     const run = this.#serializeSession(accountId, command.sessionId, async () => {
       const replay = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
@@ -284,26 +285,56 @@ export class MeteredGenerationService {
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
       if (!session) return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_LINEAGE_MISMATCH" });
       if (session.version !== command.expectedVersion) return SessionActionResultSchema.parse({ status: "denied", code: "STALE_SESSION_VERSION" });
-      if (session.status !== "verified") {
-        // A settled failed revision does not invalidate its prior verified source.
-        // A new explicit action may use that exact version; active/unknown/billing
-        // states remain fenced, and prepareMeteredAction still locks the lineage.
+      if (command.repairOperationId) {
+        const origin = (await this.options.store.listMeteredActionsForSession(accountId, command.sessionId)).find(action => action.operationId === command.repairOperationId);
+        if (session.status !== "failed" || origin?.status !== "failed" || origin.expectedVersion !== command.expectedVersion
+          || !origin.artifact?.failedArtifactId?.startsWith("proposal:sha256:") || !origin.artifact.validationReportReference?.startsWith("validation:sha256:")) {
+          return SessionActionResultSchema.parse({ status: "denied", code: "REPAIR_LINEAGE_UNAVAILABLE" });
+        }
+      } else if (session.status !== "verified") {
+        // A settled failed revision still has its prior verified source. An
+        // initial failure needs explicit approval of its retained compiler input.
         const hasVerifiedBase = session.status === "failed" && session.version > 0 &&
           (await this.options.store.listMeteredActionsForSession(accountId, command.sessionId)).some((action) =>
             action.status === "completed" && action.artifactVersion === (session.currentVerifiedArtifactVersion ?? session.version) && !!action.artifact?.artifactId);
         if (!hasVerifiedBase) return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_NOT_REVISION_READY" });
       }
       return this.execute(command, accountId, fingerprint);
-    }).finally(() => this.#inFlight.delete(idempotencyKey));
+    }).then(result => this.#repairValidationFailure(command, result)).finally(() => this.#inFlight.delete(idempotencyKey));
     this.#inFlight.set(idempotencyKey, run);
     return run;
+  }
+
+  /** One coordinator repair, funded from the original caller-approved maximum.
+   * Runs after serialization has released the root action's session lock. */
+  async #repairValidationFailure(command: StartSessionCommand | ReviseSessionCommand, result: SessionActionResult): Promise<SessionActionResult> {
+    if (!this.options.automaticValidationRepair || result.status !== "failed" || result.code !== "WORKER_OR_ARTIFACT_FAILED") return result;
+    const accountId = await accountIdForPrincipal(command.principal);
+    if (result.accountId !== accountId) throw new Error("REPAIR_OWNER_MISMATCH");
+    const origin = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
+    if (!origin || origin.fingerprint !== await hash({ accountId, command }) || origin.operationId !== result.operationId || origin.status !== "failed") return result;
+    const failure = origin.artifact;
+    if (!failure?.failedArtifactId?.startsWith("proposal:sha256:") || !failure.validationReportReference?.startsWith("validation:sha256:")) return result;
+    const key = `${command.idempotencyKey}:validation-repair`;
+    const recordedRepair = await this.options.store.findMeteredAction(accountId, key);
+    // A retained child keeps its original ceiling even after provider selection
+    // changes. Replays recover that exact operation instead of starting another.
+    const current = this.options.pricing ?? { profile: PHASE_04_MODEL_PROFILES["code-proposal"], card: PHASE_04_DETERMINISTIC_PRICE_CARD };
+    if (!recordedRepair && (origin.profileId !== current.profile.id || origin.priceCardId !== current.card.id || this.options.settlement)) return result;
+    const ceiling = recordedRepair?.maximum ?? BigInt(maximumOperationCharge(current));
+    if (!recordedRepair && (BigInt(origin.receiptCharge ?? "0") + ceiling > BigInt(command.maximum) || ceiling > BigInt(result.remainingCap))) return result;
+    return this.triggerValidationRepair({ principal: command.principal, sessionId: origin.sessionId, admissionReference: origin.admissionReference,
+      idempotencyKey: key, expectedVersion: origin.expectedVersion, maximum: ceiling.toString(), policyVersion: command.policyVersion,
+      originatingActionId: origin.actionId, originatingIdempotencyKey: origin.idempotencyKey,
+      workspaceLineage: failure.workspaceLineage, snapshotReference: failure.snapshotReference,
+      failedArtifactId: failure.failedArtifactId, validationReportReference: failure.validationReportReference });
   }
 
   /** Creates at most one coordinator-authorized repair action for a failed validation candidate. */
   async triggerValidationRepair(input: unknown): Promise<SessionActionResult> {
     const command = TriggerValidationRepairCommandSchema.parse(input);
     const accountId = await accountIdForPrincipal(command.principal);
-    const fingerprint = await hash({ accountId, command });
+    const fingerprint = await hash({ accountId, command: { ...command, repair: true } });
     const key = `${accountId}\u0000${command.idempotencyKey}`;
     const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
     if (recorded?.fingerprint !== undefined && recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
@@ -316,14 +347,21 @@ export class MeteredGenerationService {
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
       const sessionActions = await this.options.store.listMeteredActionsForSession(accountId, command.sessionId);
       const durableFailure = origin?.artifact;
-      if (!durableFailure?.failedArtifactId || !durableFailure.validationReportReference) {
+      if (!origin || !durableFailure?.failedArtifactId || !durableFailure.validationReportReference || origin.sessionId !== command.sessionId
+        || origin.actionId !== command.originatingActionId || origin.expectedVersion !== command.expectedVersion
+        || durableFailure.workspaceLineage !== command.workspaceLineage || durableFailure.snapshotReference !== command.snapshotReference
+        || durableFailure.failedArtifactId !== command.failedArtifactId || durableFailure.validationReportReference !== command.validationReportReference) {
         return SessionActionResultSchema.parse({ status: "denied", code: "REPAIR_LINEAGE_UNAVAILABLE" });
       }
+      // A root has one durable child identity across processes. Counting IDs
+      // alone cannot fence two differently keyed requests racing finalization.
+      if (command.idempotencyKey !== `${origin.idempotencyKey}:validation-repair`) return SessionActionResultSchema.parse({ status: "denied", code: "REPAIR_COMMAND_BINDING_DENIED" });
       const decision = evaluateAutomaticRepair({
         principalId: accountId, sessionId: command.sessionId, expectedVersion: command.expectedVersion, currentVersion: session?.version ?? -1,
         workspaceLineage: durableFailure.workspaceLineage, snapshotReference: durableFailure.snapshotReference, originatingActionId: command.originatingActionId, failedArtifactId: durableFailure.failedArtifactId, validationReportReference: durableFailure.validationReportReference,
         priorAutomaticRepairs: sessionActions.filter((action) => action.actionId.startsWith(`repair:${command.originatingActionId}:`)).length, permanentNappletPolicy: origin?.actionId === command.originatingActionId && origin.status === "failed" ? "pass" : "deny", actionAuthorized: true,
       });
+      if (origin.actionId.startsWith("repair:")) return SessionActionResultSchema.parse({ status: "denied", code: "AUTOMATIC_REPAIR_LIMIT_REACHED" });
       if (decision.status === "denied") return SessionActionResultSchema.parse({ status: "denied", code: decision.code });
       return this.execute({ ...command, repair: true }, accountId, fingerprint);
     }).finally(() => this.#inFlight.delete(key));
@@ -363,7 +401,7 @@ export class MeteredGenerationService {
     // identity while retaining lookup by the existing account-scoped command
     // key, so identical keys from different principals cannot collide.
     const actionId = "repair" in command
-      ? `repair:${(await hash({ accountId, sessionId, origin: command.originatingActionId, key: command.idempotencyKey })).slice(0, 24)}`
+      ? `repair:${command.originatingActionId}:${(await hash({ accountId, sessionId, origin: command.originatingActionId, key: command.idempotencyKey })).slice(0, 24)}`
       : "revision" in command
         ? `revision:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`
         : `start:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`;
@@ -437,7 +475,15 @@ export class MeteredGenerationService {
     const prompt = "repair" in command ? "Repair the charged focused napplet." : "revision" in command ? command.revision : command.idea;
     const currentSession = await this.options.store.sessionStatus(accountId, sessionId);
     const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId && (currentSession?.currentVerifiedArtifactVersion === undefined || item.artifactVersion === currentSession.currentVerifiedArtifactVersion)).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
-    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...("remixReference" in command && command.remixReference ? { remixReference: command.remixReference } : {}), ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
+    const repairOrigin = "repair" in command ? await this.options.store.findMeteredAction(accountId, command.originatingIdempotencyKey)
+      : "revision" in command && command.repairOperationId ? (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).find(action => action.operationId === command.repairOperationId) : undefined;
+    if ("revision" in command && command.repairOperationId && (!repairOrigin || repairOrigin.status !== "failed" || repairOrigin.expectedVersion !== command.expectedVersion
+      || !repairOrigin.artifact?.failedArtifactId?.startsWith("proposal:sha256:") || !repairOrigin.artifact.validationReportReference?.startsWith("validation:sha256:"))) throw new Error("REPAIR_LINEAGE_UNAVAILABLE");
+    if ("repair" in command && (!repairOrigin?.artifact?.failedArtifactId || repairOrigin.sessionId !== sessionId || repairOrigin.artifact.failedArtifactId !== command.failedArtifactId || repairOrigin.artifact.validationReportReference !== command.validationReportReference)) throw new Error("REPAIR_LINEAGE_UNAVAILABLE");
+    const validationRepair = repairOrigin?.artifact?.failedArtifactId?.startsWith("proposal:sha256:") ? {
+      originOperationId: repairOrigin.operationId, sourceReference: repairOrigin.artifact.failedArtifactId, reportReference: repairOrigin.artifact.validationReportReference,
+    } : undefined;
+    const intent = ProviderOperationIntentSchema.parse({ ...(validationRepair ? { validationRepair } : {}), operationId, providerRequestId, accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...("remixReference" in command && command.remixReference ? { remixReference: command.remixReference } : {}), ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
     if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
     let observation: z.infer<typeof ModelObservationSchema>;
@@ -471,7 +517,7 @@ export class MeteredGenerationService {
         await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
         return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
       }
-      const result = SessionActionResultSchema.parse({ status: "failed", code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
+      const result = SessionActionResultSchema.parse({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
       const finalized = await finalize({ idempotencyKey: prepared.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion });
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "failed");
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "succeeded");
@@ -532,7 +578,15 @@ export class MeteredGenerationService {
         if (canonicalJson(preparedAuthority) !== canonicalJson(baseAuthority) || (basePurpose !== undefined && preparedPurpose !== basePurpose)
           || (preparedPurpose !== undefined && preparedPurpose !== idea && preparedPurpose !== idea.trim())) throw new Error("WORKER_PREPARED_REQUEST_BINDING_DENIED");
         const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
-        if (workerResult.status !== "completed") completed = false;
+        if (workerResult.status !== "completed") {
+          completed = false;
+          if (workerResult.status === "validation_failed") {
+            if (!proposal || workerResult.failedArtifactId !== proposal.proposal.reference) throw new Error("WORKER_VALIDATION_SOURCE_MISMATCH");
+            failedArtifactId = workerResult.failedArtifactId;
+            validationReportReference = workerResult.validationReportReference;
+            validationEvidenceReference = workerResult.validationReportReference;
+          }
+        }
         else {
           const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: accountId }, sessionId, actionId: durableActionId, kind: "design", idempotencyKey: command.idempotencyKey, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, idea }, request, result: workerResult, events: workerResult.events });
           completed = Boolean(verified && (await evaluateArtifactContract(verified.contractInput)).verdict === "pass");

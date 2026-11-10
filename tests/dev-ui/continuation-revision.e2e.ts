@@ -48,16 +48,16 @@ async function preAdmissionCase(): Promise<void> {
   const browser = await chromium.launch({ headless: true }); let server = await createDevelopmentContextVmServer({ config, stateRoot, port: 0 });
   try {
     const page = await browser.newPage(); await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
+    await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
     await page.getByRole("button", { name: "Generate napplet" }).click();
     await page.getByText("Action saved; funding does not start it", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Resume" }).waitFor();
     if ((await page.locator("#timeline").textContent())?.includes("verified preview")) throw new Error("PRE_ADMISSION_EXECUTED_BEFORE_FUNDING");
     const stableUrl = server.url; await server.close();
     server = await createDevelopmentContextVmServer({ config, stateRoot, port: Number(new URL(stableUrl).port) });
-    await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
+    await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
     await page.getByRole("button", { name: "Resume" }).waitFor();
-    await page.getByLabel("Cashu amount (sats)").fill("4000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+    await page.getByLabel("Cashu amount (sats)").fill((BigInt(await page.getByLabel("Maximum (sats)").inputValue()) + 64n).toString()); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Resume" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
     const preview = page.frameLocator("#preview").frameLocator("iframe").first(); await preview.getByRole("button", { name: "Add" }).click(); await preview.getByText("1", { exact: true }).waitFor();
     await server.assertGenerationSettlement();
@@ -78,8 +78,12 @@ async function revisionCase(): Promise<void> {
   const browser = await chromium.launch({ headless: true }); let server = await createDevelopmentContextVmServer({ config, stateRoot, port: 0 });
   try {
     const page = await browser.newPage(); await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
-    await page.getByLabel("Cashu amount (sats)").fill("10000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
+    const approvalMaximum = BigInt(await page.getByLabel("Maximum (sats)").inputValue());
+  const pendingMaximum = (approvalMaximum + 1750n).toString();
+  for (let action = 0; action < 3; action++) {
+    await page.getByLabel("Cashu amount (sats)").fill((approvalMaximum + 64n).toString()); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+  }
     await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
     for (const revision of ["Make the counter label more direct", "Make the reset control clearer"]) {
       await page.getByLabel("Revision").fill(revision); await page.getByRole("button", { name: "Revise selected version" }).click();
@@ -95,18 +99,18 @@ async function revisionCase(): Promise<void> {
     }
     const versionText = await page.locator("#versions").textContent();
     if (!versionText?.includes("Version 1") || !versionText.includes("Version 2") || !versionText.includes("Version 3")) throw new Error("REVISION_HISTORY_MISSING");
-    await page.reload({ waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
+    await page.reload({ waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
     await eventually(async () => (await page.locator("#versions li").count()) === 3, "revision-restart-history");
     await page.getByRole("button", { name: /Version 1:/ }).click(); await eventually(async () => !(await page.locator("#preview").isHidden()), "prior-preview");
     const evidence = server.generationEvidence(); if (evidence.result?.status !== "completed" || evidence.result.artifactVersion !== 3) throw new Error("REVISION_SQL_VERSION_MISMATCH");
     await server.assertGenerationSettlement();
     // Exercise the same low-balance pending action after a populated revision
     // lineage, then restart before explicit funding/resume.
-    await page.getByLabel("Maximum (sats)").fill("5000"); await page.getByLabel("Focused idea").fill("A second focused counter that waits for funding");
+    await page.getByLabel("Maximum (sats)").fill(pendingMaximum); await page.getByLabel("Focused idea").fill("A second focused counter that waits for funding");
     await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Action saved; funding does not start it", { exact: true }).waitFor();
     const stableUrl = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot, port: Number(new URL(stableUrl).port) });
-    await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor(); await page.getByRole("button", { name: "Resume" }).waitFor();
-    await page.getByLabel("Cashu amount (sats)").fill("5000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+    await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor(); await page.getByRole("button", { name: "Resume" }).waitFor();
+    await page.getByLabel("Cashu amount (sats)").fill((BigInt(pendingMaximum) + 64n).toString()); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Resume" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
   } catch (error) {
     const safe = server.generationEvidence().error;
@@ -129,8 +133,12 @@ export async function runContinuationCase(caseName: "pre-admission-fund-restart-
 export async function runFullContinuationJourney(input: Readonly<{ page: Page; config: DevPayments; url: string; restart(): Promise<string>; observe?(stage: string): Promise<void> }>): Promise<Readonly<{ initialVersions: number; resumed: true }>> {
   const page = input.page;
   await page.goto(`${input.url}/dev`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
-  await page.getByLabel("Cashu amount (sats)").fill("10000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor(); await input.observe?.("cashu");
+  await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
+  const approvalMaximum = BigInt(await page.getByLabel("Maximum (sats)").inputValue());
+  const pendingMaximum = (approvalMaximum + 1750n).toString();
+  for (let action = 0; action < 3; action++) {
+    await page.getByLabel("Cashu amount (sats)").fill((approvalMaximum + 64n).toString()); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+  } await input.observe?.("cashu");
   await page.getByRole("button", { name: "Replay Cashu" }).click(); await page.getByText("Cashu replay credited once", { exact: true }).waitFor(); await input.observe?.("cashu-replay");
   await page.getByLabel("NWC amount (sats)").fill("64"); await page.getByRole("button", { name: "Fund with NWC" }).click(); await page.getByText("NWC credited", { exact: true }).waitFor({ timeout: 90_000 }); await input.observe?.("nwc");
   await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 }); await input.observe?.("generation");
@@ -142,11 +150,11 @@ export async function runFullContinuationJourney(input: Readonly<{ page: Page; c
   const initialVersions = await page.locator("#versions li").count();
   if (initialVersions !== 3) throw new Error("FULL_FLOW_INITIAL_VERSIONS_MISSING");
   await page.getByRole("button", { name: /Version 1:/ }).click();
-  await page.getByLabel("Maximum (sats)").fill("5000"); await page.getByLabel("Focused idea").fill("A second focused counter that waits for funding");
+  await page.getByLabel("Maximum (sats)").fill(pendingMaximum); await page.getByLabel("Focused idea").fill("A second focused counter that waits for funding");
   await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Action saved; funding does not start it", { exact: true }).waitFor(); await input.observe?.("pending-save");
   const restartedUrl = await input.restart();
-  await page.goto(`${restartedUrl}/dev`, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor(); await page.getByRole("button", { name: "Resume" }).waitFor(); await input.observe?.("post-restart");
-  await page.getByLabel("Cashu amount (sats)").fill("5000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor(); await input.observe?.("topup");
+  await page.goto(`${restartedUrl}/dev`, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor(); await page.getByRole("button", { name: "Resume" }).waitFor(); await input.observe?.("post-restart");
+  await page.getByLabel("Cashu amount (sats)").fill((BigInt(pendingMaximum) + 64n).toString()); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor(); await input.observe?.("topup");
   await page.getByRole("button", { name: "Resume" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 }); await input.observe?.("resume");
   return Object.freeze({ initialVersions, resumed: true as const });
 }

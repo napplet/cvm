@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "realm": "real",
+  "listen": {
+    "port": 8080
+  },
+  "origins": {
+    "public": "https://cvm.example.org",
+    "preview": "https://preview.cvm.example.org",
+    "blobs": "https://blobs.cvm.example.org",
+    "relay": "wss://cvm.example.org/relay"
+  },
+  "relay": {
+    "url": "ws://relay:8080"
+  },
+  "database": {
+    "adapter": "postgresql"
+  },
+  "storage": {
+    "adapter": "filesystem",
+    "root": "/var/lib/napplet-cvm"
+  },
+  "funding": {
+    "mode": "adapters",
+    "reserveSat": "3750",
+    "adapters": [
+      {
+        "id": "operator-payments",
+        "module": "/opt/operator-payments/src/adapter.ts",
+        "options": {
+          "credentialsFile": "/run/secrets/payments"
+        }
+      }
+    ]
+  },
+  "model": {
+    "adapter": "openai-responses",
+    "pricingFile": "/etc/napplet-cvm/model-pricing.json"
+  },
+  "worker": {
+    "adapter": "docker",
+    "image": "napplet-cvm/dev-worker:development",
+    "runtime": "runsc"
+  },
+  "policy": {
+    "version": "service-v1"
+  }
+}

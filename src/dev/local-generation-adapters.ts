@@ -4,7 +4,7 @@ import type { ArtifactContractInput } from "../policy/artifact-contract";
 import { LocalArtifactVerifier, type VerifiedArtifactFacts } from "./local-artifact-verifier";
 import { LocalArtifactRepository, type SealedArtifact } from "./local-artifact-repository";
 import { LocalNappletWorker, type WorkerOutput } from "./local-napplet-worker";
-import type { DurableWorkerResultStore } from "./durable-worker-result-store";
+import { DurableWorkerValidationError, type DurableWorkerResultStore } from "./durable-worker-result-store";
 import { canonicalJson } from "../promotion/schema";
 
 type Materialized = Readonly<{ output: WorkerOutput; request: WorkerRunRequest }>;
@@ -40,6 +40,13 @@ export class LocalProposalWorkerPort implements WorkerPort {
       this.#materialized.set(key, Object.freeze({ output, request }));
       return this.completed(request);
     } catch (error) {
+      if (error instanceof DurableWorkerValidationError) {
+        return {
+          status: "validation_failed", code: "WORKER_VALIDATION_FAILED",
+          failedArtifactId: `proposal:sha256:${sourceProposalSha256}`,
+          validationReportReference: error.reportReference,
+        };
+      }
       // Keep worker diagnostics server-side; the ContextVM projection remains
       // a stable unavailable result and never exposes build output to clients.
       console.error("development worker materialization failed", error instanceof Error ? error.message : "unknown");

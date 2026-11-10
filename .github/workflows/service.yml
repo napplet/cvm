@@ -1,0 +1,54 @@
+name: Service composition and deployment
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "patches/**"
+      - "package.json"
+      - "bun.lock"
+      - "infra/service/**"
+      - "infra/dev-ui/**"
+      - "scripts/production.ts"
+      - "scripts/migrate.ts"
+      - "scripts/model-pricing.ts"
+      - "scripts/service-flow.ts"
+      - "scripts/verify-restore.ts"
+      - "scripts/probe-worker-runtime.ts"
+      - "scripts/test-rails.ts"
+      - "tests/service/**"
+      - "tests/dev-ui/package.json"
+      - "tests/dev-ui/bun.lock"
+      - ".github/workflows/service.yml"
+permissions:
+  contents: read
+jobs:
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: deny
+      NAPPLET_RUN_POSTGRES_ISOLATION: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - run: bun install --cwd tests/dev-ui --frozen-lockfile
+      - name: Whole project with the pinned compiler
+        run: bunx --package typescript@5.9.3 tsc --noEmit --pretty false
+      - name: Config, realm, canonical migrations on real PostgreSQL, payment requests, model refusals, expiry, relays
+        run: bun test tests/service tests/dev/model-gateway-rejection.test.ts tests/dev/validation-failure.test.ts tests/dev/chatgpt-model-gateway.test.ts tests/dev/worker-diagnostic.test.ts tests/phase-04/automatic-validation-repair.test.ts tests/continuity/pending-action-expiry.test.ts tests/dev/publication-service-relay.test.ts tests/payments tests/contextvm --timeout 120000
+      - name: Service image boots fail-closed without mounted configuration
+        run: |
+          docker build -f infra/service/Dockerfile -t napplet-cvm/service:ci .
+          set +e; output="$(docker run --rm --network none napplet-cvm/service:ci 2>&1)"; code=$?; set -e
+          echo "$output"
+          test "$code" = 1
+          echo "$output" | grep -q 'SERVICE_MOUNT_UNAVAILABLE:/etc/napplet-cvm/service.json'
+      - name: Engine image installs the pinned gVisor runtime
+        run: docker build -f infra/service/engine.Dockerfile -t napplet-cvm/engine:ci .

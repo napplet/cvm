@@ -71,7 +71,7 @@ status: complete
 
 - `bun test tests/contextvm/adapter.test.ts` — 5 pass
 - `bun test` — 217 pass, 0 fail
-- `node /Users/sandwich/.codex/gsd-core/bin/gsd-tools.cjs check api-coverage.verify-pre .planning/phases/03-contextvm-funding-funded-admission` — pass (36 capabilities, 23 integrated, 13 explicit opt-outs)
+- `node $HOME/.codex/gsd-core/bin/gsd-tools.cjs check api-coverage.verify-pre .planning/phases/03-contextvm-funding-funded-admission` — pass (36 capabilities, 23 integrated, 13 explicit opt-outs)
 
 ## Files Created
 

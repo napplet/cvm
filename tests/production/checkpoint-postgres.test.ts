@@ -8,7 +8,7 @@ import { Pool } from "pg";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { bindAccountingRealmPool, createAccountingRealm } from "../../src/funding/accounting-realm";
 import { FundingService } from "../../src/funding/funding-service";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { assertProductionCheckpointSchema } from "../../src/production/checkpoint-schema";
 import { ProductionCheckpointCoordinator } from "../../src/production/checkpoint-coordinator";

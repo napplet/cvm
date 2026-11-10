@@ -6,7 +6,8 @@ import { WorkerRunRequestSchema, type WorkerRunRequest } from "../phase-02/contr
 import type { PostgresSqlClient } from "../persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../promotion/schema";
 import { collectArtifactFiles, readVerifiedArtifactFile } from "./local-artifact-verifier";
-import type { WorkerOutput } from "./local-napplet-worker";
+import { WorkerValidationError, type WorkerOutput } from "./local-napplet-worker";
+import { WorkerDiagnosticSchema } from "./worker-diagnostic";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Manifest = z.object({
@@ -16,8 +17,27 @@ const Manifest = z.object({
   commandEvidence: z.array(z.object({ name: z.enum(["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"]), exitCode: z.number().int(), stdout: z.string().max(40_000).optional(), stderr: z.string().max(20_000).optional() }).strict()).min(1).max(8),
   files: z.array(z.object({ path: z.string().min(1).max(256), sha256: Digest, bytes: z.number().int().min(0).max(2_000_000) }).strict()).min(1).max(256),
 }).strict();
-type Row = { request_sha256: string; operation_id: string; account_id: string; session_id: string; action_id: string; expected_version: number; proposal_sha256: string; toolchain_sha256: string; claim_token: string; state: "claimed" | "completed" | "failed"; manifest_sha256: string | null };
+type Row = { request_sha256: string; operation_id: string; account_id: string; session_id: string; action_id: string; expected_version: number; proposal_sha256: string; toolchain_sha256: string; claim_token: string; state: "claimed" | "completed" | "failed"; manifest_sha256: string | null; failure_json: unknown | null };
 const digest = (value: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+
+/** The complete repair input persisted for a compiler-only worker failure.
+ * Source bytes stay in source_proposals; this contains only the bounded
+ * diagnostic plus the immutable row binding needed to reject substitution. */
+export const WorkerValidationFailureSchema = z.object({
+  version: z.literal(1), operationId: z.string().min(1), accountId: z.string().min(1),
+  sessionId: z.string().min(1), actionId: z.string().min(1), expectedVersion: z.number().int().nonnegative(),
+  proposalSha256: Digest, toolchainSha256: Digest, diagnostic: WorkerDiagnosticSchema,
+}).strict();
+export type WorkerValidationFailure = z.infer<typeof WorkerValidationFailureSchema>;
+
+export class DurableWorkerValidationError extends Error {
+  readonly reportReference: string;
+  constructor(readonly failure: WorkerValidationFailure) {
+    super("WORKER_VALIDATION_FAILED");
+    this.name = "DurableWorkerValidationError";
+    this.reportReference = `validation:sha256:${digest(canonicalJson(failure))}`;
+  }
+}
 
 /** Private staging of unverified output. The artifact verifier still runs on every restore. */
 export class DurableWorkerResultStore {
@@ -55,7 +75,11 @@ export class DurableWorkerResultStore {
         signal?.throwIfAborted();
         const row = (await this.options.pool.query<Row>("SELECT * FROM development_worker_results WHERE operation_id=$1", [operationId])).rows[0];
         if (!row || row.request_sha256 !== requestSha256 || row.account_id !== accountId || row.toolchain_sha256 !== this.options.toolchainSha256) throw new Error("DEV_WORKER_RESULT_BINDING_INVALID");
-        if (row.state === "failed") throw new Error("DEV_WORKER_ORIGINAL_BUILD_FAILED");
+        if (row.state === "failed") {
+          const failure = this.validationFailure(row);
+          if (failure) throw new DurableWorkerValidationError(failure);
+          throw new Error("DEV_WORKER_ORIGINAL_BUILD_FAILED");
+        }
         if (row.manifest_sha256) {
           try {
             const result = await this.restore(row);
@@ -100,12 +124,35 @@ export class DurableWorkerResultStore {
       await this.options.pool.query("UPDATE development_worker_results SET state='completed',completed_at=now() WHERE request_sha256=$1 AND claim_token=$2 AND state='claimed'", [requestSha256, claim]);
       return await this.restore({ ...inserted.rows[0]!, state: "completed", manifest_sha256: manifestSha256 });
     } catch (error) {
-      if (!installed) await this.options.pool.query("UPDATE development_worker_results SET state='failed' WHERE request_sha256=$1 AND claim_token=$2 AND state='claimed'", [requestSha256, claim]).catch(() => undefined);
+      const failure = error instanceof WorkerValidationError ? WorkerValidationFailureSchema.parse({
+        version: 1, operationId, accountId, sessionId: request.sessionId, actionId: request.actionId,
+        expectedVersion: request.expectedVersion, proposalSha256, toolchainSha256: this.options.toolchainSha256,
+        diagnostic: error.diagnostic,
+      }) : undefined;
+      if (!installed) {
+        const recorded = await this.options.pool.query(
+          "UPDATE development_worker_results SET state='failed',failure_json=$3 WHERE request_sha256=$1 AND claim_token=$2 AND state='claimed' RETURNING request_sha256",
+          [requestSha256, claim, failure ?? null],
+        ).catch(() => undefined);
+        // A client result must never claim a replayable validation report
+        // unless that exact immutable failure reached PostgreSQL.
+        if (failure && recorded?.rows.length !== 1) throw new Error("DEV_WORKER_FAILURE_RECORDING_FAILED");
+      }
+      if (failure) throw new DurableWorkerValidationError(failure);
       throw error;
     } finally {
       await output?.cleanup();
       await rm(temporary, { recursive: true, force: true });
     }
+  }
+
+  private validationFailure(row: Row): WorkerValidationFailure | undefined {
+    if (!row.failure_json) return undefined;
+    const failure = WorkerValidationFailureSchema.safeParse(row.failure_json);
+    if (!failure.success) throw new Error("DEV_WORKER_FAILURE_REPORT_INVALID");
+    const value = failure.data;
+    if (value.operationId !== row.operation_id || value.accountId !== row.account_id || value.sessionId !== row.session_id || value.actionId !== row.action_id || value.expectedVersion !== row.expected_version || value.proposalSha256 !== row.proposal_sha256 || value.toolchainSha256 !== row.toolchain_sha256) throw new Error("DEV_WORKER_FAILURE_BINDING_INVALID");
+    return value;
   }
 
   private async restore(row: Row): Promise<WorkerOutput> {

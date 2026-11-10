@@ -6,7 +6,7 @@ import { createProductionReadyCapacity } from "../../src/production/worker-capac
 import { createWorkerDeploymentClients, createFlyMachinesHttpTransport, PRODUCTION_WORKER_POLICY } from "../../src/release/deployment/worker-clients";
 import { createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import type { ModalSandboxPort, ModalSdkPort } from "../../src/worker-adapters/modal-worker";
 import { FundingService } from "../../src/funding/funding-service";

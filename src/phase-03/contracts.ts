@@ -16,7 +16,7 @@ export const PrincipalSchema = z.object({
 
 export const VerifiedSettlementSchema = z.object({
   topUpId: z.string().min(1),
-  rail: z.enum(["lightning", "cashu"]),
+  rail: z.string().regex(/^[a-z][a-z0-9._-]{0,95}$/u),
   unit: z.literal("sat"),
   amount: DecimalSatSchema,
   externalReference: z.string().min(1),
@@ -58,7 +58,7 @@ export const AuthenticatedFundingCommandSchema = z.discriminatedUnion("kind", [
 
 export const AccountTopUpStatusSchema = z.object({
   topUpId: z.string().min(1), state: z.enum(["pending", "verifying", "settled", "credited", "failed", "reconciliation_pending"]),
-  amount: DecimalSatSchema, unit: z.literal("sat"), rail: z.enum(["lightning", "cashu"]), createdAt: z.iso.datetime(),
+  amount: DecimalSatSchema, unit: z.literal("sat"), rail: z.string().regex(/^[a-z][a-z0-9._-]{0,95}$/u), createdAt: z.iso.datetime(),
   safeDisplayReference: z.string().min(1).optional(), expiresAt: z.iso.datetime().optional(), verifiedAt: z.iso.datetime().optional(), settlementReference: z.string().min(1).optional(),
 }).strict();
 

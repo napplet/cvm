@@ -4,7 +4,7 @@ import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { accountIdForPrincipal,fingerprintAccountCommand } from "../../src/domain/account-command";
 import { AuthenticatedFundingCommandSchema } from "../../src/phase-03/contracts";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
 import { assertProductionAccountOwnerSchema } from "../../src/production/account-owner";

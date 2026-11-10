@@ -173,6 +173,7 @@ export const CheckpointTerminationResultSchema = z.discriminatedUnion("status", 
 export const WorkerRunResultSchema = z.discriminatedUnion("status", [
   WorkerProposalSchema,
   z.object({ status: z.literal("completed"), code: z.literal("WORKER_PROPOSALS_VALIDATED"), events: CompletedWorkerEventsSchema, artifact: WorkerArtifactSchema, checkpoint: CheckpointProposalSchema.optional() }).strict(),
+  z.object({ status: z.literal("validation_failed"), code: z.literal("WORKER_VALIDATION_FAILED"), failedArtifactId: z.string().regex(/^proposal:sha256:[a-f0-9]{64}$/u), validationReportReference: z.string().regex(/^validation:sha256:[a-f0-9]{64}$/u) }).strict(),
   z.object({ status: z.literal("unavailable"), code: z.literal("WORKER_UNAVAILABLE") }).strict(),
   z.object({ status: z.literal("interrupted"), code: z.literal("WORKER_INTERRUPTED") }).strict(),
   z.object({ status: z.literal("limited"), code: z.literal("WORKER_TURN_LIMIT") }).strict(),

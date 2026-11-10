@@ -63,10 +63,11 @@ export async function readOperatorJob(pool: Pick<PostgresSqlClient, "query">, id
     LEFT JOIN provider_observations o ON o.operation_id=a.operation_id
     WHERE j.kind='action' AND j.id=$1`, [id])).rows[0];
   if (!row) return null;
-  const [billing, worker, artifacts] = await Promise.all([
+  const [billing, worker, artifacts, modelTurns] = await Promise.all([
     pool.query("SELECT kind,amount_sat,committed_at FROM billing_line_items WHERE action_id=$1 ORDER BY sequence", [id]),
     pool.query("SELECT state,completed_at FROM development_worker_results WHERE action_id=$1", [id]),
     pool.query("SELECT artifact_id,version,aggregate_sha256,created_at FROM development_artifacts WHERE action_id=$1", [id]),
+    pool.query("SELECT turn_index,provider_response_id,receipt_json FROM development_model_turn_evidence WHERE operation_id=$1 ORDER BY turn_index", [row.operation_id]),
   ]);
-  return { ...row, billing: billing.rows, worker: worker.rows, artifacts: artifacts.rows };
+  return { ...row, modelTurns: modelTurns.rows, billing: billing.rows, worker: worker.rows, artifacts: artifacts.rows };
 }

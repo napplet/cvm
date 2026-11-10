@@ -1,4 +1,4 @@
-name: Development payment e2e
+name: Credit accounting e2e
 
 on:
   workflow_dispatch:
@@ -9,6 +9,9 @@ on:
       - "infra/dev-publication/**"
       - "scripts/dev-*.ts"
       - "src/funding/**"
+      - "src/payments/**"
+      - "tests/payments/**"
+      - "tests/service/**"
       - "src/persistence/**"
       - "src/domain/**"
       - "src/phase-03/**"
@@ -51,8 +54,7 @@ jobs:
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
       - name: Verify the pinned native AMD64 development relay
         run: bun scripts/probe-development-relay.ts
-      - name: Prove PostgreSQL production accounting isolation
-        run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/production/account-owner-postgres.test.ts tests/funding/production-accounting-realm.test.ts tests/funding/lightning-lost-create-postgres.test.ts tests/funding/cashu-treasury-recovery.test.ts tests/release/postgres-operation-journal.test.ts --timeout 120000
-      - name: Verify original payment recovery contracts
-        run: bun test tests/funding/protected-rail-material.test.ts tests/funding/lightning-lost-create.test.ts tests/funding/lightning-top-up.test.ts tests/funding/cashu-treasury-recovery.test.ts tests/funding/cashu-top-up.test.ts --timeout 10000
-      - run: bun scripts/dev-payments.ts test
+      - name: Generic adapters, replay, conversion, signed routing and free admission
+        run: bun test tests/payments tests/persistence/postgres-sql-funding-store.test.ts --timeout 10000
+      - name: Real PostgreSQL upgrade, concurrent credit grants and restart
+        run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/service/migrations-postgres.test.ts tests/production/account-owner-postgres.test.ts tests/release/postgres-operation-journal.test.ts --timeout 120000

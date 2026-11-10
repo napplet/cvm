@@ -10,7 +10,7 @@ The local Cashu and NWC services use test money. The workspace can fund these au
 | ChatGPT subscription development | Uses the operator’s authorized subscription account | Actual usage counts with local test-sat rates; upstream subscription usage may count. |
 | Configured API provider | Uses the operator’s API credentials | Billable provider usage with configured, source-attributed price evidence. |
 
-The service advertises the current action ceiling. Review the maximum shown for your action rather than relying on a number from an old screenshot; operator settings can change rates for new work.
+The service advertises the maximum for generation plus up to one automatic compiler correction. Review the maximum shown for your request rather than relying on a number from an old screenshot; operator settings can change rates for new work. Both attempts share that approved maximum, and each has its own actual usage charge. A correction never retries a model call whose outcome is uncertain.
 
 ## What each request costs
 

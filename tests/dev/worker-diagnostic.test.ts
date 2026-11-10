@@ -11,6 +11,10 @@ test("compiler diagnostics retain location and argument counts without raw outpu
   expect(JSON.stringify(other)).not.toContain("PRIVATE_MODEL_TEXT");
 });
 
+test("the observed TS18046 callback-narrowing failure remains a bounded repairable diagnostic", () => {
+  expect(parseWorkerDiagnostic("src/main.ts(218,120): error TS18046: 'sub' is of type 'unknown'.")).toEqual({ file: "src/main.ts", line: 218, column: 120, code: "TS18046" });
+});
+
 test("diagnostic parser rejects paths, malformed locations and arbitrary messages", () => {
   for (const line of ["/private/main.ts(1,2): error TS2554: secret", "src/../main.ts(1,2): error TS2554: secret", "src/main.ts(0,2): error TS2554: secret", "src/main.ts(99999,2): error TS2554: secret", "src/main.ts(1,2): error INJECTED: secret"]) expect(parseWorkerDiagnostic(line)).toBeUndefined();
   const diagnostic = parseWorkerDiagnostic("src/main.ts(1,2): error TS2554: <script>PRIVATE</script>");

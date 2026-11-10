@@ -14,7 +14,7 @@ import { createAuthorizationRequest, createAuthorizationReceipt } from "../../..
 import { ProductionCertificationCoreServices } from "../../../src/production/certification-services";
 import { createProductionReadyCapacity } from "../../../src/production/worker-capacity";
 import { ProductionUnusedAdmissionRelease } from "../../../src/production/unused-admission";
-import { PostgresFundingDatabase } from "../../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../../src/persistence/postgres-credit-database";
 import { FundingService } from "../../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../../src/funding/funded-admission";
 import { HmacAdmissionReceiptAuthority } from "../../../src/funding/admission-receipt";

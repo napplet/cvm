@@ -10,6 +10,8 @@ RUN case "$TARGETARCH" in \
 ADD --checksum=sha256:7d66183c30454ec40ca2458d38dedde827fa1f8b58a2fbcd25a3b7d1c3bf538b https://codeload.github.com/napplet/boilerplate/tar.gz/cbbebe9bd56271277b054535c0a8d720a588f61d /tmp/boilerplate.tgz
 RUN chmod 0555 /usr/local/bin/napplet && mkdir -p /opt/template /work /output /home/napplet && tar -xzf /tmp/boilerplate.tgz -C /opt/template --strip-components=1 && chmod -R a+rX /opt/template && chmod 0777 /work /output /home/napplet
 RUN corepack enable && corepack prepare pnpm@10.8.0 --activate
+# Scaffold-owned visual libraries, with a committed frozen transitive graph.
+COPY visual-dependencies/package.json visual-dependencies/pnpm-lock.yaml /opt/template/
 RUN cp -a /root/.cache/node/corepack/v1/pnpm/10.8.0 /opt/pnpm && cd /opt/template && node /opt/pnpm/bin/pnpm.cjs install --frozen-lockfile --ignore-scripts --store-dir /opt/pnpm-store && chmod -R a+rx /opt/pnpm /opt/pnpm-store
 RUN cd /opt/template && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' && chmod -R a+rx /opt/ms-playwright
 COPY authoring-skills /opt/authoring-skills

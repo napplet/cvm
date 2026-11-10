@@ -99,12 +99,14 @@ test("bootstrap is fixed-mount only and assembles concrete server controls from 
   expect(text).not.toContain("Bun.argv");
 });
 
-test("production entrypoint starts the fixed bootstrap rather than accepting authority injection", async () => {
+test("production entrypoint boots the provider-neutral service from fixed mounts without Google or certification machinery", async () => {
   const text = await readFile(productionScript, "utf8");
-  expect(text).toContain("openMountedProductionHttpBootstrap()");
-  expect(text).toContain("if (import.meta.main) await startProductionServer()");
-  expect(text).not.toContain("ProductionRuntimeAuthority");
-  expect(text).not.toContain("observeAdmissionOperation:");
+  expect(text).toContain("loadServiceConfig()");
+  expect(text).toContain("createServiceRuntime({ config })");
+  expect(text).toContain("if (import.meta.main)");
+  for (const forbidden of ["openMountedProductionHttpBootstrap", "src/production/", "google", "Certification", "applyCanonicalMigrations", "ProductionRuntimeAuthority", "process.env", "Bun.argv"]) expect(text).not.toContain(forbidden);
+  const service = await readFile(new URL("../../src/service/server.ts", import.meta.url), "utf8");
+  for (const forbidden of ["google-auth-library", "../production/", "Certification", "applyCanonicalMigrations", "development_faucet", "ChatGpt"]) expect(service).not.toContain(forbidden);
 });
 
 test("normal mounted boot rejects an invalid fixed config before opening any provider authority", async () => {

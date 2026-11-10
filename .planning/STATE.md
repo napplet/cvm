@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 status: in_progress
-stopped_at: infrastructure detour removed; provider-neutral application wiring remains
-last_updated: "2026-10-31"
+stopped_at: authoring tools and offline visual libraries verified; real-money activation remains incomplete
+last_updated: "2026-11-10"
 progress:
   total_phases: 7
   completed_phases: 6
@@ -14,11 +14,11 @@ progress:
 ---
 # Project State
 
-The existing private CVM runs on homelab Beta/Coolify with development/test credits. Preserve its identity, credentials, projects, artifacts and audit history. Production real-money operation is incomplete.
+Existing operator deployments may contain development/test credits. Preserve its identity, credentials, projects, artifacts and audit history. Production real-money operation is incomplete.
 
 ## Current instruction
 
-Provider-neutral application. Simple container deployment using Ansible on homelab or VPS, or the existing Coolify lifecycle. Google Cloud is excluded. Reuse existing SQL/storage/model/worker/telemetry interfaces; configure adapters. No enterprise platform, cluster, separate provider graph or successor authorization scheme.
+Provider-neutral application. Simple container deployment using Ansible on an operator-selected host or VPS. Google Cloud is excluded. Reuse existing SQL/storage/model/worker/telemetry interfaces; configure adapters. No enterprise platform, cluster, separate provider graph or successor authorization scheme.
 
 The non-google-v1 architecture and its native core/edge/host-preflight work are withdrawn. Former agent owners and handoffs are inactive and must not be resumed. The old Google production activation path remains disabled. See [deployment](../docs/architecture/provider-neutral-deployment.md).
 
@@ -28,4 +28,11 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 
 | Task | Result |
 | --- | --- |
+| PR #115 CI repair | Restore portable core suites and generic SQL fixtures; isolate provider CI privately; regenerate contracts; add public free-service and payment-selection browser E2E plus a CI test-path guard. See `.planning/debug/pr-115-ci.md`. |
+| 261110-dtq | Generic credits, multiple external payment adapters and allowlisted free access; existing payments extracted privately and deployed with preserved identities/state. Original homelab live generation and reopen pass. Separate API service payment checks pass; its full generation is blocked by operator credential HTTP 401. See quick-task summary and verification. |
 | 261031-vgz | Remove speculative infrastructure architecture and simplify affected mainline history; see quick-task summary. |
+| 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified. See quick-task summary. |
+| 261109-i83 | Container startup diagnostics and complete control-image packaging; focused regression and offline runtime probes. Hosted validation is tracked on PR #114. |
+| 261109-j5i | Separate portable application deployment instructions from operator-owned inventories, automation and live records. |
+| 261109-kc1 | Preserve compiler failure evidence and run one metered correction within the signed maximum; explicit owner approval when another budget is needed. 111 focused tests, four PostgreSQL checks, Chromium approval regression and pinned TypeScript pass. |
+| 261109-mxi | Callable napplet skills and read-only Nostrbook MCP in both model modes; bounded conversations, immutable turn usage and offline Three.js/GSAP. Focused tests, PostgreSQL, worker/artifact/Chromium and OAuth/returning-project browser checks pass. |

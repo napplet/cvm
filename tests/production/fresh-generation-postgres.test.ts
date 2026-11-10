@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { Pool } from "pg";
 import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { createPostgresWorkerOperationJournal, createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";

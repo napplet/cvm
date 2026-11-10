@@ -27,5 +27,88 @@
       "name": "napplet-test",
       "sha256": "379075f316244711f6e7ef2a8c35231ff2a12d78ba565d5e9514e9451b1f6f3a"
     }
+  ],
+  "resources": [
+    {
+      "name": "gsap-core",
+      "sha256": "3887b47e050ab5afbe2a9a820f23d39fa02ab785e06a343be44c6f91d84d12b3",
+      "repository": "https://github.com/greensock/gsap-skills",
+      "revision": "aed9cfd3277740755f6bfc1155c7aa645403b760",
+      "license": "MIT",
+      "licenseFile": "gsap-LICENSE",
+      "licenseSha256": "51b04b06556662dd817e8f4aa6d06bc7139dc73739e1319a7233cfde3e147b90"
+    },
+    {
+      "name": "gsap-timeline",
+      "sha256": "1a8b0f39cc4be3ed3d834b89672e4ae2f151b901dc3450bebf10bbc45379fe02",
+      "repository": "https://github.com/greensock/gsap-skills",
+      "revision": "aed9cfd3277740755f6bfc1155c7aa645403b760",
+      "license": "MIT",
+      "licenseFile": "gsap-LICENSE",
+      "licenseSha256": "51b04b06556662dd817e8f4aa6d06bc7139dc73739e1319a7233cfde3e147b90"
+    },
+    {
+      "name": "gsap-utils",
+      "sha256": "1927bcc4ea95b38203404ad5ea1d060b15c4a886c65ae53e885ff1793aabe0ba",
+      "repository": "https://github.com/greensock/gsap-skills",
+      "revision": "aed9cfd3277740755f6bfc1155c7aa645403b760",
+      "license": "MIT",
+      "licenseFile": "gsap-LICENSE",
+      "licenseSha256": "51b04b06556662dd817e8f4aa6d06bc7139dc73739e1319a7233cfde3e147b90"
+    },
+    {
+      "name": "gsap-performance",
+      "sha256": "cb5408d6fba707aabcbfe3320317a14c1f8fca6070074e5261047930f50d441e",
+      "repository": "https://github.com/greensock/gsap-skills",
+      "revision": "aed9cfd3277740755f6bfc1155c7aa645403b760",
+      "license": "MIT",
+      "licenseFile": "gsap-LICENSE",
+      "licenseSha256": "51b04b06556662dd817e8f4aa6d06bc7139dc73739e1319a7233cfde3e147b90"
+    },
+    {
+      "name": "threejs-fundamentals",
+      "sha256": "cb6a0db8f05bb7d8196cad0ca6ae245e2baec53da4675e1b94be4fa735ed8a09",
+      "repository": "https://github.com/CloudAI-X/threejs-skills",
+      "revision": "0e181866f095b5f06d005133876e926515390d95",
+      "license": "MIT",
+      "licenseFile": "threejs-LICENSE",
+      "licenseSha256": "d26f12fa1a0e03fd5aa4d3cbf05262a9f1c684672d0864abac78b3bbb12b268c"
+    },
+    {
+      "name": "threejs-lighting",
+      "sha256": "f12faf79625a7f42952124a5456d338e8399a65e16326c1a6a3239aa8e5ce489",
+      "repository": "https://github.com/CloudAI-X/threejs-skills",
+      "revision": "0e181866f095b5f06d005133876e926515390d95",
+      "license": "MIT",
+      "licenseFile": "threejs-LICENSE",
+      "licenseSha256": "d26f12fa1a0e03fd5aa4d3cbf05262a9f1c684672d0864abac78b3bbb12b268c"
+    },
+    {
+      "name": "threejs-shaders",
+      "sha256": "8dc55ed6cc348abaad60851ae9f3f5ebcc6e3027dd7f7a55acc1832c73f11bca",
+      "repository": "https://github.com/CloudAI-X/threejs-skills",
+      "revision": "0e181866f095b5f06d005133876e926515390d95",
+      "license": "MIT",
+      "licenseFile": "threejs-LICENSE",
+      "licenseSha256": "d26f12fa1a0e03fd5aa4d3cbf05262a9f1c684672d0864abac78b3bbb12b268c"
+    },
+    {
+      "name": "threejs-postprocessing",
+      "sha256": "0063f5f544215748ed666d878f1d69112094e662792228445a3ab9a56d209fb1",
+      "repository": "https://github.com/CloudAI-X/threejs-skills",
+      "revision": "0e181866f095b5f06d005133876e926515390d95",
+      "license": "MIT",
+      "licenseFile": "threejs-LICENSE",
+      "licenseSha256": "d26f12fa1a0e03fd5aa4d3cbf05262a9f1c684672d0864abac78b3bbb12b268c"
+    },
+    {
+      "name": "threejs-performance",
+      "sha256": "dacbf6a43ed280bdfcda2ce9fcf7a3f0ae54c25ed264e62f6e9a0117d6534285",
+      "repository": "https://github.com/CloudAI-X/threejs-skills",
+      "revision": "0e181866f095b5f06d005133876e926515390d95",
+      "license": "MIT",
+      "licenseFile": "threejs-LICENSE",
+      "licenseSha256": "d26f12fa1a0e03fd5aa4d3cbf05262a9f1c684672d0864abac78b3bbb12b268c"
+    }
   ]
 }

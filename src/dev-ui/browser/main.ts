@@ -1,3 +1,5 @@
+import { selectPaymentMethod } from "./payment-selection";
+import { PaymentMethodSchema, type PaymentMethod } from "../../payments/contracts";
 import { RemixWorkspace } from "./remix-workspace";
 import { NappletDiscovery } from "./napplet-discovery";
 import { ProjectsWorkspace, type Project, type ProjectScope } from "./projects-workspace";
@@ -29,7 +31,7 @@ let selected: Version | undefined;
 let currentVersion: Version | undefined;
 let sessionVersion = 0;
 let pendingRestore: { action: "restore"; id: string; artifactId: string; expectedVersion: number; idempotencyKey: string } | undefined;
-let lastRevision: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; idempotencyKey: string }> | undefined;
+let lastRevision: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; repairOperationId?: string; idempotencyKey: string }> | undefined;
 const versions: Version[] = [];
 
 const product = (/\/(dev|console.html)$/.test(location.pathname)) ? undefined : new ProductWorkspace(app, bootstrap);
@@ -77,12 +79,12 @@ function setError(value = ""): void {
   setGenerationStatus(uncertain ? activity.generationResponded ? "Generation stopped; provider outcome unconfirmed" : "Outcome unconfirmed; check session status" : "Action stopped; see error below");
 
 }
-function setBalance(account: Readonly<{ available: string; held?: string }>): void { balance = account.available; const held = account.held ?? "0"; byId("balance").textContent = `Available: ${balance} sats · held: ${held} sats · settled: ${BigInt(balance) + BigInt(held)} sats`; }
+function setBalance(account: Readonly<{ available: string; held?: string }>): void { balance = account.available; const held = account.held ?? "0"; byId("balance").textContent = `Available: ${balance} credits · held: ${held} credits · settled: ${BigInt(balance) + BigInt(held)} credits`; }
 function facts(values: Record<string, unknown>): void { const list = byId<HTMLDListElement>("generation-facts"); list.replaceChildren(...Object.entries(values).flatMap(([key, value]) => { const term = document.createElement("dt"); term.textContent = key; const detail = document.createElement("dd"); detail.textContent = String(value); return [term, detail]; })); }
 function appendTimeline(label: string, detail: string): void { const item = document.createElement("li"); item.textContent = `${label}: ${detail}`; byId("timeline").append(item); }
 function savePending(value: PendingAction | undefined): void { pending = value; if (value) sessionStorage.setItem(pendingStorageKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingStorageKey); renderPending(); }
 function restorePending(): PendingAction | undefined { try { const value = JSON.parse(sessionStorage.getItem(pendingStorageKey) ?? "null"); return value && typeof value.checkpointId === "string" && typeof value.reference === "string" && typeof value.fingerprint === "string" && typeof value.maximum === "string" && typeof value.shortfall === "string" && Number.isSafeInteger(value.expiresAtMs) ? value : undefined; } catch { return undefined; } }
-function renderPending(): void { const section = byId("continuation"); if (!pending) { section.hidden = true; return; } section.hidden = false; byId("pending-status").textContent = `Saved action needs ${pending.shortfall} more sats before an explicit resume. Expires ${new Date(pending.expiresAtMs).toLocaleString()}.`; }
+function renderPending(): void { const section = byId("continuation"); if (!pending) { section.hidden = true; return; } section.hidden = false; byId("pending-status").textContent = `Saved action needs ${pending.shortfall} more credits before an explicit resume. Expires ${new Date(pending.expiresAtMs).toLocaleString()}.`; }
 function validMaximum(value: string): boolean { try { return BigInt(value) >= BigInt(bootstrap.actionCeilingSat); } catch { return false; } }
 async function selectVersion(version: Version): Promise<any> { const descriptor = await client!.preview({ sessionId: version.sessionId, artifactId: version.artifactId }); if (descriptor?.status !== "ready" || typeof descriptor.previewUrl !== "string") throw new Error("PREVIEW_NOT_READY"); const frame = byId<HTMLIFrameElement>("preview"); const previewUrl = new URL(descriptor.previewUrl); if (product) previewUrl.searchParams.set("presentation", "workspace"); frame.src = previewUrl.href; frame.hidden = false; selected = version; void publishing?.version(); byId<HTMLButtonElement>("revise").disabled = activity.running; product?.selected(version); renderVersions(); return descriptor; }
 function renderVersions(): void { const list = byId<HTMLUListElement>("versions"); list.replaceChildren(...versions.map((version) => { const item = document.createElement("li"); const button = document.createElement("button"); button.disabled = activity.running; button.textContent = `Version ${version.version}: ${version.artifactId}`; button.onclick = () => { void selectVersion(version).then(() => facts({ selectedVersion: version.version, artifact: version.artifactId })).catch((error) => setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`)); }; item.append(button); return item; })); product?.versions(versions, selected, async (version) => { try { await selectVersion(version); facts({ selectedVersion: version.version, artifact: version.artifactId }); } catch (error) { setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`); } }, currentVersion); }
@@ -134,18 +136,24 @@ if (product) {
   publishing?.identity.onChange(() => { ++estimateReview; product.estimates(null, false, "create"); if (!byId("setup-step").hidden) void reviewCreationEstimate(); });
 }
 async function refresh(): Promise<void> { if (client) setBalance(await client.accountStatus()); }
-async function preview(action: any): Promise<void> { sessionVersion = action.sessionVersion; if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; currentVersion = version; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); product?.actionCharge(action.confirmedSpend); product?.completed(version); }
-async function hydrateSession(sessionId: string): Promise<boolean> {
+async function preview(action: any): Promise<void> { sessionVersion = action.sessionVersion; if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; currentVersion = version; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} credits`); product?.actionCharge(action.confirmedSpend); product?.completed(version); }
+async function hydrateSession(sessionId: string, preservePreview = false): Promise<boolean> {
   costSessionId = sessionId;
   const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return false;
   versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
   sessionVersion = status.session.version;
   currentVersion = versions.find(v => v.artifactId === status.session.latestVerifiedArtifact?.id);
   renderVersions(); renderDurableTimeline(status.session); const latest = currentVersion;
-  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); await refreshCosts(); return true; }
+  const repair = typeof status.session.failedValidationOperationId === "string" ? { sessionId, expectedVersion: status.session.version, operationId: status.session.failedValidationOperationId } : undefined;
+  // Refresh failure/repair facts without reissuing a grant or reloading the
+  // already verified iframe: its URL and in-memory applet state stay intact.
+  if (preservePreview && selected?.sessionId === sessionId && byId<HTMLIFrameElement>("preview").getAttribute("src")) {
+    product?.sessionState(status.session.state); product?.repairAvailable(repair); await refreshCosts(); return true;
+  }
+  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); product?.repairAvailable(repair); await refreshCosts(); return true; }
   await selectVersion(latest);
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
-  product?.completed(latest, true); product?.sessionState(status.session.state); await refreshCosts(); void refreshEstimates();
+  product?.completed(latest, true); product?.sessionState(status.session.state); product?.repairAvailable(repair); await refreshCosts(); void refreshEstimates();
   return true;
 }
 
@@ -178,10 +186,10 @@ product?.onSessionStatusCheck(async () => {
   currentVersion = versions.find(v => v.artifactId === status.session.latestVerifiedArtifact?.id);
   renderVersions(); renderDurableTimeline(status.session);
   facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction });
-  product.sessionState(status.session.state); costSessionId = sessionId; await refreshCosts();
+  product.sessionState(status.session.state); product.repairAvailable(typeof status.session.failedValidationOperationId === "string" ? { sessionId, expectedVersion: status.session.version, operationId: status.session.failedValidationOperationId } : undefined); costSessionId = sessionId; await refreshCosts();
 });
 
-async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status.session); await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); void refreshEstimates(); }
+async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") { renderDurableTimeline(status.session); product?.repairAvailable(undefined); } await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); void refreshEstimates(); }
 
 byId<HTMLButtonElement>("connect").onclick = async () => {
   const button = byId<HTMLButtonElement>("connect"); button.disabled = true;
@@ -196,13 +204,17 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
     const connected = await client.connect();
     const info = await client.callTool("service_info", {});
     Object.assign(bootstrap, { reserveSat: info.reserveSat, actionCeilingSat: info.actionCeilingSat, providerLabel: info.providerLabel });
+    developmentService = info.development !== false;
+    paymentMode = info.paymentMode === "free" ? "free" : "adapters";
+    paymentMethods = Array.isArray(info.paymentMethods) ? info.paymentMethods.map((method: unknown) => PaymentMethodSchema.parse(method)) : [];
+    if (paymentMode === "free") setFundingStatus("Access provided by the operator. No payment required.");
     product?.configuration(); product?.estimates(info.estimates);
     if (!product && byId<HTMLInputElement>("maximum").value === "3750") byId<HTMLInputElement>("maximum").value = info.actionCeilingSat;
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account);
     connectedControls.forEach((control) => control.disabled = false); byId("provider-mode").textContent = bootstrap.providerLabel;
     const ownerAvailable = !owner || owner === connected.pubkey;
     const stored = restorePending();
-    if (stored && ownerAvailable) { const status = await client.pendingActionStatus(stored.checkpointId); if (status?.status === "saved") { savePending(status); appendTimeline("saved action", `shortfall ${status.shortfall} sats`); } else savePending(undefined); }
+    if (stored && ownerAvailable) { const status = await client.pendingActionStatus(stored.checkpointId); if (status?.status === "saved") { savePending(status); appendTimeline("saved action", `shortfall ${status.shortfall} credits`); } else savePending(undefined); }
     const sessionId = sessionStorage.getItem(sessionStorageKey);
     if (hasSavedWork && !ownerAvailable) setError("Reconnect this applet’s original Nostr signer to reopen it. Your saved work is still available in Your applets.");
     if (sessionId && ownerAvailable) {
@@ -221,9 +233,10 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
 byId<HTMLButtonElement>("cashu").onclick = async () => { try { setFundingStatus("Cashu payment pending"); const payment = await client!.fundCashu(byId<HTMLInputElement>("cashu-amount").value); await refresh(); setFundingStatus(payment?.state === "credited" ? "Cashu credited" : "Cashu credit unconfirmed; check account status before retrying"); } catch { setFundingStatus("Cashu credit unconfirmed; check account status before retrying"); } };
 byId<HTMLButtonElement>("cashu-replay").onclick = async () => { try { const payment = await client!.replayCashu(); await refresh(); setFundingStatus(payment?.state === "credited" ? "Cashu replay credited once" : "Cashu replay unconfirmed; check account status"); } catch { setFundingStatus("Cashu replay unconfirmed; check account status"); } };
 byId<HTMLButtonElement>("nwc").onclick = async () => { try { setFundingStatus("NWC settlement pending"); const payment = await client!.fundNwc(byId<HTMLInputElement>("nwc-amount").value); if (typeof payment?.topUpId !== "string") throw new Error("NWC_TOP_UP_ID_MISSING"); setFundingStatus(`NWC settlement pending (${payment.topUpId})`); for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 500)); const account = await client!.accountStatus(); setBalance(account); if (account.topUps?.find((item: any) => item.topUpId === payment.topUpId)?.state === "credited") { setFundingStatus("NWC credited"); return; } } setFundingStatus("NWC settlement unconfirmed; check account status before retrying"); } catch { setFundingStatus("NWC settlement unconfirmed; check account status before retrying"); } };
-byId<HTMLButtonElement>("generate").onclick = async () => { const button = byId<HTMLButtonElement>("generate"); button.disabled = true; setError(); try { const maximum = byId<HTMLInputElement>("maximum").value; const idea = byId<HTMLInputElement>("idea").value.trim(); if (!idea || !validMaximum(maximum)) throw new Error("Enter a focused idea and a maximum at or above the action ceiling"); const remixReference = await remix?.prepare(client!); const idempotencyKey = `browser:pending-start:${crypto.randomUUID()}`; if (BigInt(balance) < BigInt(maximum)) { setGenerationStatus("Saving action for explicit funding and resume"); const saved = await client!.savePreAdmission({ maximum, idea, idempotencyKey, ...(remixReference ? { remixReference } : {}) }); if (saved?.status === "saved") { savePending(saved); appendTimeline("saved action", `shortfall ${saved.shortfall} sats`); setGenerationStatus("Action saved; funding does not start it"); return; } if (saved?.status !== "funded_admission_required") throw new Error(saved?.code ?? "PENDING_ACTION_NOT_SAVED"); } setGenerationStatus("Request status: reserving ready isolated capacity"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); setGenerationStatus("Request status: creating metered proposal and isolated build"); await complete(await runGeneration({ kind: "start", input: { admissionReference: admission.admissionReference, maximum, idea, idempotencyKey, ...(remixReference ? { remixReference } : {}) } })); } catch (error) { setError(`Generation unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client; } };
+byId<HTMLButtonElement>("generate").onclick = async () => { const button = byId<HTMLButtonElement>("generate"); button.disabled = true; setError(); try { const maximum = byId<HTMLInputElement>("maximum").value; const idea = byId<HTMLInputElement>("idea").value.trim(); if (!idea || !validMaximum(maximum)) throw new Error("Enter a focused idea and a maximum at or above the action ceiling"); const remixReference = await remix?.prepare(client!); const idempotencyKey = `browser:pending-start:${crypto.randomUUID()}`; if (paymentMode !== "free" && BigInt(balance) < BigInt(maximum)) { setGenerationStatus("Saving action for explicit funding and resume"); const saved = await client!.savePreAdmission({ maximum, idea, idempotencyKey, ...(remixReference ? { remixReference } : {}) }); if (saved?.status === "saved") { savePending(saved); appendTimeline("saved action", `shortfall ${saved.shortfall} credits`); setGenerationStatus("Action saved; funding does not start it"); return; } if (saved?.status !== "funded_admission_required") throw new Error(saved?.code ?? "PENDING_ACTION_NOT_SAVED"); } setGenerationStatus("Request status: reserving ready isolated capacity"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); setGenerationStatus("Request status: creating metered proposal and isolated build"); await complete(await runGeneration({ kind: "start", input: { admissionReference: admission.admissionReference, maximum, idea, idempotencyKey, ...(remixReference ? { remixReference } : {}) } })); } catch (error) { setError(`Generation unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client; } };
 byId<HTMLButtonElement>("resume").onclick = async () => { if (!pending) return; const button = byId<HTMLButtonElement>("resume"); button.disabled = true; setError(); let step = "funded admission"; try { setGenerationStatus("Request status: accepting original maximum"); const admission = await client!.fundAdmission(pending.maximum, `browser:pending-admission:${pending.checkpointId}`); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); step = "pending action"; setGenerationStatus("Request status: resuming saved action"); const action = await runGeneration({ kind: "resume", input: { ...pending, admissionReference: admission.admissionReference, idempotencyKey: `browser:pending-resume:${pending.checkpointId}` } }); await complete(action); appendTimeline("resumed action", "accepted admission and exact pending action completed"); savePending(undefined); } catch (error) { setError(`Resume unavailable during ${step}: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !pending; } };
 byId<HTMLButtonElement>("revise").onclick = async () => { if (!selected) return; const button = byId<HTMLButtonElement>("revise"); button.disabled = true; setError(); try { if (selected.artifactId !== currentVersion?.artifactId) throw new Error("Restore this version or return to the current version before editing"); const revision = byId<HTMLInputElement>("revision").value.trim(); const maximum = byId<HTMLInputElement>("maximum").value; if (!revision || !validMaximum(maximum)) throw new Error("Enter a bounded revision and valid maximum"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); lastRevision = Object.freeze({ sessionId: selected.sessionId, admissionReference: admission.admissionReference, expectedVersion: sessionVersion, maximum, revision, idempotencyKey: `browser:revision:${crypto.randomUUID()}` }); setGenerationStatus("Request status: verifying revision"); await complete(await runGeneration({ kind: "revise", input: lastRevision })); byId<HTMLButtonElement>("replay-revision").disabled = false; } catch (error) { setError(`Revision unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !selected; } };
+product?.onRepair(async candidate => { const maximum = byId<HTMLInputElement>("maximum").value; if (!validMaximum(maximum)) throw new Error("Choose a valid maximum before approving the compiler correction."); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); lastRevision = Object.freeze({ sessionId: candidate.sessionId, admissionReference: admission.admissionReference, expectedVersion: candidate.expectedVersion, maximum, repairOperationId: candidate.operationId, revision: "Correct the retained TypeScript errors while preserving this applet’s purpose.", idempotencyKey: `browser:compiler-repair:${crypto.randomUUID()}` }); setGenerationStatus("Request status: sending approved compiler correction"); await complete(await runGeneration({ kind: "revise", input: lastRevision })); byId<HTMLButtonElement>("replay-revision").disabled = false; });
 byId<HTMLButtonElement>("replay-revision").onclick = async () => { if (!lastRevision) return; const button = byId<HTMLButtonElement>("replay-revision"); button.disabled = true; setError(); try { setGenerationStatus("Request status: replaying the signed revision request"); await complete(await runGeneration({ kind: "revise", input: lastRevision })); } catch (error) { setError(`Revision replay unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !lastRevision; } };
 
 // Keep the exact authorized request across reloads. Recovery reuses its admission
@@ -258,13 +271,39 @@ async function runGeneration(request: GenerationRequest): Promise<any> {
         if (details.diagnostic?.code) result.code = `${result.code} · ${/SIGN_IN|REAUTHORIZE|PLAN_PERMISSION/.test(details.diagnostic.code) ? "The CVM provider account needs operator attention." : chatGptErrorMessage(details.diagnostic.code)}`;
       } catch { /* The original generation result remains authoritative. */ }
     }
-    if (interrupted) result.code += " · This attempt couldn’t finish. Your saved version and draft are safe. You can send your change again or edit it first. No local test charge was taken for this attempt; your subscription may still have counted its usage.";
+    if (interrupted) result.code += " · This attempt couldn’t finish. Your saved version and draft are safe. You can send your change again or edit it first. No credit charge was taken for this attempt; your subscription may still have counted its usage.";
+    if (typeof result?.sessionId === "string") await hydrateSession(result.sessionId, true).catch(() => undefined);
   }
   return result;
 }
+let developmentService = true;
+let paymentMode: "free" | "adapters" = "adapters";
+let paymentMethods: readonly PaymentMethod[] = [];
+/** Ask the configured adapter for payment instructions, then observe committed credits. */
+async function fundShortfall(shortfall: bigint, maximum: string): Promise<void> {
+  const selected = await selectPaymentMethod(paymentMethods);
+  const topUp = await client!.fundPayment({ method: selected.method.id, amount: String(shortfall), token: selected.token, maxFee: selected.maxFee });
+  if (topUp?.state === "credited") { await refresh(); return; }
+  if (topUp?.status !== "payment_required") throw new Error("PAYMENT_NOT_CONFIRMED");
+  setFundingStatus(`Add ${shortfall} credits with ${selected.method.label}. ${topUp.paymentRequest ?? ""}`);
+  if (topUp.checkoutUrl) {
+    const url = new URL(topUp.checkoutUrl);
+    if (url.protocol !== "https:" || url.username || url.password) throw new Error("PAYMENT_URL_INVALID");
+    const link = document.createElement("a"); link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Open payment page"; byId("funding-status").append(link);
+  }
+  if (typeof topUp.paymentRequest === "string") { try { await navigator.clipboard?.writeText(topUp.paymentRequest); } catch { /* Clipboard is optional. */ } }
+  const deadline = Date.now() + 10 * 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000)); await refresh();
+    if (BigInt(balance) >= BigInt(maximum)) { setFundingStatus("Credits received"); return; }
+  }
+  throw new Error("PAYMENT_NOT_CONFIRMED: your saved action can resume after funding");
+}
 async function prepareTestFunds(maximum: string): Promise<void> {
+  if (paymentMode === "free") return;
   await refresh();
   const shortfall = BigInt(maximum) - BigInt(balance); if (shortfall <= 0n) return;
+  if (!developmentService) return fundShortfall(shortfall, maximum);
   // Cashu submits a gross bearer amount. Reserve the explicit, bounded user
   // fee ceiling so a verified net credit actually reaches the requested cap.
   const feeCeiling = 64n;
@@ -280,7 +319,7 @@ if (product) byId<HTMLButtonElement>("recover").onclick = async () => {
   setError(); await complete(await runGeneration(request)); if (request.kind === "resume") savePending(undefined);
 };
 // One visual action spans admission, generation and opening its verified preview.
-const actionButtons = ["generate", "resume", "revise", "replay-revision", ...(product ? ["recover"] : [])];
+const actionButtons = ["generate", "resume", "revise", "replay-revision", ...(product ? ["approve-repair", "recover"] : [])];
 for (const id of actionButtons) {
   const button = byId<HTMLButtonElement>(id); const run = button.onclick!;
   button.onclick = async (event) => {

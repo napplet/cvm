@@ -4,16 +4,21 @@ const image = process.argv[2];
 const modalBilling = process.argv[3] === "--modal-billing";
 if (process.argv.length > (modalBilling ? 4 : 3)) throw new Error("CONTROL_IMAGE_PROBE_ARGUMENT_INVALID");
 if (!image || !/^sha256:[a-f0-9]{64}$/u.test(image)) throw new Error("EXACT_CONTROL_IMAGE_DIGEST_REQUIRED");
-const files = ["package.json", "bun.lock", "scripts/production.ts", "scripts/test-production-control-image.ts", "src/production/bootstrap.ts", "migrations/phase-07/014_production_durability_subjects.sql"];
+const files = [
+  "package.json", "bun.lock", "scripts/production.ts", "scripts/test-production-control-image.ts", "src/production/bootstrap.ts", "src/service/server.ts",
+  "migrations/phase-07/014_production_durability_subjects.sql", "tests/dev-ui/package.json", "tests/dev-ui/bun.lock",
+  "infra/dev-ui/source-capabilities.ts", "infra/dev-ui/authoring-skills.ts", "infra/dev-ui/authoring-skills/source.json", "infra/dev-ui/host-source.json", "infra/dev-ui/run-proposal.ts",
+  "infra/vendor/napplet-cli/bundle/entry.js", "infra/vendor/napplet-publication/bundle/entry.js",
+];
 const modalLockPath = "infra/production/modal-billing/requirements-linux-amd64.lock";
 const modalLock = modalBilling ? await readFile(new URL(`../${modalLockPath}`, import.meta.url), "utf8") : undefined;
 const modalLockSha256 = modalLock === undefined ? undefined : new Bun.CryptoHasher("sha256").update(modalLock).digest("hex");
 const expected = Object.fromEntries(await Promise.all(files.map(async path => [path, new Bun.CryptoHasher("sha256").update(await readFile(new URL(`../${path}`, import.meta.url))).digest("hex")])));
 
-async function command(args: string[]) {
+async function command(args: string[], timeoutMs = 30_000) {
   const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill(); }, 30_000);
+  const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
   async function bounded(stream: ReadableStream<Uint8Array>) {
     const reader = stream.getReader(), chunks: Uint8Array[] = []; let size = 0;
     try {
@@ -96,11 +101,15 @@ try {
 
 const probe = `
 import { readFile, stat, lstat, realpath, readdir, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { verifyDevelopmentHostFiles } from "./src/dev/development-runtime-readiness.ts";
+import { runBoundedDevelopmentCommand } from "./src/dev/local-napplet-worker.ts";
+import { loadAuthoringSkills } from "./infra/dev-ui/authoring-skills.ts";
+import { buildStaticWorkspace } from "./src/dev-ui/static-assets.ts";
 import { loadPinnedCliNetworkHelpers } from "./src/production/pinned-cli-network.ts";
 import { loadPinnedDirectCliNetworkHelpers } from "./src/production/pinned-direct-cli-network.ts";
 import { MODAL_BILLING_PYTHON, pinnedModalBillingLaunch, runPinnedModalBillingReport } from "./src/release/deployment/modal-billing-report.ts";
 if (process.getuid?.() !== 65532) throw new Error("CONTROL_IMAGE_UID_INVALID");
-for (const path of ["src", "scripts", "vendor", "node_modules"]) {
+for (const path of ["src", "scripts", "vendor", "node_modules", "infra", "tests/dev-ui", "/opt/napplet-cvm-browsers", "/usr/local/bin/docker"]) {
   const metadata = await stat(path);
   if (metadata.uid !== 0 || (metadata.mode & 0o022) !== 0) throw new Error("CONTROL_IMAGE_SOURCE_WRITABLE");
 }
@@ -110,26 +119,59 @@ const paths = ${JSON.stringify(files)};
 const hashes = Object.fromEntries(await Promise.all(paths.map(async path => [path, new Bun.CryptoHasher("sha256").update(await readFile(path)).digest("hex")])));
 const temporary = process.env.TMPDIR + "/proof";
 await writeFile(temporary, "disposable proof"); await rm(temporary);
+// Exercise the actual service's imports and post-configuration assets offline.
+// Missing configuration alone cannot prove these runtime dependencies exist.
+await import("./scripts/production.ts");
+const hostSha256 = await verifyDevelopmentHostFiles();
+const skills = await loadAuthoringSkills();
+const paja = await import("./tests/dev-ui/node_modules/@kehto/paja");
+if (typeof paja.startPajaServer !== "function" || !Array.isArray(paja.PAJA_SIMULATION_DOMAINS)) throw new Error("CONTROL_IMAGE_PREVIEW_RUNTIME_UNAVAILABLE");
+const workspace = await buildStaticWorkspace({ relayUrl: "wss://relay.invalid", servicePubkey: "0".repeat(64) });
+if (!workspace.get("index.html") || !workspace.get("app.js")) throw new Error("CONTROL_IMAGE_WORKSPACE_UNAVAILABLE");
+const docker = await runBoundedDevelopmentCommand(["docker", "--version"], { deadlineMs: 10000, maxBytes: 8192 });
+if (docker.exitCode !== 0 || !docker.stdout.startsWith("Docker version 29.9.2,")) throw new Error("CONTROL_IMAGE_DOCKER_CLI_UNAVAILABLE");
+// Match readiness's bounded child process, preserving the probe's no-network,
+// read-only filesystem and dropped-capability restrictions. Only about:blank
+// and fixed inline markup are loaded; no generated code or provider is used.
+const browser = await runBoundedDevelopmentCommand([process.execPath, "--eval", ${JSON.stringify(`
+  const { chromium } = await import("/app/tests/dev-ui/node_modules/playwright");
+  const browser = await chromium.launch({ headless: true, timeout: 20000 });
+  try {
+    const page = await browser.newPage();
+    await page.goto("about:blank");
+    await page.setContent("<title>cvm-image-proof</title>");
+    if (await page.title() !== "cvm-image-proof") throw new Error("CONTROL_IMAGE_BROWSER_CONTENT_FAILED");
+    console.log(JSON.stringify({ browserVersion: browser.version() }));
+  } finally { await browser.close(); }
+`)}], { deadlineMs: 55000, maxBytes: 8192 });
+if (browser.exitCode !== 0) throw new Error("CONTROL_IMAGE_BROWSER_UNAVAILABLE:" + browser.stderr.slice(0, 1000));
+const browserVersion = JSON.parse(browser.stdout.trim()).browserVersion;
+const browserPins = JSON.parse(await readFile("tests/dev-ui/node_modules/playwright-core/browsers.json", "utf8"));
+if (browserVersion !== browserPins.browsers.find(item => item.name === "chromium").browserVersion) throw new Error("CONTROL_IMAGE_BROWSER_VERSION_MISMATCH");
+const runtimeEvidence = { hostSha256, skillsSha256: skills.sha256, workspaceBuilt: true, previewRuntimeLoaded: true, dockerVersion: docker.stdout.trim(), browserVersion };
 ${modalProbe}
-console.log(JSON.stringify({ hashes, uid: process.getuid(), helpers: true, ${modalBilling ? "modalEvidence" : "modalEvidence: undefined"} }));
+console.log(JSON.stringify({ hashes, uid: process.getuid(), helpers: true, runtimeEvidence, ${modalBilling ? "modalEvidence" : "modalEvidence: undefined"} }));
 `;
 const probeName = `cvm-control-probe-${crypto.randomUUID()}`, bootName = `cvm-control-boot-${crypto.randomUUID()}`;
 const names = [probeName, bootName];
 let modalEvidence: unknown;
+let runtimeEvidence: unknown;
 const restrictions = ["--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp/napplet-cvm:rw,noexec,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=700"];
 try {
   const inspected = await command(["image", "inspect", "--format", "{{.Id}}", image]);
   if (inspected.code || inspected.stdout.trim() !== image) throw new Error("CONTROL_IMAGE_IDENTITY_MISMATCH");
-  const result = await command(["run", "--name", probeName, ...restrictions, "--entrypoint", "bun", image, "--eval", probe]);
+  const result = await command(["run", "--name", probeName, ...restrictions, "--entrypoint", "bun", image, "--eval", probe], 90_000);
   if (result.code) throw new Error(`CONTROL_IMAGE_PROBE_FAILED:${result.stderr.slice(0, 500)}`);
   const observed: unknown = JSON.parse(result.stdout);
   if (!observed || typeof observed !== "object" || !("hashes" in observed) || JSON.stringify(observed.hashes) !== JSON.stringify(expected)) throw new Error("CONTROL_IMAGE_SOURCE_MISMATCH");
+  if (!("runtimeEvidence" in observed) || !observed.runtimeEvidence) throw new Error("CONTROL_IMAGE_RUNTIME_PROOF_MISSING");
+  runtimeEvidence = observed.runtimeEvidence;
   if (modalBilling) {
     if (!("modalEvidence" in observed) || !observed.modalEvidence) throw new Error("MODAL_IMAGE_PROOF_MISSING");
     modalEvidence = observed.modalEvidence;
   }
   const boot = await command(["run", "--name", bootName, ...restrictions, image]);
-  if (boot.code !== 1 || !boot.stderr.includes("PRODUCTION_CONFIG_MOUNT_UNAVAILABLE")) throw new Error(`CONTROL_IMAGE_BOOT_NOT_FAIL_CLOSED:${boot.stderr.slice(0, 500)}`);
+  if (boot.code !== 1 || !boot.stderr.includes("SERVICE_MOUNT_UNAVAILABLE:/etc/napplet-cvm/service.json")) throw new Error(`CONTROL_IMAGE_BOOT_NOT_FAIL_CLOSED:${boot.stderr.slice(0, 500)}`);
 } finally {
   for (const name of names) {
     await command(["rm", "--force", name]);
@@ -137,4 +179,4 @@ try {
     if (absent.code !== 1 || !/No such (?:object|container)/iu.test(absent.stderr)) throw new Error("CONTROL_IMAGE_CLEANUP_UNCONFIRMED");
   }
 }
-console.log(JSON.stringify({ localControlImage: image, network: "none", uid: 65532, pinnedHelpersLoaded: true, sourceHashes: expected, missingConfiguration: "refused", cleanup: "confirmed-absent", releaseEvidence: false, ...(modalBilling ? { modalEvidence } : {}) }));
+console.log(JSON.stringify({ localControlImage: image, network: "none", uid: 65532, pinnedHelpersLoaded: true, sourceHashes: expected, runtimeEvidence, missingConfiguration: "refused", cleanup: "confirmed-absent", releaseEvidence: false, ...(modalBilling ? { modalEvidence } : {}) }));

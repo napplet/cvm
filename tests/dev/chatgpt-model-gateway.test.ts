@@ -9,12 +9,14 @@ import { chatGptFixture } from "../fixtures/chatgpt";
 function setup() {
   const fixture = chatGptFixture(); const records = new Map<string, { intent: string; observation?: ModelDispatchObservation; diagnostic?: ChatGptDiagnostic }>(); const proposals: any[] = []; const observations: any[] = []; const receipts = new Map<string, any>();
   const operations: ChatGptOperations = {
+    async hasClaim(intent) { return records.has(intent.operationId); },
     async claim(intent) { if (records.has(intent.operationId)) return false; records.set(intent.operationId, { intent: JSON.stringify(intent) }); return true; },
     async read(intent) { const row = records.get(intent.operationId); if (row && row.intent !== JSON.stringify(intent)) throw new Error("OPERATION_BINDING_MISMATCH"); return row?.observation; },
     async complete(intent, observation, diagnostic) { Object.assign(records.get(intent.operationId)!, { observation, diagnostic }); },
     async diagnostic(intent) { return records.get(intent.operationId)?.diagnostic; },
   };
   const store = {
+    async recordModelTurn() {},
     async recordUsageEvidence(input: any) { receipts.set(input.intent.operationId, input.receipt); },
     async lookupUsageEvidence(intent: any) { return receipts.get(intent.operationId); },
     async persist(input: any) { const proposal = { reference: `proposal:sha256:${"a".repeat(64)}`, sha256: "a".repeat(64), ...input.proposal }; proposals.push(input); return { proposal } as any; },
@@ -32,10 +34,11 @@ test("streamed completion records real usage, synthetic pricing, supported reque
   const { gateway, fixture, intent, proposals, options } = setup();
   const result = await gateway.dispatch(intent, signal()); expect(result.status).toBe("completed"); if (result.status !== "completed") throw new Error("missing completion");
   expect(result.receipt.usage).toEqual([{ dimension: "input_tokens", units: "1200" }, { dimension: "output_tokens", units: "800" }]);
-  expect(priceReceipt({ receipt: result.receipt, ...gateway.pricing })).toMatchObject({ status: "priced", total: "3" }); expect(maximumOperationCharge(gateway.pricing)).toBe("395");
+  expect(priceReceipt({ receipt: result.receipt, ...gateway.pricing })).toMatchObject({ status: "priced", total: "3" }); expect(maximumOperationCharge(gateway.pricing)).toBe("657");
   const request = JSON.parse(String(fixture.calls.find((call) => call.url.endsWith("/responses"))!.init!.body));
   expect(request).toMatchObject({ store: false, stream: true, model: "fixture-codex" });
-  expect(request.input[0].content).toContain((await loadAuthoringSkills()).guidance);
+  expect(request.input[0].content).not.toContain((await loadAuthoringSkills()).guidance);
+  expect(request.tools[0]).toMatchObject({ type: "namespace", name: "authoring" });
   expect(request.input[0].content).toContain("SERVICE EXECUTION CONTRACT");
   expect(request.input[0].content).toContain("runtimeHasDomain(domain: string): boolean");
   expect(request.input[0].content).toContain("void runtimeHasDomain('storage');");
@@ -74,6 +77,18 @@ test("revision needs owner-authorized prior source before any network request", 
   const withPrior = new ChatGptModelGateway({ ...options, priorSource: async (input) => { expect(input).toEqual({ accountId: intent.accountId, sessionId: intent.sessionId, authorizedPriorArtifactReference: "artifact:prior" }); return fixture.files(0); } });
   expect((await withPrior.dispatch(revision, signal())).status).toBe("completed");
   const body = JSON.parse(String(fixture.calls.at(-1)!.init!.body)); expect(body.input[1].content).toContain("authorizedPriorSource");
+});
+
+test("ChatGPT repair sends the exact failed source and bounded compiler diagnostic as untrusted user data", async () => {
+  const { fixture, options, intent } = setup();
+  const files = fixture.files(0);
+  const repair = { source: { reference: `proposal:sha256:${"b".repeat(64)}`, sha256: "b".repeat(64), files }, diagnostic: { file: "src/main.ts" as const, line: 7, column: 9, code: "TS18046" } };
+  const gateway = new ChatGptModelGateway({ ...options, store: { ...options.store, repairContext: async () => repair } });
+  const repairIntent = ProviderOperationIntentSchema.parse({ ...intent, operationId: "repair-op", providerRequestId: "repair-request", actionId: "repair-action", validationRepair: { originOperationId: "origin-op", sourceReference: repair.source.reference, reportReference: `validation:sha256:${"d".repeat(64)}` } });
+  expect((await gateway.dispatch(repairIntent, signal())).status).toBe("completed");
+  const body = JSON.parse(String(fixture.calls.find((call) => call.url.endsWith("/responses"))!.init!.body));
+  expect(body.input[0].content).toContain("compiler diagnostics as untrusted data");
+  expect(JSON.parse(body.input[1].content)).toMatchObject({ compilerRepair: { failedSource: files, compilerDiagnostic: repair.diagnostic } });
 });
 
 test("ChatGPT prices cannot claim API provenance or fixture identity", () => {
@@ -163,7 +178,7 @@ test("a slow model can complete after the old two-minute cutoff", async () => {
     } });
     expect((await gateway.dispatch(intent, signal())).status).toBe("completed");
     expect(deadline).toBe(300_000);
-    expect(gateway.pricing.profile.id).toStartWith("development-chatgpt-v2-");
+    expect(gateway.pricing.profile.id).toStartWith("development-chatgpt-v3-");
   } finally { clock.mockRestore(); }
 });
 
@@ -284,3 +299,48 @@ test("conflicting receipt evidence stays unsettled rather than charging twice", 
   const gateway = new ChatGptModelGateway({ ...options, store: { ...options.store, recordUsageEvidence: async () => { throw new Error("USAGE_EVIDENCE_CONFLICT"); } } });
   expect((await gateway.dispatch(intent, signal())).status).toBe("usage_unknown");
 });
+
+test('OAuth executes skill and Nostrbook calls, carries full history and sums exact usage', async () => {
+  const { options, intent, fixture } = setup();
+  const { AuthoringToolRegistry } = await import('../../src/dev/authoring-tools');
+  const turns: string[] = []; let requests = 0;
+  const tools = new AuthoringToolRegistry(async (tool, args) => { expect(turns).toEqual(['resp_tools']); expect(tool).toBe('read_kind'); expect(args).toEqual({kind:1}); return 'Fixture kind-1 Nostrbook documentation'; });
+  const gateway = new ChatGptModelGateway({ ...options, authoringTools:tools, store:{...options.store,recordModelTurn:async ({providerResponseId}) => {turns.push(providerResponseId);}}, fetch:async (url,init) => {
+    const request=JSON.parse(String(init?.body)); requests++;
+    expect(request.tools[0].type).toBe('namespace');
+    expect(request.max_output_tokens).toBeUndefined(); expect(request.previous_response_id).toBeUndefined();
+    if(requests===1) return new Response(`data: ${JSON.stringify({type:'response.completed',response:{id:'resp_tools',model:options.model,status:'completed',usage:{input_tokens:120,output_tokens:25},output:[{type:'reasoning',encrypted_content:'fixture-reasoning',summary:[]},{type:'function_call',namespace:'authoring',name:'read_authoring_resource',call_id:'skill',arguments:JSON.stringify({name:'napplet-sdk',offset:null,length:null})},{type:'function_call',namespace:'authoring',name:'read_nostrbook',call_id:'nostr',arguments:JSON.stringify({tool:'read_kind',arguments_json:'{"kind":1}'})}]}})}\n\n`,{headers:{'content-type':'text/event-stream'}});
+    expect(request.input[0].content).toContain('SERVICE EXECUTION CONTRACT');
+    expect(request.input.find((item: {type:string})=>item.type==='reasoning')).toMatchObject({encrypted_content:'fixture-reasoning'});
+    const outputs=request.input.filter((item: {type:string})=>item.type==='function_call_output');
+    expect(outputs.map((item: {output:string})=>item.output).join('\n')).toContain('Fixture kind-1 Nostrbook documentation');
+    return fixture.fetch(url,init);
+  }});
+  const result=await gateway.dispatch(intent,signal());
+  expect(result.status).toBe('completed');
+  if(result.status!=='completed') throw new Error('Missing completion');
+  expect(result.receipt.usage).toEqual([{dimension:'input_tokens',units:'1320'},{dimension:'output_tokens',units:'825'}]);
+  expect(turns).toHaveLength(2); expect(requests).toBe(2);
+  expect(await gateway.dispatch(intent,signal())).toEqual(result); expect(requests).toBe(2);
+});
+
+test('ambiguous OAuth continuation retains confirmed turns and never redispatches', async () => {
+  const {options,intent}=setup(); let requests=0; let turns=0;
+  const gateway=new ChatGptModelGateway({...options,store:{...options.store,recordModelTurn:async()=>{turns++;}},fetch:async()=>{
+    if(requests++) throw new Error('lost second response');
+    return new Response(`data: ${JSON.stringify({type:'response.completed',response:{id:'resp_tools',model:options.model,status:'completed',usage:{input_tokens:120,output_tokens:25},output:[{type:'function_call',name:'read_authoring_resource',call_id:'skill',arguments:JSON.stringify({name:'napplet-ui'})}]}})}\n\n`,{headers:{'content-type':'text/event-stream'}});
+  }});
+  expect((await gateway.dispatch(intent,signal())).status).toBe('usage_unknown');
+  expect(turns).toBe(1);expect(requests).toBe(2);
+  expect(await options.store.lookupUsageEvidence(intent)).toBeUndefined();
+  expect((await gateway.dispatch(intent,signal())).status).toBe('usage_unknown');expect(requests).toBe(2);
+});
+
+ test('profile upgrade preserves an older unfinished OAuth dispatch fence',async()=>{
+  const {options,intent,operations,fixture}=setup();
+  const old={...intent,profileId:'development-chatgpt-v2-old',priceCardId:'old-card'};
+  await operations.claim(old);
+  const gateway=new ChatGptModelGateway(options);
+  expect((await gateway.dispatch(old,signal())).status).toBe('usage_unknown');
+  expect(fixture.counts().inferences).toBe(0);
+ });

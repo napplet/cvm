@@ -15,8 +15,9 @@ try {
   const page = await browser.newPage(); activePage = page; const requests: string[] = [];
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
   await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
-  await page.getByLabel("Cashu amount (sats)").fill("4000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited").waitFor();
+  await page.getByRole("button", { name: "Connect" }).click(); await page.locator("#connection-status").filter({ hasText: /^Connected:/ }).waitFor();
+  await page.getByLabel("Cashu amount (sats)").fill((BigInt(await page.getByLabel("Maximum (sats)").inputValue()) + 64n).toString()); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited").waitFor();
+  console.log(JSON.stringify({maximum:await page.getByLabel("Maximum (sats)").inputValue(),balance:await page.locator("#balance").textContent()}));
   await page.getByLabel("Focused idea").fill("A focused tap counter for daily practice"); await page.getByRole("button", { name: "Generate napplet" }).click();
   await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
   const preview = page.frameLocator("#preview"); const appFrame = preview.frameLocator("iframe").first();
@@ -44,6 +45,6 @@ try {
   }
   console.log(JSON.stringify({ status: "passed", case: requestedCase, provider: evidence.provider, configuredProvider, requests }));
 } catch (error) {
-  console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), facts: await activePage?.locator("#generation-facts").textContent(), evidence: server.generationEvidence() }));
+  console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), maximum: await activePage?.getByLabel("Maximum (sats)").inputValue(), balance: await activePage?.locator("#balance").textContent(), facts: await activePage?.locator("#generation-facts").textContent(), evidence: server.generationEvidence() }));
   throw error;
 } finally { try { await server.close(); } finally { await browser.close(); canary.stop(true); } }

@@ -40,10 +40,10 @@ try {
     worker: { run: async () => { throw new Error("PARTIAL_OUTPUT_BUILT"); } }, artifactVerifier: { verify: async () => undefined },
   });
   async function command(key: string) {
-    const input = { principal, idempotencyKey: `admit-${key}`, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "395", unit: "sat" as const } };
+    const input = { principal, idempotencyKey: `admit-${key}`, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "657", unit: "sat" as const } };
     const admission = await fundedAdmission.admit(input, await trustedAdmissionReceipt(input));
     if (admission.status !== "accepted") throw new Error("ADMISSION_FAILED");
-    return { principal, admissionReference: admission.reference, idempotencyKey: key, expectedVersion: 0 as const, maximum: "395", policyVersion: "development-local-v1", idea: "A focused timer" };
+    return { principal, admissionReference: admission.reference, idempotencyKey: key, expectedVersion: 0 as const, maximum: "657", policyVersion: "development-local-v1", idea: "A focused timer" };
   }
   const original = await command("ended"); const ended = await service.startSession(original);
   if (ended.status !== "usage_unknown") throw new Error("EXPECTED_UNKNOWN");
@@ -95,7 +95,7 @@ try {
   assert(charge.n === 1 && charge.amount === "-3" && fixture.counts().inferences === beforeCalls, "DUPLICATE_DEBIT_OR_REDISPATCH");
   const all: any = await listOperatorJobs(pool, "all", 0, "");
   const review: any = await listOperatorJobs(pool, "review", 0, "");
-  assert(all.total > review.total && review.jobs.every((row: any) => row.category === "review" && row.held_sat === "395"), "JOB_CATEGORIES_INCORRECT");
+  assert(all.total > review.total && review.jobs.every((row: any) => row.category === "review" && row.held_sat === "657"), "JOB_CATEGORIES_INCORRECT");
   const filtered: any = await listOperatorJobs(pool, "all", 0, journalAction!.actionId);
   assert(filtered.total === 1 && filtered.jobs[0].receipt_charge === "3", "JOB_SEARCH_OR_COST_INCORRECT");
   assert((await listOperatorJobs(pool, "all", 0, "%' OR 1=1 --")).total === 0, "SEARCH_NOT_LITERAL");

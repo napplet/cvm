@@ -1,7 +1,7 @@
 # Phase 7: Development Execution Gap - Research
 
-**Researched:** 2026-10-15  
-**Domain:** Local development composition for metered napplet generation  
+**Researched:** 2026-10-15
+**Domain:** Local development composition for metered napplet generation
 **Confidence:** HIGH for current-code findings; MEDIUM for the proposed development composition
 
 ## User Constraints
@@ -117,7 +117,7 @@ Use the existing migration runner in `scripts/dev-payments.ts`; it applies Phase
 | Local funding stack | Configuration and persisted local state exist; no containers were running during research | [VERIFIED: `.local/napplet-cvm-dev-payments/*`, local Docker probe] | `bun scripts/dev-payments.ts up` must be part of the launcher. |
 | Playwright CLI | No global CLI found | [VERIFIED: local probe] | Run browser/conformance from the toolchain image or add a project-owned test runner; do not depend on a global executable. |
 | Sealed toolchain image | Not present in the local Docker image list | [VERIFIED: local Docker probe] | The launcher must build/pull a reviewed image before generation. |
-| Napplet source checkout | Present at `/Users/sandwich/Develop/napplet`, with package sources and `node_modules` | [VERIFIED: local filesystem probe] | Useful only as a development source/build input; it is not itself proof of a promoted runtime. |
+| Napplet source checkout | Present at `$HOME/Develop/napplet`, with package sources and `node_modules` | [VERIFIED: local filesystem probe] | Useful only as a development source/build input; it is not itself proof of a promoted runtime. |
 
 The reviewed Dockerfile uses pinned Bun, frozen pnpm installs, a pinned standalone CLI, network-disabled runtime execution, a read-only root filesystem, dropped capabilities, unprivileged UID, bounded CPU/memory/PIDs, and an input-only mount. Reuse these controls for the local worker. [VERIFIED: `infra/toolchain/Dockerfile`, `infra/toolchain/egress-policy.json`, `src/runner/sealed-toolchain.ts`]
 
@@ -193,7 +193,7 @@ Run existing focused tests first: `bun test tests/phase-04 tests/phase-05 tests/
 |---|---|---|
 | A1 | A loopback-only GUI bridge can be treated as a development control surface while all generation commands still traverse `ContextVmFundingAdapter`. [ASSUMED] | It might violate the product transport boundary; keep it local-only and test adapter invocation end to end. |
 | A2 | A reviewed dev Docker image identity can support development evidence without satisfying production’s immutable registry-digest gate. [ASSUMED] | A weak identity boundary could be mistaken for a release artifact; mark every UI/evidence item development-only. |
-| A3 | The local `/Users/sandwich/Develop/napplet` checkout can supply the official reference-host integration after its own build is verified. [ASSUMED] | It may not expose a usable host executable; then development preview remains an iframe-only preview and must be labeled accordingly. |
+| A3 | The local `$HOME/Develop/napplet` checkout can supply the official reference-host integration after its own build is verified. [ASSUMED] | It may not expose a usable host executable; then development preview remains an iframe-only preview and must be labeled accordingly. |
 
 ## Planning Order
 

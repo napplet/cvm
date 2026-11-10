@@ -48,6 +48,21 @@ async function seededSession(): Promise<Readonly<{ store: TransactionalMemoryFun
 }
 
 describe("owner-safe session status", () => {
+  test("offers the most recent failed compiler source even when action IDs sort backwards", async () => {
+    const { store, accountId, sessionId } = await seededSession();
+    for (const key of ["z-earlier", "a-later"]) await store.transact(accountId, async tx => {
+      await tx.reserveActionBudget({ accountId, admissionReference: "status-cap-ref", idempotencyKey: key, fingerprint: key, reference: `budget:${key}`, amount: 10n });
+      await tx.prepareMeteredAction({ accountId, idempotencyKey: key, fingerprint: key, sessionId, actionId: `revision:${key}`, expectedVersion: 1, admissionReference: "status-cap-ref", actionBudgetReference: `budget:${key}`, maximum: 10n, operationId: `operation:${key}`, profileId: "code-proposal", priceCardId: "phase-04-deterministic-price-card-v1" });
+      await tx.claimProviderOperation(`operation:${key}`);
+      await tx.recordUsageReceipt({ operationId: `operation:${key}`, protectedEvidenceReference: `receipt:${key}` });
+      await tx.finalizeMeteredAction({ idempotencyKey: key, operationId: `operation:${key}`, receiptCharge: "1", providerReceiptReference: `receipt:${key}`, status: "failed", sessionVersion: 1, artifactVersion: 1, result: {}, artifact: {
+        workspaceLineage: "workspace", checkpointReference: `checkpoint:${key}`, snapshotReference: `snapshot:${key}`, validationEvidenceReference: `validation:sha256:${"b".repeat(64)}`, failedArtifactId: `proposal:sha256:${"a".repeat(64)}`, validationReportReference: `validation:sha256:${"b".repeat(64)}`,
+      } });
+    });
+    const status = await readSessionStatus({ store, query: { principal: owner, sessionId }, cursorSecret: "status-test-secret" });
+    expect(status).toMatchObject({ status: "ok", session: { failedValidationOperationId: "operation:a-later" }, action: { operationId: "operation:a-later", state: "failed" } });
+  });
+
   test("reports durable read failures as unavailable rather than an invalid client cursor", async () => {
     const seeded = await seededSession();
     const store = new Proxy(seeded.store, { get(target, property) {

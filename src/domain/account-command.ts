@@ -13,7 +13,12 @@ export async function accountIdForPrincipal(principal: Principal): Promise<strin
 
 /** D-45 canonical command identity: exact replay is semantic, never object-order dependent. */
 export async function fingerprintAccountCommand(command: AuthenticatedFundingCommand, accountId: string): Promise<string> {
-  const payloadHash = await sha256(canonicalJson(command.payload));
+  // A grant reference identifies the verified event. Re-observation time is not
+  // part of its replay identity; the first committed timestamp remains immutable.
+  const payload = command.kind === "credit_settlement" && command.protocolVersion === "credit-grant-v1"
+    ? { settlement: Object.fromEntries(Object.entries(command.payload.settlement).filter(([key]) => key !== "verifiedAt")) }
+    : command.payload;
+  const payloadHash = await sha256(canonicalJson(payload));
   return sha256(canonicalJson({
     accountId,
     principalPubkey: command.principal.pubkey,

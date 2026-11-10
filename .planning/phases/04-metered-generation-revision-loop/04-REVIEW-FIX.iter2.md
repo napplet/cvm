@@ -1,7 +1,7 @@
 ---
 phase: 04-metered-generation-revision-loop
 fixed_at: 2026-08-04T23:00:00Z
-review_path: /Users/sandwich/Develop/napplet-cvm/.planning/phases/04-metered-generation-revision-loop/04-REVIEW.md
+review_path: $HOME/Develop/napplet-cvm/.planning/phases/04-metered-generation-revision-loop/04-REVIEW.md
 iteration: 1
 findings_in_scope: 10
 fixed: 7
@@ -12,7 +12,7 @@ status: partial
 # Phase 04: Code Review Fix Report
 
 **Fixed at:** 2026-08-04T23:00:00Z
-**Source review:** `/Users/sandwich/Develop/napplet-cvm/.planning/phases/04-metered-generation-revision-loop/04-REVIEW.md`
+**Source review:** `$HOME/Develop/napplet-cvm/.planning/phases/04-metered-generation-revision-loop/04-REVIEW.md`
 **Iteration:** 1
 
 **Summary:**

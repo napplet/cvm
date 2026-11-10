@@ -47,6 +47,25 @@ const verifier: ArtifactVerifier = { async verify(facts) {
 } };
 
 describe("Phase 04 funded start tracer", () => {
+  test("provider rejection settles at zero and replays without a worker or second dispatch", async () => {
+    const { store, admissions, admission } = await fundedDependencies();
+    const effects = { dispatches: 0, workers: 0 };
+    const gateway: ModelGateway = {
+      async dispatch(intent) {
+        effects.dispatches++;
+        return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId,
+          reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: "provider:rejected" } };
+      },
+      async lookup() { throw new Error("UNEXPECTED_PROVIDER_LOOKUP"); },
+    };
+    const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
+    const command = { principal, admissionReference: admission.reference, idempotencyKey: "provider-rejected", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." };
+    const result = await service.startSession(command);
+    expect(result).toMatchObject({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", confirmedSpend: "0", artifactVersion: 0 });
+    expect(await service.startSession(command)).toEqual(result);
+    expect(effects).toEqual({ dispatches: 1, workers: 0 });
+    expect(store.meteredActions[0]).toMatchObject({ receiptCharge: "0" });
+  });
   test("worker request preparation cannot replace charged ownership, version or purpose", async () => {
     const changes: ReadonlyArray<Partial<WorkerRunRequest>> = [{ actionId: "action:foreign" }, { sessionId: "session:foreign" },
       { policyVersion: "policy:foreign" }, { expectedVersion: 7 }, { idea: "Replace the original purpose" }];

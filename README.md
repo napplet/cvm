@@ -66,13 +66,13 @@ bun scripts/dev.ts test --case=publication
 
 The built site can be served independently; copy `cvm.json` with it. Local naddrs require access to the development relay and Blossom server. [Static hosting and publishing](docs/runbooks/development-gui.md#static-hosting-and-publishing) explains network configuration.
 
-The private homelab deployment uses `compose.homelab.yaml` and `infra/homelab/manifest.json`, managed through `./homelab cvm` in the homelab repository. It uses the existing ChatGPT account and test credits; production remains deferred. See the [homelab runbook](https://github.com/sandwichfarm/homelab/blob/master/ops/cvm/README.md).
+Run the portable container stack with the [service deployment guide](docs/runbooks/service-deployment.md). Keep host inventories, routing and deployment automation in a separate operator-owned repository.
 
 The first user-facing deployment will be branded **applet.broker**. The reusable service is intended for an eventual open-source **@napplet/cvm** release; this repository has not published that package or deployed the public site.
 
 ## Local development workspace
 
-The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product and operator commands use signed/encrypted ContextVM. The public website is static; `cvm.json` contains only the relay URL and CVM public key. Provider accounts/keys stay in CVM admin. HTTP serves static assets, preview/Blossom bytes and the private OAuth redirect/callback.
+The retained development workspace requires an explicitly installed compatibility payment adapter. It starts ContextVM over a relay, the adapter-owned test payment stack, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product and operator commands use signed/encrypted ContextVM. The public website is static; `cvm.json` contains only the relay URL and CVM public key. Provider accounts/keys stay in CVM admin. HTTP serves static assets, preview/Blossom bytes and the private OAuth redirect/callback.
 
 Prerequisites are Docker with Compose 2.39 or newer, Bun 1.3.14, and repository dependencies. The browser test package has its own frozen lockfile; the launcher checks it and Chromium before reporting ready.
 
@@ -99,12 +99,12 @@ bun scripts/dev.ts status
 
 The default model mode is **Deterministic fixture**: only the external model response is substituted, while the relay, signed ContextVM path, rails, SQL ledger, worker, build, verifier, artifact repository, and preview host are real local boundaries. ChatGPT OAuth mode uses your selected account’s subscription allowance, with actual token counts and synthetic local test sats. API-key mode remains available through explicit configuration and can incur API charges. Both appear as distinct provider modes in `status` and the workspace; it is never silently represented as deterministic evidence. See the [development GUI runbook](docs/runbooks/development-gui.md) for setup, inspection, recovery, and limitations.
 
-For local payment development, start Docker and run `bun scripts/dev-payments.ts`. This automatically provisions two Cashu mints, a local relay, a funded NWC wallet with test money, and a migrated PostgreSQL ledger. Run `bun scripts/dev-payments.ts test` for isolated payment and application funding tests, including ledger replay checks after restart. See [development payments](docs/runbooks/development-payments.md) for credentials, application integration, and stop/reset commands.
+For local payment development, install an operator-owned adapter and select its implementation root before starting the compatibility launcher. Its isolated test command verifies payment, credit and restart behavior. The provider-neutral service also runs with no payments and an explicit npub allowlist. See [development payments](docs/runbooks/development-payments.md).
 
 ## Generation contract
 
 - **One focused applet:** bounded text ideas and revisions produce a sandboxed napplet through the pinned napplet scaffold, SDK, skills, and CLI.
-- **Prepaid, metered work:** CEP-8 Lightning and Cashu top-ups fund a Nostr-linked ledger. Generation accounts for measured API usage within the funded balance and approved cap.
+- **Credits and metered work:** Operator-owned adapters or free allowlisted access fund a Nostr-linked credit ledger. Generation accounts for measured API usage within the funded balance and approved cap.
 - **Immediate admission:** capacity is reserved before work is accepted. The target is isolated execution within five seconds at p95, with no durable request queue.
 - **Resumable sessions:** insufficient funds pause work. The continuity contract keeps a live worker for ten minutes and durable checkpoints for explicit resume for 30 days.
 - **Verified output:** artifact policy and browser conformance gate preview and publication. Generated applets use shell-mediated capabilities for storage, relay access, and signing.
@@ -119,7 +119,7 @@ The main components implement this flow:
 ```mermaid
 flowchart TD
     Client[ContextVM client over Nostr] --> Adapter[ContextVM adapter]
-    Adapter --> Funding[CEP-8 funding and admission]
+    Adapter --> Funding[Credits and funded admission]
     Funding --> Ledger[(Prepaid ledger)]
     Funding --> Core[Metered generation and revision]
     Core --> Ledger
@@ -181,3 +181,5 @@ The checked-in local configuration is evidence-only. It reports `RELEASE_PRODUCT
 Read [AGENTS.md](AGENTS.md) before changing the repository. Work is tracked through GSD: use `gsd-quick` for small changes, `gsd-debug` for investigations, and `gsd-execute-phase` for planned implementation. Keep the service dependencies in `bun.lock` and generated-napplet toolchains in `toolchains/` aligned with their verification evidence, and run the tests relevant to your change.
 
 Controller generation and capability review are covered in [GAMEPAD authoring](docs/gamepad.md). The sealed toolchain must include a compatible SDK/runtime release before controller artifacts can be promoted.
+
+Payment integrations are operator-owned modules. The CVM meters integer credits and also supports payment-free allowlisted access. See [payment adapters](docs/architecture/payment-adapters.md) for the integration contract, pricing boundaries, configuration and verification.

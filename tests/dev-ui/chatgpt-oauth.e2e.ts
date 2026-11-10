@@ -116,14 +116,14 @@ try {
   await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
   await page.waitForFunction(() => document.querySelector("#generation-error")?.textContent?.includes("WORKER_OR_ARTIFACT_FAILED"), undefined, { timeout: 180000 });
   requireThat((await page.locator("#activity-current").textContent())?.includes("Check guidance and TypeScript"), "FAILED_WORKER_STAGE_NOT_VISIBLE");
-  requireThat(await page.locator('#activity-events [data-stage="verify"][data-state="failed"]').count() === 1, "FAILED_WORKER_EVENT_MISSING");
+  requireThat(await page.locator('#activity-events [data-stage="verify"][data-state="failed"]').count() === 2, "FAILED_WORKER_EVENT_MISSING");
   requireThat((await page.locator("#activity-connection").textContent())?.includes("TS2322: Incompatible value type."), "FAILED_COMPILER_DIAGNOSTIC_MISSING");
   requireThat(!(await page.locator("#execution-activity").textContent())?.includes("deliberate type error"), "RAW_COMPILER_OUTPUT_EXPOSED");
-  requireThat(await page.locator("#generation-facts").textContent() === "", "FAILED_ACTION_SHOWS_STALE_ARTIFACT");
+  requireThat((await page.locator("#generation-facts dt").allTextContents()).join(",") === "session,state,nextAction", "FAILED_ACTION_SHOWS_STALE_ARTIFACT");
   requireThat(await page.locator("#generation-status").textContent() === "Action stopped; see error below", "FAILED_ACTION_STILL_SHOWS_RUNNING");
   await server.assertGenerationSettlement();
   const failedCounts = (await pool.query("SELECT count(*) AS requests FROM development_chatgpt_operations")).rows[0];
-  requireThat(Number(failedCounts.requests) === 4 && fixture.counts().inferences === 4, "FAILED_ACTION_REDISPATCHED");
+  requireThat(Number(failedCounts.requests) === 5 && fixture.counts().inferences === 5, "FAILED_ACTION_REDISPATCHED");
   await page.screenshot({ path: resolve(".local/development-gui-evidence/progress-failure.png"), fullPage: true });
   fixture.setInferenceMode("limit");
   await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
@@ -132,17 +132,17 @@ try {
   requireThat((await page.locator("#activity-connection").textContent())?.includes("App limits"), "LIVE_PROVIDER_ERROR_MISSING");
   requireThat((await page.locator("#activity-current").textContent())?.includes("Action stopped"), "STOPPED_REQUEST_SHOWN_AS_RUNNING");
   requireThat((server.generationEvidence().result as any)?.confirmedSpend === "0", "UNCONFIRMED_RESPONSE_CHARGED_PROFIT");
-  requireThat(fixture.counts().inferences === 5, "LIMIT_ACTION_REDISPATCHED");
+  requireThat(fixture.counts().inferences === 6, "LIMIT_ACTION_REDISPATCHED");
   await admin.getByRole("button", { name: "Sign out of ChatGPT" }).click(); await admin.getByText("Signed out of ChatGPT. Use the default provider or sign in again.", { exact: true }).waitFor();
   const cleared = JSON.parse(await readFile(join(stateRoot, "development-chatgpt/accounts.json"), "utf8")); requireThat(!cleared.accounts[0].tokens, "OAUTH_LOGOUT_RETAINED_TOKENS");
   await admin.getByText("ChatGPT selected · sign in to generate", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
   await page.locator("#generation-error").filter({ hasText: "CVM provider is unavailable" }).waitFor();
   requireThat(await page.locator('#activity-events [data-stage="admission"]').count() === 0, "SIGNED_OUT_ACTION_RESERVED_FUNDS");
-  requireThat(fixture.counts().inferences === 5, "SIGNED_OUT_ACTION_DISPATCHED");
+  requireThat(fixture.counts().inferences === 6, "SIGNED_OUT_ACTION_DISPATCHED");
   console.log(JSON.stringify({ status: "passed", case: "chatgpt-oauth", evidence: "fixture OAuth and inference; real relay, SQL, Docker worker and Paja", requests: fixture.counts().inferences, counts, failure: "TypeScript stage displayed; stale facts cleared; failed action settled" }));
 } catch (error) {
-  console.error(JSON.stringify({ code: error instanceof Error ? error.message : "OAUTH_E2E_FAILED", model: await page.locator("#chatgpt-status").textContent().catch(() => "unavailable"), generation: server.generationEvidence(), activity: await page.locator("#execution-activity").textContent(), error: await page.locator("#generation-error").textContent(), counts: fixture.counts() })); throw error;
+  console.error(JSON.stringify({ code: error instanceof Error ? error.message : "OAUTH_E2E_FAILED", model: await page.locator("#chatgpt-status").textContent().catch(() => "unavailable"), generation: server.generationEvidence(), activity: await page.locator("#execution-activity").textContent({ timeout: 1000 }).catch(() => "unavailable"), error: await page.locator("#generation-error").textContent({ timeout: 1000 }).catch(() => "unavailable"), counts: fixture.counts() })); throw error;
 } finally {
   releaseInference();
   await pool.end();

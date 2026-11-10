@@ -28,6 +28,7 @@ Phase 7 remains unfinished (103/114 plans; 63/74 in Phase 7). Existing product s
 
 | Task | Result |
 | --- | --- |
+| PR #115 CI repair | Restore portable core suites and generic SQL fixtures; isolate provider CI privately; regenerate contracts; add public free-service and payment-selection browser E2E plus a CI test-path guard. See `.planning/debug/pr-115-ci.md`. |
 | 261110-dtq | Generic credits, multiple external payment adapters and allowlisted free access; existing payments extracted privately and deployed with preserved identities/state. Original homelab live generation and reopen pass. Separate API service payment checks pass; its full generation is blocked by operator credential HTTP 401. See quick-task summary and verification. |
 | 261031-vgz | Remove speculative infrastructure architecture and simplify affected mainline history; see quick-task summary. |
 | 261101-pnd | Provider-neutral service composition, canonical migrations, gVisor worker engine, Ansible deployment, backup and isolated restore; live test-realm flow verified. See quick-task summary. |

@@ -28,7 +28,7 @@ Choose a service root (the examples use `/srv/napplet-cvm`) with this layout:
   secrets/database_url
   secrets/service_seed
   secrets/openai_api_key
-  secrets/nwc_uri
+  secrets/<adapter-specific credential files>
   data/postgres/
   data/storage/
   data/relay/
@@ -57,17 +57,15 @@ Secrets are UTF-8 files under `secrets/`, never configuration values or source
 files. Use mode 0600 and directories readable only by the operator and required
 containers. `database_url` must match the PostgreSQL credentials and database;
 `service_seed` is a persistent 32-byte hexadecimal seed defining service identity
-and encryption keys. `nwc_uri` must authorize only `make_invoice` and
+and encryption keys. Payment credentials and provider verification rules belong to the installed operator adapter.
 `lookup_invoice`. Preserve these files through upgrades and restores.
 Create data directories with ownership suitable for each pinned container
 (PostgreSQL, relay and application), rather than opening them to all users.
 
 `realm: test` balances are test credits. `realm: real` requires a metered model,
-TLS public relay, two independent real Cashu mints, a sandboxed worker runtime
+a TLS public relay, a sandboxed worker runtime
 and a fresh database. Its immutable `service_realm` marker prevents promoting
-a test ledger or prior accounting history into real money. The `test-rails`
-Compose profile is for test deployments only and requires additional test-wallet
-and mint secrets; inspect its mounts before enabling it.
+a test ledger or prior accounting history into real operation. Payment-provider validation belongs to the installed adapter. An operator-owned test overlay may define a `test-rails` profile; its services and credentials are not part of the public stack.
 
 ## Build, migrate and start
 
@@ -158,3 +156,7 @@ Take a backup before upgrading. Migrations are append-only: an older revision
 refuses a database with unknown newer migrations. Rollback across schema changes
 requires restoring the corresponding pre-upgrade snapshot before starting the
 older revision. A rollback must not reissue payments or model operations.
+
+## Payment modules
+
+Configure `funding.mode` as `adapters` with explicitly installed, pinned modules, or `free` with an npub allowlist and a bounded credit maximum. The public Compose stack includes no payment-provider services. Install any adapter-owned services through an operator overlay. See [the adapter contract](../architecture/payment-adapters.md). Existing `sat` fields retain their v1 meaning as ledger credit units; existing balances are preserved.

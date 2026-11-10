@@ -93,59 +93,6 @@ services:
       start_period: 5m
       retries: 4
 
-  # Test realm only: a FakeWallet Cashu mint and an NWC wallet that issues
-  # self-settling invoices. Never enabled for the real-money realm.
-  test-mint:
-    <<: *restart
-    profiles: [test-rails]
-    image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
-    command: poetry run mint
-    environment:
-      MINT_BACKEND_BOLT11_SAT: FakeWallet
-      MINT_LISTEN_HOST: 0.0.0.0
-      MINT_LISTEN_PORT: "3338"
-      MINT_PRIVATE_KEY_FILE: /run/secrets/napplet-cvm/test_mint_key
-      MINT_DATABASE: /data/mint
-      FAKEWALLET_BRR: "true"
-      FAKEWALLET_DELAY_INCOMING_PAYMENT: "0"
-    entrypoint: ["sh", "-c", "export MINT_PRIVATE_KEY=$$(cat /run/secrets/napplet-cvm/test_mint_key) && exec \"$$@\"", "--"]
-    volumes:
-      - ${NAPPLET_CVM_ROOT}/data/test-mint:/data
-      - ${NAPPLET_CVM_ROOT}/secrets/test_mint_key:/run/secrets/napplet-cvm/test_mint_key:ro
-  test-mint-2:
-    <<: *restart
-    profiles: [test-rails]
-    image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
-    command: poetry run mint
-    environment:
-      MINT_BACKEND_BOLT11_SAT: FakeWallet
-      MINT_LISTEN_HOST: 0.0.0.0
-      MINT_LISTEN_PORT: "3338"
-      MINT_DATABASE: /data/mint
-      FAKEWALLET_BRR: "true"
-      FAKEWALLET_DELAY_INCOMING_PAYMENT: "0"
-    entrypoint: ["sh", "-c", "export MINT_PRIVATE_KEY=$$(cat /run/secrets/napplet-cvm/test_mint_2_key) && exec \"$$@\"", "--"]
-    volumes:
-      - ${NAPPLET_CVM_ROOT}/data/test-mint-2:/data
-      - ${NAPPLET_CVM_ROOT}/secrets/test_mint_2_key:/run/secrets/napplet-cvm/test_mint_2_key:ro
-  test-wallet:
-    <<: *restart
-    profiles: [test-rails]
-    image: ghcr.io/getalby/hub:v1.24.1@sha256:ca9da58cafd68e91358820a20d83d328a333a8f699007a70d9aa50538da7c129
-    environment:
-      WORK_DIR: /data
-      RELAY: ws://relay:8080
-      SEND_EVENTS_TO_ALBY: "false"
-      AUTO_LINK_ALBY_ACCOUNT: "false"
-      LOG_LEVEL: "2"
-    entrypoint: ["sh", "-c", "export AUTO_UNLOCK_PASSWORD=$$(cat /run/secrets/napplet-cvm/test_wallet_password) && exec /bin/main"]
-    volumes:
-      - ${NAPPLET_CVM_ROOT}/data/test-wallet:/data
-      - ${NAPPLET_CVM_ROOT}/secrets/test_wallet_password:/run/secrets/napplet-cvm/test_wallet_password:ro
-    depends_on:
-      test-mint: { condition: service_started }
-      relay: { condition: service_healthy }
-
   # Optional ingress: TLS for the three operator-configured service names.
   caddy:
     <<: *restart

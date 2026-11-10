@@ -11,6 +11,9 @@ import { accountIdForPrincipal } from "../domain/account-command";
 import { ResumeSessionCommandSchema, ResumeSessionResultSchema } from "../continuity/contracts";
 import { PrepareResumeArgumentsSchema, PrepareResumeResultSchema, ResumeSessionV2ArgumentsSchema } from "../continuity/resume-v2-contracts";
 import { PrincipalSchema } from "../phase-03/contracts";
+import { PaymentMethodIdSchema, PaymentResultSchema } from "../payments/contracts";
+import type { PaymentAdapterRegistry } from "../payments/registry";
+import type { FreeCreditAccess } from "../payments/free-access";
 import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
@@ -18,7 +21,7 @@ import { validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliS
 import { AdmissionLifecycleContextSchema, protectedLifecycleCorrelation, type AdmissionLifecycleContext } from "../telemetry/contracts";
 import { pricedContinuationNegotiation, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "./sdk-bridge";
 
-const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
+const SupportedPmiSchema = PaymentMethodIdSchema;
 const InteractionModeSchema = z.enum(["transparent", "explicit_gating"]);
 const EventSchema = z.object({
   id: z.string().min(1),
@@ -45,10 +48,11 @@ export const TopUpArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   pmi: SupportedPmiSchema,
   mode: InteractionModeSchema,
-  amount: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)),
+  amount: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)).optional(),
+  credits: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)).optional(),
   maxFee: z.string().regex(/^[0-9]+$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)).optional(),
   topUpId: z.string().min(1).optional(),
-}).strict();
+}).strict().refine(value => value.amount !== undefined || value.credits !== undefined, "credit target or legacy amount required");
 export const FundedAdmissionArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
@@ -108,17 +112,6 @@ export const PublicationArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("status"), intentId: z.string().min(1) }).strict(),
   z.object({ action: z.literal("reconcile"), intentId: z.string().min(1) }).strict(),
 ]);
-const RailTopUpResultSchema = z.object({
-  topUpId: z.string().min(1),
-  state: z.enum(["pending", "settled", "credited", "failed", "reconciliation_pending", "verifying"]),
-  status: z.enum(["payment_required", "reconciliation_pending", "failed", "credited"]).optional(),
-  rail: z.enum(["lightning", "cashu"]).optional(),
-  amount: z.string().regex(/^[1-9][0-9]*$/u).optional(),
-  unit: z.literal("sat").optional(),
-  safeDisplayReference: z.string().min(1).optional(),
-  expiresAt: z.iso.datetime().optional(),
-  settlementReference: z.string().min(1).optional(),
-}).passthrough();
 
 export interface ProtectedMaterialPort {
   protect(input: Readonly<{ pmi: "bitcoin-cashu-v4-direct"; payload: string }>): Promise<Readonly<{ reference: string }>>;
@@ -137,6 +130,9 @@ export interface ContextVmFundingAdapterOptions {
   /** Server-held issuer for receipt-before-capacity admission authority. */
   admissionReceipts?: AdmissionReceiptAuthority;
   accountStatus?: AccountStatusService;
+  payments?: Pick<PaymentAdapterRegistry, "request" | "methods">;
+  freeAccess?: FreeCreditAccess;
+  /** Deprecated: installed legacy adapters can keep existing callers during rollout. */
   topUps?: Readonly<{
     lightning: Readonly<{ begin(input: unknown): Promise<unknown>; paymentRequest?(input: Readonly<{ principal: { pubkey: string }; topUpId: string }>): Promise<string | undefined> }>;
     cashu: Readonly<{ submit(input: unknown): Promise<unknown> }>;
@@ -188,7 +184,7 @@ export interface ContextVmFundingAdapterOptions {
 type PaymentTags = Readonly<{
   clientPmis: readonly z.infer<typeof SupportedPmiSchema>[];
   mode: z.infer<typeof InteractionModeSchema>;
-  directPayment?: Readonly<{ pmi: "bitcoin-cashu-v4-direct"; payload: string }>;
+  directPayment?: Readonly<{ pmi: string; payload: string }>;
 }>;
 
 function freeze<T>(value: T): T {
@@ -236,6 +232,7 @@ export class ContextVmFundingAdapter {
       const envelope = EnvelopeSchema.parse(input);
       if (envelope.rawEvent.id !== envelope.requestEventId) throw new Error("CONTEXTVM_CORRELATION_MISMATCH");
       const principal = PrincipalSchema.parse({ pubkey: envelope.verifiedClientPubkey });
+      this.options.freeAccess?.authorize(principal);
       const request = envelope.request;
       const response = await this.dispatch(principal.pubkey, envelope.requestEventId, envelope.rawEvent, request);
       await this.options.transport.sendResponse(principal.pubkey, response, envelope.requestEventId);
@@ -260,6 +257,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "start_session") {
       const args = StartSessionArgumentsSchema.parse(argumentsInput);
+      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
       if ("mode" in args) {
         if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
         const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
@@ -272,6 +270,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "revise_session") {
       const args = ReviseSessionArgumentsSchema.parse(argumentsInput);
+      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
       if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
       const result = SessionActionResultSchema.parse(await this.options.generation.reviseSession({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: args.expectedVersion, maximum: args.maximum, policyVersion: this.policyVersion, revision: args.revision, ...(args.repairOperationId ? { repairOperationId: args.repairOperationId } : {}) }));
       return this.generationResponse("revise_session", verifiedPubkey, requestEventId, request.id, result);
@@ -366,6 +365,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "approve_session_cap") {
       const args = ApproveSessionCapArgumentsSchema.parse(argumentsInput);
+      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
       if (!this.options.sessionCaps) throw new Error("SESSION_CAP_APPROVAL_UNAVAILABLE");
       let result;
       try {
@@ -381,6 +381,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "funded_admission") {
       const args = FundedAdmissionArgumentsSchema.parse(argumentsInput);
+      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
       if (!this.options.admissions || !this.options.admissionReceipts) throw new Error("FUNDED_ADMISSION_UNAVAILABLE");
       // Canonical identity is established only after the signed envelope and
       // event correlation are verified, and before receipt/lifecycle authority.
@@ -415,18 +416,16 @@ export class ContextVmFundingAdapter {
     const args = TopUpArgumentsSchema.parse(argumentsInput);
     const tags = this.paymentTags(rawEvent, args.pmi);
     if (!tags.clientPmis.includes(args.pmi) || tags.mode !== args.mode) throw new Error("CEP8_NEGOTIATION_DENIED");
-    if (args.pmi === "bitcoin-cashu-v4-direct") {
-      if (!tags.directPayment || !this.options.topUps) throw new Error("CASHU_DIRECT_PAYMENT_DENIED");
-      if (args.maxFee === undefined) throw new Error("CASHU_FEE_CEILING_REQUIRED");
-    } else if (tags.directPayment) {
-      throw new Error("LIGHTNING_DIRECT_PAYMENT_DENIED");
-    }
+    if (this.options.freeAccess) throw new Error("PAYMENTS_DISABLED");
     const canonical = this.options.transport.canonicalInvocation(verifiedPubkey, request.method, request.params);
-    const result = args.pmi === "bitcoin-lightning-bolt11"
-      ? await this.options.topUps?.lightning.begin({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, amount: args.amount, unit: "sat", policyVersion: this.policyVersion, protocolVersion: this.protocolVersion })
-      : await this.options.topUps?.cashu.submit({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, topUpId: args.topUpId ?? `cashu:${canonical.invocationHash}`, amount: args.amount, maxFee: args.maxFee!, unit: "sat", pmi: args.pmi, token: new TextEncoder().encode(tags.directPayment!.payload) });
+    const paymentInput = { principal: { pubkey: verifiedPubkey }, method: args.pmi, idempotencyKey: args.idempotencyKey,
+      amount: args.amount ?? args.credits!, credits: args.credits, maxFee: args.maxFee, topUpId: args.topUpId, invocationHash: canonical.invocationHash,
+      mode: args.mode, directPayment: tags.directPayment, policyVersion: this.policyVersion, protocolVersion: this.protocolVersion };
+    const result = this.options.payments
+      ? await this.options.payments.request(paymentInput)
+      : await this.legacyTopUp(paymentInput);
     if (!result) throw new Error("TOP_UP_UNAVAILABLE");
-    const railResult = RailTopUpResultSchema.parse(result);
+    const railResult = PaymentResultSchema.parse(result);
     // This is an explicit response allowlist: coordinator/provider additions do
     // not become ContextVM wire fields by accident (bearers, proofs, invoices,
     // tokens, and protected material references are never serialized here).
@@ -438,7 +437,8 @@ export class ContextVmFundingAdapter {
       paymentInteraction: args.mode, ...(args.mode === "explicit_gating" ? { explicitGatingIdentity: canonical.invocationHash } : {}),
       // Only the verified requester receives its own pending BOLT11 request,
       // inside this encrypted response, so it can be paid by any wallet.
-      ...(args.pmi === "bitcoin-lightning-bolt11" && railResult.status === "payment_required" ? await this.lightningPaymentRequest(verifiedPubkey, railResult.topUpId) : {}) });
+      ...(railResult.paymentRequest ? { paymentRequest: railResult.paymentRequest } : {}),
+      ...(railResult.checkoutUrl ? { checkoutUrl: railResult.checkoutUrl } : {}) });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
       jsonrpc: "2.0", method: "notifications/top_up", params: wireResult,
     }), requestEventId);
@@ -449,9 +449,12 @@ export class ContextVmFundingAdapter {
     });
   }
 
-  private async lightningPaymentRequest(pubkey: string, topUpId: string): Promise<{ paymentRequest?: string }> {
-    const request = await this.options.topUps?.lightning.paymentRequest?.({ principal: { pubkey }, topUpId }).catch(() => undefined);
-    return request && /^ln[a-z0-9]{8,2048}$/u.test(request) ? { paymentRequest: request } : {};
+  private async legacyTopUp(input: import("../payments/contracts").PaymentRequest): Promise<unknown> {
+    // Compatibility forwarding lives in the installed operator module.
+    if (!this.options.topUps) throw new Error("TOP_UP_UNAVAILABLE");
+    const { legacyPaymentModule } = await import("../payments/legacy-module");
+    const module = await legacyPaymentModule("src/legacy-wire.ts", ["legacyTopUp"]);
+    return (module.legacyTopUp as (ports: NonNullable<ContextVmFundingAdapterOptions["topUps"]>, request: typeof input) => Promise<unknown>)(this.options.topUps, input);
   }
 
   private async lifecycleFor(invocationHash: string, requestEventId: string, verifiedPubkey: string, requestId: string | number | null): Promise<AdmissionLifecycleContext> {
@@ -534,8 +537,8 @@ export class ContextVmFundingAdapter {
         mode = InteractionModeSchema.parse(tag[1]); seenMode = true;
       } else if (tag[0] === "direct_payment") {
         if (tag.length !== 3 || directPayment) throw new Error("INVALID_DIRECT_PAYMENT_TAG");
-        if (tag[1] !== "bitcoin-cashu-v4-direct" || tag[1] !== pmi || tag[2].length === 0) throw new Error("UNSUPPORTED_DIRECT_PAYMENT_TAG");
-        directPayment = { pmi: "bitcoin-cashu-v4-direct", payload: tag[2] };
+        if (tag[1] !== pmi || tag[2].length === 0 || tag[2].length > 128_000) throw new Error("UNSUPPORTED_DIRECT_PAYMENT_TAG");
+        directPayment = { pmi, payload: tag[2] };
       }
     }
     if (new Set(pmiTags).size !== pmiTags.length) throw new Error("DUPLICATE_PMI_TAG");

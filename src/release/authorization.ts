@@ -211,7 +211,7 @@ function receiptPayload(request: Omit<ReleaseAuthorizationRequest, "expectedRece
 export async function createAuthorizationRequest(input: AuthorizationRequestInput): Promise<ReleaseAuthorizationRequest> {
   const { estimate, ...requestInput } = input;
   if (estimate.currency !== "USD") throw new Error("RELEASE_AUTHORIZATION_CURRENCY_INVALID");
-  const operatorFundingReadiness = input.operatorFundingReadiness ?? await pendingOperatorFundingReadiness();
+  const operatorFundingReadiness = OperatorFundingReadinessSchema.parse(input.operatorFundingReadiness ?? await pendingOperatorFundingReadiness());
   const normalized: RequestInput = {
     ...requestInput,
     currency: estimate.currency,

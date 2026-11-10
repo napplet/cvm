@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PaymentMethodIdSchema } from "../payments/contracts";
 import { validatedAvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract.js";
 
 const ToolNameSchema = z.enum([
@@ -22,7 +23,7 @@ const ContextVmAnnouncementInputSchema = z.object({
     maximum: z.string().regex(/^[1-9][0-9]*$/u),
     unit: z.literal("sat"),
   }).strict(),
-  pmis: z.array(z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"])).length(2),
+  pmis: z.array(PaymentMethodIdSchema).max(256),
   paymentInteraction: z.array(z.enum(["transparent", "explicit_gating"])).length(2),
   tools: z.array(z.object({
     name: ToolNameSchema,
@@ -30,7 +31,7 @@ const ContextVmAnnouncementInputSchema = z.object({
     planned: z.boolean(),
   }).strict()).min(8).max(10),
 }).strict().superRefine((value, context) => {
-  if (new Set(value.pmis).size !== 2) context.addIssue({ code: "custom", message: "PMIs must be unique" });
+  if (new Set(value.pmis).size !== value.pmis.length) context.addIssue({ code: "custom", message: "PMIs must be unique" });
   if (new Set(value.paymentInteraction).size !== 2) context.addIssue({ code: "custom", message: "payment interactions must be unique" });
   if (new Set(value.tools.map((tool) => tool.name)).size !== value.tools.length) context.addIssue({ code: "custom", message: "tools must be unique" });
   for (const tool of value.tools) {
@@ -73,7 +74,7 @@ export type ContextVmAnnouncement = Readonly<{
   tags: readonly (readonly string[])[];
   metadata: Readonly<{
     protocol: "contextvm-v1";
-    topUp: Readonly<{ available: true; separateFromGenerationUsage: true; unit: "sat"; minimum: string; maximum: string }>;
+    topUp: Readonly<{ available: boolean; separateFromGenerationUsage: true; unit: "sat"; minimum: string; maximum: string }>;
     tools: readonly Readonly<{ name: z.infer<typeof ToolNameSchema>; available: boolean; planned: boolean; invocable: boolean }>[];
   }>;
 }>;
@@ -95,7 +96,7 @@ function freeze<T>(value: T): T {
 export function buildContextVmAnnouncement(input: unknown): ContextVmAnnouncement {
   const parsed = ContextVmAnnouncementInputSchema.parse(input);
   const tags = [
-    ["cap", "top_up", `${parsed.topUpCap.minimum}-${parsed.topUpCap.maximum}`, parsed.topUpCap.unit],
+    ...(parsed.pmis.length ? [["cap", "top_up", `${parsed.topUpCap.minimum}-${parsed.topUpCap.maximum}`, parsed.topUpCap.unit]] : []),
     ...parsed.paymentInteraction.map((mode) => ["payment_interaction", mode]),
     ...parsed.pmis.map((pmi) => ["pmi", pmi]),
   ].sort((left, right) => left.join("\u0000").localeCompare(right.join("\u0000")));
@@ -109,7 +110,7 @@ export function buildContextVmAnnouncement(input: unknown): ContextVmAnnouncemen
     metadata: {
       protocol: "contextvm-v1" as const,
       topUp: {
-        available: true as const,
+        available: parsed.pmis.length > 0,
         separateFromGenerationUsage: true as const,
         unit: parsed.topUpCap.unit,
         minimum: parsed.topUpCap.minimum,

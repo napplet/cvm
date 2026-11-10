@@ -1,6 +1,6 @@
 import type { ProjectSpend, RequestCost } from "../project-costs-contract";
 
-export const formatCost = (value: string) => `${BigInt(value).toLocaleString()} test sats`;
+export const formatCost = (value: string) => `${BigInt(value).toLocaleString()} credits`;
 export const spendMarkup = (place: string) => `<div class="project-spend" data-spend="${place}" hidden><span>Total spent</span><strong data-spend-value>—</strong><span data-spend-note></span></div>`;
 export function renderSpend(root: HTMLElement, total?: ProjectSpend): void {
   root.querySelectorAll<HTMLElement>("[data-spend]").forEach(el => {
@@ -40,13 +40,13 @@ export function requestCostElement(request: RequestCost, failureExplanation?: st
     const list = document.createElement("dl");
     for (const line of request.lines) {
       const row = document.createElement("div"); const term = text("dt",line.dimension === "service_fee" ? "Service fee" : `${labels[line.dimension]} · ${BigInt(line.units).toLocaleString()} tokens`);
-      term.append(text("small",line.dimension === "service_fee" ? "Calculated from usage at the profit rate saved for this request" : `${BigInt(line.numerator).toLocaleString()} test sats / ${BigInt(line.denominator).toLocaleString()} tokens`));
+      term.append(text("small",line.dimension === "service_fee" ? "Calculated from usage at the profit rate saved for this request" : `${BigInt(line.numerator).toLocaleString()} credits / ${BigInt(line.denominator).toLocaleString()} tokens`));
       row.append(term,text("dd",formatCost(line.charge))); list.append(row);
     }
-    details.append(list,text("p","Each usage category is rounded up to a whole test sat at the rate saved for this request.","request-note"));
-  } else details.append(text("p",request.charge === null ? "The CVM has not confirmed this charge. It is not included in Total spent yet." : request.charge === "0" ? "No local test charge was recorded. The provider may still have counted subscription usage." : "The charge is recorded, but a token breakdown is not available for this request.","request-note"));
+    details.append(list,text("p","Each usage category is rounded up to a whole credit at the rate saved for this request.","request-note"));
+  } else details.append(text("p",request.charge === null ? "The CVM has not confirmed this charge. It is not included in Total spent yet." : request.charge === "0" ? "No credit charge was recorded. The provider may still have counted subscription usage." : "The charge is recorded, but a token breakdown is not available for this request.","request-note"));
   details.append(text("p",`Approved maximum: ${formatCost(request.maximum)}. The maximum is not an extra charge.`,"request-note"));
   if (request.state === "failed" && request.charge !== null && request.charge !== "0") details.append(text("p","This attempt incurred model usage even though it did not produce a verified version.","request-note"));
-  details.append(text("p","One charge covers this request and its result. Local test sats do not represent a subscription bill.","request-note"));
+  details.append(text("p","One charge covers this request and its result. Credit purchases and model subscriptions are managed separately.","request-note"));
   item.append(details); return item;
 }

@@ -1,9 +1,9 @@
 import { GenerationEstimatesSchema, type GenerationEstimates, type GenerationEstimate } from "../generation-estimates-contract";
 import type { ActivitySnapshot } from "./activity";
 
-export const estimateMarkup = (placement: "create" | "revise") => `<section id="${placement}-estimates" class="generation-estimate ${placement === "revise" ? "estimate-compact" : ""}" aria-label="${placement === "create" ? "Build" : "Revision"} estimates">${placement === "revise" ? '<p class="estimate-heading">Next revision <span>Estimated</span></p>' : ""}<dl><div><dt>Estimated cost</dt><dd id="${placement}-estimate-cost">—</dd></div><div><dt>Estimated time</dt><dd id="${placement}-estimate-time">—</dd></div></dl><details class="estimate-explanation"><summary>How this is estimated</summary><p id="${placement}-estimate-basis">Estimates will appear when the CVM connects.</p></details><p class="estimate-limit">Maximum <span data-estimate-maximum></span> test sats per action</p></section>`;
+export const estimateMarkup = (placement: "create" | "revise") => `<section id="${placement}-estimates" class="generation-estimate ${placement === "revise" ? "estimate-compact" : ""}" aria-label="${placement === "create" ? "Build" : "Revision"} estimates">${placement === "revise" ? '<p class="estimate-heading">Next revision <span>Estimated</span></p>' : ""}<dl><div><dt>Estimated cost</dt><dd id="${placement}-estimate-cost">—</dd></div><div><dt>Estimated time</dt><dd id="${placement}-estimate-time">—</dd></div></dl><details class="estimate-explanation"><summary>How this is estimated</summary><p id="${placement}-estimate-basis">Estimates will appear when the CVM connects.</p></details><p class="estimate-limit">Maximum <span data-estimate-maximum></span> credits per action</p></section>`;
 
-const sats = (value: string) => BigInt(value).toLocaleString();
+const creditInteger = (value: string) => BigInt(value).toLocaleString();
 const range = (low: string, high: string) => low === high ? low : `${low}–${high}`;
 const roundedSeconds = (value: number) => Math.max(5, Math.ceil(value / 5) * 5);
 /** Share the unit across the range, keeping it attached to its value on wrap. */
@@ -12,7 +12,7 @@ export function formatDurationRange(low: number, high: number): string {
   if (lower >= 60) return `${range(String(Math.floor(lower / 30) / 2), String(Math.ceil(upper / 30) / 2))}\u00a0min`;
   return `${range(String(lower), String(upper))}\u00a0sec`;
 }
-const cost = (estimate: GenerationEstimate) => `${range(sats(estimate.cost.low), sats(estimate.cost.high))}\u00a0test sats`;
+const cost = (estimate: GenerationEstimate) => `${range(creditInteger(estimate.cost.low), creditInteger(estimate.cost.high))}\u00a0credits`;
 
 /** Presentation-only: all observations arrive over authenticated CVM service_info. */
 export class GenerationEstimatesView {
@@ -27,7 +27,7 @@ export class GenerationEstimatesView {
   private text(id: string, value: string) { this.root.querySelector<HTMLElement>(`#${id}`)!.textContent = value; }
   maximum() {
     const value = this.root.querySelector<HTMLInputElement>("#maximum")!.value;
-    for (const element of this.root.querySelectorAll("[data-estimate-maximum]")) element.textContent = /^\d{1,9}$/u.test(value) ? sats(value) : "—";
+    for (const element of this.root.querySelectorAll("[data-estimate-maximum]")) element.textContent = /^\d{1,9}$/u.test(value) ? creditInteger(value) : "—";
   }
   set(value: unknown, forCurrentAction = false, placement?: "create" | "revise") {
     const parsed = GenerationEstimatesSchema.safeParse(value);
@@ -67,7 +67,7 @@ export class GenerationEstimatesView {
         value = snapshot.elapsed >= high ? "Taking longer than recent runs" : `About ${remaining.replace(/^Up to /u, "")} ${low > snapshot.elapsed ? "remaining" : "or less remaining"}`;
         value += ` · Estimated cost ${cost(this.#active)}`;
       }
-    } else if (snapshot.state === "completed" && this.#charge !== undefined) value = `Actual charge: ${sats(this.#charge)} test sats`;
+    } else if (snapshot.state === "completed" && this.#charge !== undefined) value = `Actual charge: ${creditInteger(this.#charge)} credits`;
     this.text("progress-estimate", value);
     return remaining;
   }

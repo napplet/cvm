@@ -21,20 +21,17 @@
     "root": "/var/lib/napplet-cvm"
   },
   "funding": {
-    "nwc": {
-      "adapter": "nip47-receive-only"
-    },
-    "cashu": {
-      "mintPolicyVersion": "operator-v1",
-      "mints": [
-        {
-          "url": "https://mint.example.org"
-        },
-        {
-          "url": "https://mint.example.net"
+    "mode": "adapters",
+    "reserveSat": "3750",
+    "adapters": [
+      {
+        "id": "operator-payments",
+        "module": "/opt/operator-payments/src/adapter.ts",
+        "options": {
+          "credentialsFile": "/run/secrets/payments"
         }
-      ]
-    }
+      }
+    ]
   },
   "model": {
     "adapter": "openai-responses",

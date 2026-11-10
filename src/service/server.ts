@@ -1,3 +1,4 @@
+import { configurePaymentDiscovery } from "../payments/discovery";
 import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -20,7 +21,7 @@ import { maximumOperationCharge, PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MOD
 import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "../dev/development-model-gateway";
 import { SourceProposalStore } from "../dev/source-proposal-store";
 import { registerDevelopmentPricing } from "../dev/register-development-pricing";
-import { DevelopmentNwcSettlementReconciler } from "../dev/dev-funding-reconciler";
+import { PaymentReconciler } from "../payments/reconciler";
 import { LocalNappletWorker, configureUntrustedContainerRuntime } from "../dev/local-napplet-worker";
 import { LocalArtifactVerifier } from "../dev/local-artifact-verifier";
 import { LocalArtifactRepository } from "../dev/local-artifact-repository";
@@ -37,7 +38,7 @@ import { ServiceInfoArgumentsSchema } from "../dev-ui/extension-schemas";
 import { createPreviewServer } from "../dev-ui/preview-server";
 import { buildStaticWorkspace } from "../dev-ui/static-assets";
 import { DevelopmentProgressTransport } from "../dev-ui/development-progress";
-import { developmentCapacity, durableTimeline, safeGenerationDiagnostic } from "../dev-ui/contextvm-server";
+import { developmentCapacity, durableTimeline, safeGenerationDiagnostic } from "./shared";
 import { deriveServiceIdentity, readMountedFile, ServiceSecrets, type ServiceConfig } from "./config";
 import { createServiceFunding, type ServicePool } from "./funding";
 import { assertCanonicalSchema, assertServiceRealm } from "./migrations";
@@ -90,11 +91,8 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     const storage = resolve(config.storage.root);
     for (const directory of ["artifacts", "worker-results", "published"]) await mkdir(resolve(storage, directory), { recursive: true, mode: 0o700 });
 
-    const app = await createServiceFunding({
-      pool, fundingKey: identity.fundingKey, nwcUri: await secrets.text("nwc_uri"), nwcPolicy: config.realm === "real" ? "tls" : "private-test",
-      settlementPrefix: config.realm === "real" ? "nwc" : "test-nwc", mints: config.funding.cashu.mints, mintPolicyVersion: config.funding.cashu.mintPolicyVersion,
-      allowMintRoutes: config.realm === "test",
-    });
+    const app = await createServiceFunding({ pool, fundingKey: identity.fundingKey, config });
+    closers.push(() => app.payments.close());
 
     // Paid generation: OpenAI Responses with exact usage receipts and lookup
     // reconciliation. The deterministic adapter exists only for the test realm.
@@ -128,6 +126,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     // `development_publication` is the historical name of the user-signed publication tool.
     const bridge = new ContextVmSdkBridge(transport, ["service_info", "projects", "development_publication"]);
     const progress = new DevelopmentProgressTransport(bridge);
+    configurePaymentDiscovery(bridge, app.payments.methods);
     const accountStatus = new AccountStatusService({
       store: app.database.funding,
       sessions: { list: async ({ accountId }) => {
@@ -141,7 +140,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
           pendingActions: pending.rows.map((row) => ({ id: row.checkpoint_id, state: row.state === "bound" ? "authorized" as const : "pending" as const })),
         };
       } },
-      rails: app.database.railStatuses,
+      rails: app.payments,
     });
     const receipts = new HmacAdmissionReceiptAuthority({ secret: identity.admissionSecret });
     const fundedAdmission = new FundedAdmissionService({ funding: app.funding, store: app.database.funding, capacity: developmentCapacity(readiness), receiptAuthority: receipts });
@@ -257,7 +256,7 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
     };
     new ContextVmFundingAdapter({
       publicPreviewOrigin: config.origins.preview, service: app.funding, transport: progress, admissions: fundedAdmission, admissionReceipts: receipts, accountStatus,
-      topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade,
+      payments: app.payments, freeAccess: app.freeAccess, generation: generationFacade, preAdmission: preAdmissionFacade,
       sessionStatus: { read: async (query: any) => {
         const accountId = await accountIdForPrincipal(query.principal);
         await interrupted.recover(accountId, query.sessionId);
@@ -271,13 +270,13 @@ export async function createServiceRuntime(input: Readonly<{ config: ServiceConf
         development_publication: (value, pubkey) => publication.handle(value, pubkey),
         service_info: async (value, pubkey) => {
           ServiceInfoArgumentsSchema.parse(value);
-          return { reserveSat: config.funding.reserveSat, actionCeilingSat, providerLabel: config.model.adapter === "deterministic-test" ? "Deterministic test model · test credits" : config.realm === "real" ? "OpenAI Responses · metered sats" : "OpenAI Responses · test credits", estimates: await readGenerationEstimates(app.pool, pubkey, pricing, actionCeilingSat).catch(() => null), available: true, development: false, realm: config.realm };
+          return { reserveSat: config.funding.reserveSat, actionCeilingSat, providerLabel: config.model.adapter === "deterministic-test" ? "Deterministic test model · test credits" : config.realm === "real" ? "OpenAI Responses · metered credits" : "OpenAI Responses · test credits", estimates: await readGenerationEstimates(app.pool, pubkey, pricing, actionCeilingSat).catch(() => null), available: true, development: false, realm: config.realm, paymentMode: config.funding.mode, paymentMethods: app.payments.methods, creditLabel: "credits" };
         },
       },
       policyVersion: config.policy.version,
     });
 
-    const reconciler = new DevelopmentNwcSettlementReconciler(app, 2_000);
+    const reconciler = new PaymentReconciler(app.payments, 2_000);
     closers.push(() => reconciler.stop());
     const assets = await buildStaticWorkspace({ relayUrl: config.origins.relay, servicePubkey });
     await transport.start();

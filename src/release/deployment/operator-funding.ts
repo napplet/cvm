@@ -3,7 +3,7 @@ import { canonicalJson } from "../../promotion/schema";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const OpaqueReferenceSchema = z.string().regex(/^os-secret-ref:[a-z][a-z0-9._-]{2,127}$/u);
-const FundingRailSchema = z.enum(["nwc_lightning", "cashu"]);
+const FundingRailSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,95}$/u);
 const CapturedRailSchema = z.object({
   rail: FundingRailSchema,
   secretReference: OpaqueReferenceSchema,
@@ -60,7 +60,7 @@ export async function validateOperatorFundingReadiness(input: unknown): Promise<
       accountScopeSha256: DigestSchema,
       expiresAtMs: z.number().int().positive(),
       status: z.enum(["ready", "revoked", "expired"]),
-    }).strict()).max(2),
+    }).strict()).max(16),
     readinessSha256: DigestSchema,
   }).strict();
   const parsed = schema.safeParse(input);
@@ -85,9 +85,8 @@ export async function releaseCertificationFundingReadiness(input: OperatorFundin
   }
   if (readiness.status === "invalid" || readiness.rails.some((rail) => rail.status !== "ready")) return readiness;
   if (readiness.status === "ready") return readiness;
-  const cashu = readiness.rails.find((rail) => rail.rail === "cashu" && rail.status === "ready");
-  if (!cashu || readiness.rails.some((rail) => rail.rail !== "cashu" && rail.status === "ready")) return readiness;
-  const payload = { version: 1 as const, status: "ready" as const, rails: [Object.freeze({ ...cashu })] };
+  if (!readiness.rails.length) return readiness;
+  const payload = { version: 1 as const, status: "ready" as const, rails: [...readiness.rails] };
   return Object.freeze({ ...payload, rails: Object.freeze(payload.rails), readinessSha256: await digest(payload) });
 }
 
@@ -97,6 +96,7 @@ export async function releaseCertificationFundingReadiness(input: OperatorFundin
  */
 export function createOperatorFundingPrerequisiteController(options: Readonly<{
   now?: () => number;
+  requiredRails?: readonly string[];
   /** Test seam proving capture never opens a secret surface. It is intentionally unused. */
   onSecretSurfaceOpen?: () => void;
 }> = {}) {
@@ -122,7 +122,7 @@ export function createOperatorFundingPrerequisiteController(options: Readonly<{
     async readiness(): Promise<OperatorFundingReadiness> {
       const nowMs = now();
       if (!Number.isSafeInteger(nowMs) || nowMs <= 0) throw new Error("OPERATOR_FUNDING_TIME_INVALID");
-      const rails = (["nwc_lightning", "cashu"] as const).flatMap((rail) => {
+      const rails = [...new Set([...(options.requiredRails ?? []), ...records.keys()])].sort().flatMap((rail) => {
         const record = records.get(rail);
         if (!record) return [];
         const status = record.invalidated ? "revoked" as const : record.expiresAtMs <= nowMs ? "expired" as const : "ready" as const;
@@ -135,7 +135,7 @@ export function createOperatorFundingPrerequisiteController(options: Readonly<{
           status,
         })];
       });
-      const status = rails.length !== 2 ? "pending" as const : rails.every((rail) => rail.status === "ready") ? "ready" as const : "invalid" as const;
+      const status = !rails.length || (options.requiredRails ?? []).some(rail => !records.has(rail)) ? "pending" as const : rails.every((rail) => rail.status === "ready") ? "ready" as const : "invalid" as const;
       const payload = { version: 1 as const, status, rails };
       return Object.freeze({ ...payload, readinessSha256: await digest(payload) });
     },

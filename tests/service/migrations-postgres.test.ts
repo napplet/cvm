@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { SERVICE_MIGRATIONS, applyCanonicalMigrations, assertCanonicalSchema, assertServiceRealm, canonicalMigrations, initializeServiceRealm } from "../../src/service/migrations";
+import { FundingService } from "../../src/funding/funding-service";
+import { PostgresCreditDatabase } from "../../src/persistence/postgres-credit-database";
+import { adapterCreditGrants } from "../../src/payments/credits";
 
 type Pool = { query<T = any>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>; connect(): Promise<any>; end(): Promise<void> };
 const { Pool: PgPool } = createRequire(import.meta.url)("pg") as { Pool: new (options: Record<string, unknown>) => Pool };
@@ -47,6 +50,27 @@ integration("clean install applies the canonical sequence once and is idempotent
   } finally { await pool.end(); }
 }, 60_000);
 
+integration("generic adapters credit the same PostgreSQL ledger once across concurrent delivery and restart", async () => {
+  const pool = await database("generic_credit_adapters");
+  const principal = { pubkey: "ab".repeat(32) };
+  const grant = { principal, reference: "event-1", credits: "100", policyVersion: "sale-v1", verifiedAt: "2026-11-10T00:00:00.000Z" };
+  try {
+    await applyCanonicalMigrations(pool);
+    const funding = new FundingService(new PostgresCreditDatabase(pool, { deadlineMs: 5000 }).funding);
+    const card = adapterCreditGrants(funding, "card");
+    await Promise.all(Array.from({ length: 4 }, () => card.grant(grant)));
+    const restarted = new FundingService(new PostgresCreditDatabase(pool, { deadlineMs: 5000 }).funding);
+    await adapterCreditGrants(restarted, "card").grant({ ...grant, verifiedAt: "2026-11-11T00:00:00.000Z" });
+    await adapterCreditGrants(restarted, "subscription").grant(grant);
+    expect((await restarted.status(principal)).available).toBe("200");
+    expect((await pool.query("SELECT count(*)::int AS count FROM ledger_transactions")).rows[0].count).toBe(2);
+    expect((await pool.query("SELECT sum(CASE WHEN direction='credit' THEN amount ELSE -amount END)::text AS net FROM ledger_entries")).rows[0].net).toBe("0");
+    await expect(adapterCreditGrants(restarted, "card").grant({ ...grant, credits: "101" })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    await expect(adapterCreditGrants(restarted, "card").grant({ ...grant, principal: { pubkey: "cd".repeat(32) } })).rejects.toThrow("SETTLEMENT_REFERENCE_CONFLICT");
+    expect((await restarted.status(principal)).available).toBe("200");
+  } finally { await pool.end(); }
+}, 60_000);
+
 integration("upgrade from an earlier revision preserves rows, and test activity can never become real money", async () => {
   const pool = await database("upgrade_path");
   try {
@@ -58,7 +82,7 @@ integration("upgrade from an earlier revision preserves rows, and test activity 
     await pool.query("INSERT INTO ledger_transactions(transaction_id,reference,unit) VALUES('tx-1','test-top-up','sat')");
     await pool.query("INSERT INTO ledger_entries(entry_id,transaction_id,account_id,direction,amount,unit,entry_reference) VALUES('e-1','tx-1','acct-test','credit',63,'sat','test-top-up:credit')");
     await expect(assertCanonicalSchema(pool)).rejects.toThrow("SERVICE_MIGRATION_PENDING:service/001_service_realm.sql");
-    expect((await applyCanonicalMigrations(pool)).applied).toEqual(["service/001_service_realm.sql", "development/017_validation_failures.sql", "development/018_model_turn_evidence.sql"]);
+    expect((await applyCanonicalMigrations(pool)).applied).toEqual(["service/001_service_realm.sql", "development/017_validation_failures.sql", "development/018_model_turn_evidence.sql", "service/002_generic_credit_sources.sql"]);
     expect((await pool.query("SELECT settled_available::text AS value FROM account_balance_projection WHERE account_id='acct-test'")).rows[0].value).toBe("63");
     // Existing ledger activity is test history: it can never be adopted as real money.
     await expect(initializeServiceRealm(pool, "real")).rejects.toThrow("SERVICE_REAL_REALM_REQUIRES_EMPTY_LEDGER");

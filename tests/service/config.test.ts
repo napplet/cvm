@@ -10,7 +10,7 @@ export const baseConfig = {
   relay: { url: "ws://relay:8080" },
   database: { adapter: "postgresql" },
   storage: { adapter: "filesystem", root: "/var/lib/napplet-cvm" },
-  funding: { nwc: { adapter: "nip47-receive-only" }, cashu: { mintPolicyVersion: "service-test-v1", mints: [{ url: "https://mint.test.example", route: "http://mint:3338" }, { url: "https://mint-2.test.example", route: "http://mint-2:3338" }] } },
+  funding: { mode: "adapters", adapters: [{ id: "operator", module: "/opt/payments/adapter.ts", options: {} }] },
   model: { adapter: "openai-responses", pricingFile: "/etc/napplet-cvm/model-pricing.json" },
   worker: { adapter: "docker", image: "napplet-cvm/dev-worker:development", runtime: "runsc" },
   policy: { version: "service-v1" },
@@ -23,19 +23,26 @@ test("one adapter per concern, defaults are explicit and the result is immutable
   expect(Object.isFrozen(config.origins)).toBe(true);
   expect(() => parseServiceConfig({ ...baseConfig, worker: { ...baseConfig.worker, adapter: "modal" } })).toThrow();
   expect(() => parseServiceConfig({ ...baseConfig, extra: true })).toThrow();
-  expect(() => parseServiceConfig({ ...baseConfig, funding: { ...baseConfig.funding, cashu: { ...baseConfig.funding.cashu, mints: [baseConfig.funding.cashu.mints[0]] } } })).toThrow();
+  expect(() => parseServiceConfig({ ...baseConfig, funding: { mode: "adapters", adapters: [] } })).toThrow();
+  expect(() => parseServiceConfig({ ...baseConfig, funding: { mode: "free", allowlist: [], maximumCredits: "1000" } })).toThrow();
+  expect(() => parseServiceConfig({ ...baseConfig, funding: { mode: "adapters", adapters: [{ id: "operator", module: "./untrusted-relative.ts" }] } })).toThrow();
   expect(JSON.stringify(baseConfig).toLowerCase()).not.toContain("google");
 });
 
-test("the real-money realm rejects test rails, private mint routes, plaintext relays and runc", () => {
-  const real = { ...baseConfig, realm: "real", funding: { ...baseConfig.funding, cashu: { mintPolicyVersion: "service-real-v1", mints: [{ url: "https://mint.example.org" }, { url: "https://mint.example.net" }] } } };
+test("the real realm preserves TLS, metered-model and worker isolation requirements independently of payment providers", () => {
+  const real = { ...baseConfig, realm: "real" };
   expect(parseServiceConfig(real).realm).toBe("real");
-  expect(() => parseServiceConfig({ ...real, funding: baseConfig.funding })).toThrow();
   expect(() => parseServiceConfig({ ...real, origins: { ...baseConfig.origins, relay: "ws://cvm.example.org/relay" } })).toThrow();
   expect(() => parseServiceConfig({ ...real, worker: { ...baseConfig.worker, runtime: "runc" } })).toThrow();
   expect(parseServiceConfig({ ...baseConfig, model: { adapter: "deterministic-test" } }).model.adapter).toBe("deterministic-test");
   expect(() => parseServiceConfig({ ...real, model: { adapter: "deterministic-test" } })).toThrow();
-  expect(() => parseServiceConfig({ ...real, funding: { ...real.funding, cashu: { mintPolicyVersion: "service-real-v1", mints: [{ url: "https://mint.dev.invalid" }, { url: "https://mint.example.net" }] } } })).toThrow("SERVICE_REAL_REALM_TEST_MARKER");
+});
+
+test("free operation requires an explicit owner allowlist and bounded credits", () => {
+  const funding = { mode: "free", allowlist: ["ab".repeat(32)], maximumCredits: "5000" };
+  expect(parseServiceConfig({ ...baseConfig, funding }).funding.mode).toBe("free");
+  expect(() => parseServiceConfig({ ...baseConfig, funding: { ...funding, allowlist: ["nsec-invalid"] } })).toThrow();
+  expect(() => parseServiceConfig({ ...baseConfig, funding: { ...funding, adapters: baseConfig.funding.adapters } })).toThrow();
 });
 
 test("the service seed deterministically derives independent identity keys", () => {
@@ -49,9 +56,9 @@ test("the service seed deterministically derives independent identity keys", () 
 
 test("mounted secrets must be private regular files", async () => {
   const directory = await mkdtemp(join(tmpdir(), "service-secrets-"));
-  await writeFile(join(directory, "nwc_uri"), "value\n", { mode: 0o600 });
-  expect(await new ServiceSecrets(directory).text("nwc_uri")).toBe("value");
-  await chmod(join(directory, "nwc_uri"), 0o644);
-  await expect(new ServiceSecrets(directory).text("nwc_uri")).rejects.toThrow("SERVICE_SECRET_WORLD_READABLE");
+  await writeFile(join(directory, "database_url"), "value\n", { mode: 0o600 });
+  expect(await new ServiceSecrets(directory).text("database_url")).toBe("value");
+  await chmod(join(directory, "database_url"), 0o644);
+  await expect(new ServiceSecrets(directory).text("database_url")).rejects.toThrow("SERVICE_SECRET_WORLD_READABLE");
   await expect(new ServiceSecrets(directory).text("openai_api_key")).rejects.toThrow("SERVICE_MOUNT_UNAVAILABLE");
 });

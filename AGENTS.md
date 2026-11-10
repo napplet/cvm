@@ -16,7 +16,7 @@ Prefer codebase-memory MCP graph tools (`search_graph`, `trace_path`, `get_code_
 
 napplet-cvm is a ContextVM-accessible generation service that turns a bounded text idea into a small, single-purpose, conformant Nostr web applet (a napplet). A user funds a Nostr-linked account, runs an iterative metered agent session, previews the generated napplet inside a real sandboxed runtime, and publishes verified deployment files plus a user-owned napplet manifest and CVM build attestation.
 
-The generation core is transport-neutral. ContextVM over Nostr is the only external interface in v1, with CEP-8 used for account top-ups; future adapters may expose the same core through x402 and L402 without changing generation, billing, or session semantics.
+The generation core is transport-neutral. ContextVM over Nostr is the only external interface in v1, with operator-installed adapters used for credit top-ups; future adapters may expose the same core through x402 and L402 without changing generation, billing, or session semantics.
 
 **Core Value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 
@@ -25,7 +25,7 @@ The generation core is transport-neutral. ContextVM over Nostr is the only exter
 - **Artifact**: Output must always be a conformant, single-purpose sandboxed napplet — this is a permanent product boundary.
 - **Input**: Text only with strict character/token limits — reduces attack surface and bounds cost.
 - **Transport**: ContextVM is the only public v1 interface — the core must remain independent so future x402/L402 adapters do not require a rewrite.
-- **Payments**: CEP-8 top-ups through Lightning and Cashu fund a Nostr-linked prepaid ledger — generation itself charges exact API usage.
+- **Payments**: Operator-owned payment adapters fund a Nostr-linked credit ledger. Multiple adapters and payment-free allowlisted access are supported. The CVM owns exact metering and signed spending limits, not payment implementations.
 - **Spend safety**: Every session has a user-approved maximum and cannot spend beyond that cap or funded balance.
 - **Availability**: New accepted work begins isolated execution within five seconds at p95, with no durable request queue.
 - **Continuity**: Insufficient balance pauses rather than fails; live workers wait ten minutes, then durable checkpoints support explicit resume for 30 days.

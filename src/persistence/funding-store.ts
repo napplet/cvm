@@ -216,7 +216,7 @@ export interface PublicationFundingStore {
   readPublicationStatus(intentId: string): Promise<PublicationRecord>;
 }
 
-type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
+type TopUp = Readonly<{ topUpId: string; rail: string; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type Account = Readonly<{ settledAvailable: bigint; held: bigint; topUps: readonly TopUp[]; holds: readonly Hold[] }>;
 type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; continuationPauses: Map<string, ContinuationPause>; wakeDispatches: Map<string, ContinuationWakeDispatch>; checkpoints: Map<string, ContinuationCheckpoint>; resumeClaims: Map<string, ContinuationResumeClaim>; restoreObservations: Map<string, RestoreObservationInput>; resumedTerminalStatuses: Map<string, "completed" | "failed">; deletionOutcomes: Map<string, DeletionOutcomeInput>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
@@ -374,6 +374,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           const amount = BigInt(input.settlement.amount);
           if (amount <= 0n) throw new Error("INVALID_SETTLEMENT_AMOUNT");
           const account = accountFor(state, accountId);
+          if (account.settledAvailable + amount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("CREDIT_BALANCE_LIMIT");
           const result = freeze({ status: "credited" as const, accountId, topUpId: input.settlement.topUpId, creditedAmount: decimal(amount), unit: "sat" as const, settlementReference: input.settlement.settlementReference });
           state.accounts.set(accountId, freeze({ ...account, settledAvailable: account.settledAvailable + amount, topUps: [...account.topUps, freeze({ topUpId: input.settlement.topUpId, rail: input.settlement.rail, unit: "sat" as const, amount, state: "credited" as const, verifiedAt: input.settlement.verifiedAt, settlementReference: input.settlement.settlementReference, externalReference: input.settlement.externalReference })] }));
           state.externalReferences.add(input.settlement.externalReference); state.settlementReferences.add(input.settlement.settlementReference);

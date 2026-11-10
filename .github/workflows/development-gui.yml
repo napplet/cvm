@@ -8,6 +8,8 @@ on:
       - "src/dev/**"
       - "src/dev-ui/**"
       - "src/contextvm/**"
+      - "src/payments/**"
+      - "src/service/**"
       - "src/continuity/**"
       - "src/phase-04/**"
       - "src/persistence/**"
@@ -48,27 +50,11 @@ jobs:
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
       - name: Verify the pinned native AMD64 development relay
         run: bun scripts/probe-development-relay.ts
-      - run: bun scripts/dev.ts up
-      - run: bun scripts/dev.ts status
+      - name: Build the pinned isolated worker and publication helper
+        run: |
+          docker compose --env-file /dev/null -p napplet-cvm-ui-worker -f infra/dev-ui/compose.yaml build --provenance=false --sbom=false worker-image
+          docker compose --env-file /dev/null -p napplet-cvm-publication -f infra/dev-publication/compose.yaml build --provenance=false --sbom=false publication-image
       - name: Offline Three.js and GSAP build, conformance and sandbox preview
         run: NAPPLET_RUN_VISUAL_WORKER=1 bun test tests/dev-ui/visual-authoring.integration.test.ts --timeout 300000
-      - name: Real development service and browser flows
-        run: bun scripts/dev.ts test --case=full
-      - name: Isolated launcher persistence and reset
-        run: bun run tests/dev-ui/launcher.e2e.ts --case=clean-up-idempotent-down-persist-reset
-      - name: Service remains reachable after idle and garbage collection
-        run: bun run tests/dev-ui/contextvm-server-liveness.e2e.ts
-      - name: Isolated tests preserve the primary workspace readiness
-        run: bun scripts/dev.ts status | jq -e '.ready == true'
-      - name: Retain bounded browser evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: development-gui-evidence
-          path: .local/development-gui-evidence/full-flow-*.json
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 3
-      - name: Remove only this job's development state
-        if: always()
-        run: bun scripts/dev.ts reset --confirm
+      - name: Public service browser generation, metering, isolation and restart without private payments
+        run: NAPPLET_RUN_SERVICE_E2E=1 bun test tests/dev-ui/service-free.e2e.test.ts tests/dev-ui/payment-selection.e2e.test.ts --timeout 420000

@@ -1,0 +1,92 @@
+import { expect, spyOn, test } from "bun:test";
+import { PostgresSqlFundingStore, type PostgresSqlClient } from "../../src/persistence/postgres-sql-funding-store";
+import { SerializationFailure } from "../../src/persistence/postgres-funding-store";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
+
+class ScriptedClient implements PostgresSqlClient {
+  readonly querySpy = spyOn(this, "query");
+  async query<Row extends Record<string, unknown> = Record<string, unknown>>(_text: string, _values?: readonly unknown[]): Promise<Readonly<{ rows: readonly Row[] }>> { return { rows: [] }; }
+  released = 0;
+  get sql(): string[] { return this.querySpy.mock.calls.map(([text]) => text); }
+  release(): void { this.released += 1; }
+}
+
+test("PostgresSqlFundingStore issues real serializable SQL transaction protocol and maps SQLSTATE 40001", async () => {
+  const client = new ScriptedClient();
+  client.querySpy.mockResolvedValueOnce({ rows: [{ fingerprint_sha256: "f".repeat(64), result_json: { status: "credited", accountId: "account:one", topUpId: "topup:one", creditedAmount: "21", unit: "sat", settlementReference: "settlement:one" } }] });
+  const store = new PostgresSqlFundingStore({ connect: async () => client }, { maxAttempts: 2 });
+  expect(await store.findRecordedResult("account:one", "command:one")).toMatchObject({ result: { status: "credited", creditedAmount: "21" } });
+  await expect(store.transact("account:one", async () => { throw Object.assign(new Error("serialization"), { code: "40001" }); })).rejects.toBeInstanceOf(SerializationFailure);
+  expect(client.sql[0]).toStartWith("SELECT fingerprint_sha256");
+  expect(client.sql.filter((sql) => sql === "BEGIN ISOLATION LEVEL SERIALIZABLE")).toHaveLength(2);
+  expect(client.sql.filter((sql) => sql === "ROLLBACK")).toHaveLength(2);
+  expect(client.released).toBe(3);
+});
+
+test("PostgreSQL-wire waits and serialization retries have a bounded deadline", async () => {
+  const store = new PostgresSqlFundingStore({ connect: () => new Promise(() => undefined) }, { maxAttempts: 100, deadlineMs: 10 });
+  const observed = await Promise.race([
+    store.findRecordedResult("account:one", "command:one").then(() => "resolved", (error) => error instanceof Error ? error.message : "rejected"),
+    Bun.sleep(50).then(() => "unbounded"),
+  ]);
+  expect(observed).toBe("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+});
+
+test("PostgresSqlFundingStore exposes one metered funding authority", async () => {
+  const store = new PostgresSqlFundingStore({ connect: async () => new ScriptedClient() });
+  expect(typeof (store as unknown as { findMeteredAction?: unknown }).findMeteredAction).toBe("function");
+  expect(typeof (store as unknown as { listBillingLineItems?: unknown }).listBillingLineItems).toBe("function");
+});
+
+test("PostgresSqlFundingStore exposes the same continuation transaction authority", async () => {
+  const store = new PostgresSqlFundingStore({ connect: async () => new ScriptedClient() });
+  expect(typeof store.listLiveContinuationPauses).toBe("function");
+  await store.transact("account:one", async (tx) => {
+    const continuation = tx as unknown as { pauseForFunding?: unknown; claimResume?: unknown; tombstoneExpiredCheckpoint?: unknown };
+    expect(typeof continuation.pauseForFunding).toBe("function");
+    expect(typeof continuation.claimResume).toBe("function");
+    expect(typeof continuation.tombstoneExpiredCheckpoint).toBe("function");
+  });
+});
+
+test("live-pause discovery is owner/deadline scoped and returns no caller-selected lease tuple", async () => {
+  const queries: { text: string; values?: readonly unknown[] }[] = [];
+  const client: PostgresSqlClient = {
+    query: async (text: string, values?: readonly unknown[]) => { queries.push({ text, values }); return { rows: [] }; },
+    release: () => undefined,
+  };
+  const store = new PostgresSqlFundingStore({ connect: async () => client });
+  await expect(store.listLiveContinuationPauses("account:one", 1_700_000_000_000)).resolves.toEqual([]);
+  expect(queries).toEqual([expect.objectContaining({
+    text: expect.stringContaining("WHERE account_id=$1 AND state='needs_top_up' AND live_lease_token IS NOT NULL AND grace_deadline_ms>$2"),
+    values: ["account:one", 1_700_000_000_000],
+  })]);
+});
+
+test("verified-credit pause discovery bounds both pool checkout and SQL query time", async () => {
+  const checkoutStore = new PostgresSqlFundingStore({ connect: () => new Promise(() => undefined) }, { deadlineMs: 5 });
+  const checkout = await Promise.race([
+    checkoutStore.listLiveContinuationPauses("account:one", 1_700_000_000_000).then(() => "resolved", (error) => error instanceof Error ? error.message : "rejected"),
+    Bun.sleep(50).then(() => "unbounded"),
+  ]);
+  expect(checkout).toBe("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+
+  let released = 0;
+  const queryStore = new PostgresSqlFundingStore({ connect: async () => ({
+    query: () => new Promise(() => undefined),
+    release: () => { released += 1; },
+  }) }, { deadlineMs: 5 });
+  const query = await Promise.race([
+    queryStore.listLiveContinuationPauses("account:one", 1_700_000_000_000).then(() => "resolved", (error) => error instanceof Error ? error.message : "rejected"),
+    Bun.sleep(50).then(() => "unbounded"),
+  ]);
+  expect(query).toBe("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+  expect(released).toBe(1);
+});
+
+test("the core database shares one ledger across metering and continuity without payment repositories", () => {
+  const database = new PostgresFundingDatabase({ connect: async () => new ScriptedClient() });
+  expect(database.meteredFunding).toBe(database.funding);
+  expect(database.continuationFunding).toBe(database.funding);
+  expect(Object.keys(database).sort()).toEqual(["continuationFunding", "funding", "meteredFunding"]);
+});

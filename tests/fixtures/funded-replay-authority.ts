@@ -3,7 +3,7 @@ import { z } from "zod";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
-import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { PostgresCreditDatabase as PostgresFundingDatabase } from "../../src/persistence/postgres-credit-database";
 import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { ProductionFundedReplayAuthority } from "../../src/production/funded-replay-authority";
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";

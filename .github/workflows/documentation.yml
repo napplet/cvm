@@ -26,6 +26,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun install --cwd docs --frozen-lockfile
       - run: bun docs/scripts/export-contracts.ts --check
+      - run: bun scripts/check-ci-test-paths.ts
       - run: bun test examples/contextvm/mcp-compatibility.test.ts
       - run: bun run --cwd docs build
       - run: bun run --cwd docs check:links

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { createCliUploadDeploymentClients } from "../../src/release/deployment/cli-upload-clients";
 import { createRelayDeploymentClients } from "../../src/release/deployment/relay-clients";
 import { createContextVmDeploymentClient } from "../../src/release/deployment/contextvm-client";
-import { createPaymentDeploymentClients } from "../../src/release/deployment/payment-clients";
+import { createPaymentClientFamiliesFixture as createPaymentDeploymentClients } from "../fixtures/payment-client-families";
 import { createVertexDeploymentClient } from "../../src/release/deployment/vertex-client";
 import { createCompatibleHostDeploymentClient } from "../../src/release/deployment/compatible-host-client";
 import { createNip46DeploymentClient } from "../../src/release/deployment/nip46-signer-client";

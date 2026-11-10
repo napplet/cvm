@@ -33,7 +33,7 @@ integration("public service: allowlisted browser generates, meters, previews and
   const key = join(directory, "tls.key"), cert = join(directory, "tls.crt");
   await command(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:127.0.0.2", "-keyout", key, "-out", cert]);
   // Test-only TLS terminator. The service sees the original origin's Host.
-  const proxy = Bun.serve<{ upstream?: WebSocket; pending: string[] }>({ hostname: "0.0.0.0", port: 0, tls: { cert: Bun.file(cert), key: Bun.file(key) },
+  const tlsProxy = () => Bun.serve<{ upstream?: WebSocket; pending: string[] }>({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, tls: { cert: Bun.file(cert), key: Bun.file(key) },
     async fetch(request, server) {
       if (request.headers.get("upgrade") === "websocket") return server.upgrade(request, { data: { pending: [] } }) ? undefined : new Response(null, { status: 400 });
       return fetch(new URL(new URL(request.url).pathname + new URL(request.url).search, upstream), { headers: request.headers, method: request.method });
@@ -44,6 +44,7 @@ integration("public service: allowlisted browser generates, meters, previews and
       close(peer) { peer.data.upstream?.close(); },
     },
   });
+  const proxy = tlsProxy(), previewProxy = tlsProxy(), blobsProxy = tlsProxy();
   const origin = `https://127.0.0.1:${proxy.port}`;
   try {
     await command(["docker", "run", "--rm", "--detach", "--name", container, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17.11-alpine3.24"]);
@@ -56,7 +57,7 @@ integration("public service: allowlisted browser generates, meters, previews and
     await writeFile(join(secretsDirectory, "database_url"), databaseUrl, { mode: 0o600 });
     await writeFile(join(secretsDirectory, "service_seed"), seed, { mode: 0o600 });
     const config = parseServiceConfig({ version: 1, realm: "test", listen: { port: freePort() },
-      origins: { public: origin, preview: `https://localhost:${proxy.port}`, blobs: `https://127.0.0.2:${proxy.port}`, relay: `wss://127.0.0.1:${proxy.port}/relay` },
+      origins: { public: origin, preview: `https://127.0.0.1:${previewProxy.port}`, blobs: `https://127.0.0.1:${blobsProxy.port}`, relay: `wss://127.0.0.1:${proxy.port}/relay` },
       relay: { url: `ws://127.0.0.1:${relay.port}` }, database: { adapter: "postgresql" }, storage: { adapter: "filesystem", root: join(directory, "storage") },
       funding: { mode: "free", allowlist: [pubkey], maximumCredits: "10000", reserveSat: "100" }, model: { adapter: "deterministic-test" },
       worker: { adapter: "docker", runtime: "runc", image: "napplet-cvm/dev-worker:development" }, policy: { version: "service-browser-test-v1" } });
@@ -69,6 +70,7 @@ integration("public service: allowlisted browser generates, meters, previews and
     const page = await context.newPage(); page.setDefaultTimeout(45_000);
     page.on("pageerror", error => console.error(error.message));
     page.on("console", message => { if (message.type() === "error") console.error(message.text().slice(0, 500)); });
+    page.on("requestfailed", request => console.error("TEST_HTTP_FAILED", new URL(request.url()).origin, request.failure()?.errorText));
     page.on("websocket", socket => { socket.on("socketerror", error => console.error("service browser: websocket error", error)); });
     await page.goto(origin);
     await page.waitForFunction(() => /Connected:|Connection failed/.test(document.querySelector("#connection-status")?.textContent ?? ""), undefined, { timeout: 30_000 }).catch(async error => { console.error("service browser connection:", await page.locator("#connection-status").textContent()); throw error; });
@@ -101,7 +103,7 @@ integration("public service: allowlisted browser generates, meters, previews and
     await denied.waitForFunction(() => document.querySelector("#connection-status")?.textContent?.includes("failed"), undefined, { timeout: 30_000 });
     expect((await pool.query("SELECT account_id,direction,amount::text FROM ledger_entries ORDER BY entry_id")).rows).toEqual(before);
   } finally {
-    await browser?.close(); await runtime?.close(); proxy.stop(true); relay.stop(true); await pool?.end();
+    await browser?.close(); await runtime?.close(); proxy.stop(true); previewProxy.stop(true); blobsProxy.stop(true); relay.stop(true); await pool?.end();
     await command(["docker", "rm", "--force", container]).catch(() => undefined); await rm(directory, { recursive: true, force: true });
   }
 }, 420_000);

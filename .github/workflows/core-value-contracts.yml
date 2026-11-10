@@ -72,7 +72,7 @@ permissions:
 jobs:
   core-values:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: deny
       NAPPLET_CVM_WORKER_PLATFORM: linux/amd64

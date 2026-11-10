@@ -44,6 +44,10 @@ use an isolated application database without mint/wallet services.
 Regenerated the public contract catalog. Added a check for every literal CI test
 path: Bun otherwise silently ignores missing filters when others match. No
 check is disabled, and production deadlines/protection rules remain unchanged.
+The restored core workload needs a ten-minute CI job budget; the five-minute
+job was cancelled during its final protected-release proof. Individual test and
+production operation deadlines are unchanged. Browser test origins use separate
+IPv4 TLS listeners to avoid host-dependent localhost routing.
 
 # Verification
 

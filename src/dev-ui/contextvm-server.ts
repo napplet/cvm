@@ -19,7 +19,7 @@ import { CvmOperator } from "../dev/cvm-operator";
 import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "../dev/development-model-gateway";
 import { buildStaticWorkspace } from "./static-assets";
 import { mkdir, writeFile } from "node:fs/promises";
-import { DevelopmentProgressTransport } from "./development-progress";
+import { DevelopmentProgressTransport, type ProgressObservation } from "./development-progress";
 import { ChatGptOAuth, type ChatGptFetch, type ChatGptSettings } from "../dev/chatgpt-oauth";
 import { ChatGptModelGateway, SqlChatGptOperations } from "../dev/chatgpt-model-gateway";
 import { registerDevelopmentPricing } from "../dev/register-development-pricing";
@@ -83,7 +83,7 @@ async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amou
   return (module.mintCashuToken as (app: DevelopmentFunding, config: DevPayments, amount: number) => Promise<string>)(app, config, amount);
 }
 
-export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number; chatGptFetch?: ChatGptFetch }> = {}): Promise<DevelopmentContextVmServer> {
+export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number; chatGptFetch?: ChatGptFetch; onProgress?: (event: ProgressObservation) => void }> = {}): Promise<DevelopmentContextVmServer> {
   if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
   const stack = options.testMode ? developmentStack(true) : undefined;
   const config = options.config ?? (stack ? await stack.up() : await Bun.file(resolve(root, ".local/napplet-cvm-dev-payments/payments.json")).json() as DevPayments);
@@ -106,7 +106,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
   const bridge = new ContextVmSdkBridge(transport, ["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]);
-  const progress = new DevelopmentProgressTransport(bridge);
+  const progress = new DevelopmentProgressTransport(bridge, undefined, options.onProgress);
   configurePaymentDiscovery(bridge, app.payments.methods);
   remixImports = new DevelopmentRemixImports(app.pool, new LocalRemixSourceImporter(readiness.imageDigest), state => progress.emit("source_import", state));
   const accountStatus = new AccountStatusService({

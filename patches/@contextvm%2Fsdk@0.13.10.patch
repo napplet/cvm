@@ -1,8 +1,18 @@
 diff --git a/dist/esm/relay/applesauce-relay-pool.js b/dist/esm/relay/applesauce-relay-pool.js
-index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a97989cf69 100644
 --- a/dist/esm/relay/applesauce-relay-pool.js
 +++ b/dist/esm/relay/applesauce-relay-pool.js
-@@ -72,6 +72,7 @@ export class ApplesauceRelayPool {
+@@ -8,7 +8,9 @@
+ /** Dummy filter that returns no results, used for liveness ping */
+ export const PING_FILTER = {
+     ids: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+-    limit: 0,
++    // nostr-rs-relay ignores limit-zero requests without sending EOSE.
++    // Bound the lookup to one result while still eliciting a protocol response.
++    limit: 1,
+ };
+ /**
+  * RelayHandler implementation backed by applesauce-relay.
+@@ -72,6 +74,7 @@
       */
      constructor(relayUrls, opts) {
          var _a, _b, _c, _d, _e, _f, _g, _h;
@@ -10,7 +20,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
          this.subscriptions = new Map();
          this.relayGeneration = 0;
          this.destroy$ = new Subject();
-@@ -95,6 +96,7 @@ export class ApplesauceRelayPool {
+@@ -95,6 +98,7 @@
       * Validates relay URLs and initializes the relay group.
       */
      async connect() {
@@ -18,7 +28,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
          logger.debug('Connecting to relays', { relayUrls: this.relayUrls });
          for (const url of this.relayUrls) {
              try {
-@@ -119,6 +121,7 @@ export class ApplesauceRelayPool {
+@@ -119,6 +123,7 @@
          let lastLogAt = 0;
          let attempt = 0;
          while (true) {
@@ -26,7 +36,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
              if ((_a = opts === null || opts === void 0 ? void 0 : opts.abortSignal) === null || _a === void 0 ? void 0 : _a.aborted) {
                  throw new Error('Publish aborted');
              }
-@@ -257,6 +260,7 @@ export class ApplesauceRelayPool {
+@@ -257,6 +262,7 @@
       * @param onEose - Optional callback function for end-of-stream events.
       */
      async subscribe(filters, onEvent, onEose) {
@@ -34,7 +44,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
          const id = `sub:${Date.now()}:${Math.random().toString(16).slice(2)}`;
          const state = { id, filters, onEvent, onEose };
          state.unsubscribe = this.createSubscription(filters, onEvent, onEose);
-@@ -286,6 +290,8 @@ export class ApplesauceRelayPool {
+@@ -286,6 +292,8 @@
       * Disconnects from all relays and cleans up resources.
       */
      async disconnect() {
@@ -43,7 +53,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
          this.destroy$.next();
          this.destroy$.complete();
          // If a rebuild is in flight, await it (bounded) so we don't leave timers/subscriptions
-@@ -361,6 +367,7 @@ export class ApplesauceRelayPool {
+@@ -361,6 +369,7 @@
      }
      /** Starts the liveness ping monitor (called lazily on first subscribe) */
      startPingMonitor() {
@@ -51,7 +61,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
          if (this.pingSubscription) {
              logger.debug('Ping monitor already started, skipping');
              return;
-@@ -384,6 +391,7 @@ export class ApplesauceRelayPool {
+@@ -384,6 +393,7 @@
      }
      /** Performs a liveness check and triggers rebuild on timeout */
      async checkLiveness() {
@@ -59,7 +69,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
          // If there are no active subscriptions, don't perform liveness checks.
          // applesauce-relay may legitimately close sockets after `keepAlive` when
          // nothing is subscribed, and that should not trigger a rebuild.
-@@ -435,6 +443,7 @@ export class ApplesauceRelayPool {
+@@ -435,6 +445,7 @@
              }));
          }
          catch (error) {
@@ -67,7 +77,7 @@ index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a9
              if (error instanceof Error && error.name === 'TimeoutError') {
                  logger.warn('Liveness check timed out - no response from relays', {
                      pingTimeoutMs: this.pingTimeoutMs,
-@@ -449,6 +458,7 @@ export class ApplesauceRelayPool {
+@@ -449,6 +460,7 @@
      }
      /** Rebuilds the relay group and replays all subscriptions (single-flight) */
      rebuild(reason) {

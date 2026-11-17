@@ -86,14 +86,17 @@ async function startServer(value: Scope, port: number): Promise<LaunchRecord> {
     const tracePath = process.env.NAPPLET_CVM_DEV_LOG_PATH;
     const safeDetail = (value) => typeof value === 'string' && /^[A-Z][A-Z0-9_:-]{2,120}$/.test(value) ? value : undefined;
     const trace = async (code, detail) => {
-      try { const safe = safeDetail(detail); await mkdir(dirname(tracePath), { recursive: true, mode: 0o700 }); await appendFile(tracePath, JSON.stringify({ at: new Date().toISOString(), code, ...(safe ? { detail: safe } : {}) }) + '\n', { mode: 0o600 }); await chmod(tracePath, 0o600); } catch {}
+      const safe = safeDetail(detail);
+      const line = JSON.stringify({ at: new Date().toISOString(), code, ...(safe ? { detail: safe } : {}) }) + '\n';
+      if (process.env.NAPPLET_CVM_DEV_LOG_STDERR === '1') process.stderr.write(line);
+      try { await mkdir(dirname(tracePath), { recursive: true, mode: 0o700 }); await appendFile(tracePath, line, { mode: 0o600 }); await chmod(tracePath, 0o600); } catch {}
     };
     await trace('creator-start');
     let server;
     const expectedUrl = 'http://127.0.0.1:' + process.env.NAPPLET_CVM_DEV_PORT;
     try {
       const config = JSON.parse(await Bun.file(process.env.NAPPLET_CVM_DEV_CONFIG_PATH).text());
-      server = await createDevelopmentContextVmServer({ config, stateRoot: process.env.NAPPLET_CVM_DEV_STATE_ROOT, port: Number(process.env.NAPPLET_CVM_DEV_PORT) });
+      server = await createDevelopmentContextVmServer({ config, stateRoot: process.env.NAPPLET_CVM_DEV_STATE_ROOT, port: Number(process.env.NAPPLET_CVM_DEV_PORT), onProgress: ({ tool, stage, state }) => { void trace('progress-' + tool + '-' + stage + '-' + state); } });
       await trace(server.url === expectedUrl ? 'ready-port-match' : 'ready-port-mismatch');
     } catch (error) {
       await trace('start-error', safeDetail(error instanceof Error ? error.message.split(':')[0] : undefined));
@@ -111,7 +114,7 @@ async function startServer(value: Scope, port: number): Promise<LaunchRecord> {
     process.once('SIGTERM', () => void stop('signal-SIGTERM'));
     await new Promise(() => {});
   `;
-  const child = Bun.spawn([process.execPath, "-e", program], { cwd: root, env: { ...process.env, NAPPLET_CVM_DEV_CONFIG_PATH: value.configPath, NAPPLET_CVM_DEV_STATE_ROOT: value.stateRoot, NAPPLET_CVM_DEV_PORT: String(port), NAPPLET_CVM_DEV_LOG_PATH: value.logPath }, stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
+  const child = Bun.spawn([process.execPath, "-e", program], { cwd: root, env: { ...process.env, NAPPLET_CVM_DEV_CONFIG_PATH: value.configPath, NAPPLET_CVM_DEV_STATE_ROOT: value.stateRoot, NAPPLET_CVM_DEV_PORT: String(port), NAPPLET_CVM_DEV_LOG_PATH: value.logPath }, stdin: "ignore", stdout: "ignore", stderr: process.env.NAPPLET_CVM_DEV_LOG_STDERR === "1" ? "inherit" : "ignore", detached: true });
   child.unref();
   const record: LaunchRecord = { version: 1, instance: value.instance, port, pid: child.pid, url: `http://127.0.0.1:${port}`, stateRoot: value.stateRoot, configPath: value.configPath };
   await writeRecord(value, record);

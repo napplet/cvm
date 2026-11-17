@@ -5,7 +5,7 @@ import { acceptDevelopmentProgress, DevelopmentProgressSchema } from "../../src/
 import type { ContextVmInboundEnvelope, ContextVmTransportPort } from "../../src/contextvm/sdk-bridge";
 import { runBoundedDevelopmentCommand } from "../../src/dev/local-napplet-worker";
 
-function fixture(notify?: () => Promise<void>) {
+function fixture(notify?: () => Promise<void>, observe?: ConstructorParameters<typeof DevelopmentProgressTransport>[2]) {
   let inbound!: (input: ContextVmInboundEnvelope) => Promise<void>;
   const notifications: any[] = []; const responses: any[] = [];
   const transport: ContextVmTransportPort = {
@@ -13,10 +13,30 @@ function fixture(notify?: () => Promise<void>) {
     async sendResponse(...args) { responses.push(args); },
     async sendNotification(...args) { notifications.push(args); await notify?.(); },
   };
-  const progress = new DevelopmentProgressTransport(transport, { heartbeatMs: 10, sendTimeoutMs: 20 });
+  const progress = new DevelopmentProgressTransport(transport, { heartbeatMs: 10, sendTimeoutMs: 20 }, observe);
   const envelope = (id: string): ContextVmInboundEnvelope => ({ verifiedClientPubkey: `owner-${id}`, requestEventId: `event-${id}`, rawEvent: { id: `event-${id}`, tags: [] }, request: { id, method: "tools/call", params: { name: "start_session", arguments: { secret: "NEVER_SEND" } } } });
   return { progress, notifications, responses, invoke: (id: string) => inbound(envelope(id)) };
 }
+
+test("operational progress omits caller data and repeated chunks, and observer failures preserve responses", async () => {
+  const observations: unknown[] = [];
+  const f = fixture(undefined, event => { observations.push(event); throw new Error("observer unavailable"); });
+  f.progress.onInbound(async input => {
+    f.progress.emit("model_stream", "running", { bytes: 10, model: "PRIVATE_MODEL" });
+    f.progress.emit("model_stream", "running", { bytes: 20 });
+    f.progress.emit("untrusted-stage" as never, "running");
+    await Bun.sleep(25);
+    f.progress.emit("model", "failed");
+    await f.progress.sendResponse(input.verifiedClientPubkey, { jsonrpc: "2.0", id: input.request.id, result: "original" }, input.requestEventId);
+  });
+  await f.invoke("PRIVATE_REQUEST_ID");
+  expect(observations).toEqual([
+    { tool: "start_session", stage: "request", state: "running" },
+    { tool: "start_session", stage: "model_stream", state: "running" },
+    { tool: "start_session", stage: "model", state: "failed" },
+  ]);
+  expect(f.responses[0][1].result).toBe("original");
+});
 
 test("concurrent progress stays with its verified caller/request; heartbeat does not advance a stage", async () => {
   const f = fixture();

@@ -5,12 +5,13 @@ import { DevelopmentProgressSchema, progressMethod, progressTools, type Developm
 
 type Scope = { input: ContextVmInboundEnvelope; progressId: string | number; tool: DevelopmentProgress["tool"]; started: number; sequence: number; active: boolean; stage: ProgressStage; state: ProgressState; queue: Promise<void>; queued: number };
 type Details = Pick<DevelopmentProgress, "bytes" | "provider" | "model" | "diagnostic">;
+export type ProgressObservation = Readonly<Pick<DevelopmentProgress, "tool" | "stage" | "state">>;
 
 /** Development-only, best-effort observations. Async scope is bound to the
  * authenticated envelope, never caller-supplied pubkeys or session IDs. */
 export class DevelopmentProgressTransport implements ContextVmTransportPort {
   readonly #scope = new AsyncLocalStorage<Scope>();
-  constructor(private readonly transport: ContextVmTransportPort, private readonly timing = { heartbeatMs: 5000, sendTimeoutMs: 1000 }) {}
+  constructor(private readonly transport: ContextVmTransportPort, private readonly timing = { heartbeatMs: 5000, sendTimeoutMs: 1000 }, private readonly observe?: (event: ProgressObservation) => void) {}
   configureAnnouncement: ContextVmTransportPort["configureAnnouncement"] = (...args) => this.transport.configureAnnouncement(...args);
   canonicalInvocation: ContextVmTransportPort["canonicalInvocation"] = (...args) => this.transport.canonicalInvocation(...args);
   sendNotification: ContextVmTransportPort["sendNotification"] = (...args) => this.transport.sendNotification(...args);
@@ -41,6 +42,11 @@ export class DevelopmentProgressTransport implements ContextVmTransportPort {
     // Re-validate the entire projection: no arbitrary error text, source or logs.
     const parsed = DevelopmentProgressSchema.safeParse({ version: 1, requestId: scope.progressId, tool: scope.tool, sequence: scope.sequence + 1, at: Date.now(), elapsedMs: Math.floor(performance.now() - scope.started), kind, stage, state, ...details });
     if (!parsed.success) return;
+    if (kind === "stage" && (scope.sequence === 0 || scope.stage !== stage || scope.state !== state)) {
+      // Operational logs receive enums only, without request IDs, caller data,
+      // diagnostics, model output, or per-chunk stream/heartbeat noise.
+      try { this.observe?.({ tool: parsed.data.tool, stage: parsed.data.stage, state: parsed.data.state }); } catch { /* Best effort, like client notifications. */ }
+    }
     scope.sequence++; scope.stage = stage; scope.state = state; scope.queued++;
     scope.queue = scope.queue.then(async () => {
       await this.bounded(Promise.resolve().then(() => this.transport.sendNotification(scope.input.verifiedClientPubkey, { jsonrpc: "2.0", method: progressMethod, params: parsed.data }, scope.input.requestEventId)));

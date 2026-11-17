@@ -1,5 +1,5 @@
 ---
-status: fixing
+status: awaiting_input
 trigger: resolve issues on homelab.
 created: 2026-11-17
 updated: 2026-11-17
@@ -15,7 +15,7 @@ Reproduction: observe an idle active ContextVM subscription for longer than the 
 ## Current Focus
 
 hypothesis: confirmed protocol incompatibility: the deployed relay ignores limit-zero subscriptions; the detached launcher suppresses the development server's runtime diagnostics.
-next_action: publish the positive-limit SDK probe and safe progress observer; configure the operator deployment to forward diagnostics and verify live recovery.
+next_action: await replacement of the expired operator API credential, synchronize it through the managed deployment, and verify bounded real generation and reopen.
 
 ## Evidence
 
@@ -26,7 +26,9 @@ next_action: publish the positive-limit SDK probe and safe progress observer; co
 - The regression failed before the patch: four connections instead of one over 300ms. The positive-limit patch preserves the original connection.
 - Safe progress observations contain only validated tool/stage/state enums; callback failure cannot change the authoritative response.
 - Configured operator model credential is rejected as expired_secret_key; replacement requested separately without exposing the credential.
+- Application fix merged after all nine CI checks passed. Both operator deployments now load the positive-limit probe; five checks against the actual API relay completed with no rebuilds.
+- Original saved artifact reopens unchanged and interactive; safe preview-stage events are visible in container logs. Service identities, model account files, and project/artifact/action counts are preserved.
 
 ## Resolution
 
-Dependency patch and bounded progress observer implemented. Focused progress/liveness/shutdown tests and the pinned TypeScript compiler pass. Live deployment and credential replacement remain pending. Deployment-specific evidence belongs in the operator repository.
+Relay probe and operational logging fixes are deployed and verified. Fifteen focused regression tests, the pinned TypeScript compiler and all application CI checks pass. Operator deployment reproducibility was repaired and all twelve operator tests pass. Model access remains blocked by the expired credential; it is not repaired or verified. Deployment-specific evidence belongs in the operator repository.

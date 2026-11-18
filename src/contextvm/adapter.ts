@@ -13,7 +13,7 @@ import { PrepareResumeArgumentsSchema, PrepareResumeResultSchema, ResumeSessionV
 import { PrincipalSchema } from "../phase-03/contracts";
 import { PaymentMethodIdSchema, PaymentResultSchema } from "../payments/contracts";
 import type { PaymentAdapterRegistry } from "../payments/registry";
-import type { FreeCreditAccess } from "../payments/free-access";
+import type { FreeCreditAccess, TestCreditSponsor } from "../payments/free-access";
 import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
@@ -132,6 +132,8 @@ export interface ContextVmFundingAdapterOptions {
   accountStatus?: AccountStatusService;
   payments?: Pick<PaymentAdapterRegistry, "request" | "methods">;
   freeAccess?: FreeCreditAccess;
+  /** Test credits only: sponsors listed pubkeys without excluding anyone else. */
+  testSponsor?: TestCreditSponsor;
   /** Deprecated: installed legacy adapters can keep existing callers during rollout. */
   topUps?: Readonly<{
     lightning: Readonly<{ begin(input: unknown): Promise<unknown>; paymentRequest?(input: Readonly<{ principal: { pubkey: string }; topUpId: string }>): Promise<string | undefined> }>;
@@ -246,6 +248,11 @@ export class ContextVmFundingAdapter {
     }
   }
 
+  private async sponsor(pubkey: string, name: string, args: unknown): Promise<void> {
+    await this.options.freeAccess?.prepare({ pubkey }, name, args);
+    await this.options.testSponsor?.prepare({ pubkey }, name, args);
+  }
+
   private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
     const pricedNegotiation = pricedContinuationNegotiation(request.params, rawEvent.tags);
@@ -257,7 +264,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "start_session") {
       const args = StartSessionArgumentsSchema.parse(argumentsInput);
-      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
+      await this.sponsor(verifiedPubkey, name, args);
       if ("mode" in args) {
         if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
         const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
@@ -270,7 +277,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "revise_session") {
       const args = ReviseSessionArgumentsSchema.parse(argumentsInput);
-      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
+      await this.sponsor(verifiedPubkey, name, args);
       if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
       const result = SessionActionResultSchema.parse(await this.options.generation.reviseSession({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: args.expectedVersion, maximum: args.maximum, policyVersion: this.policyVersion, revision: args.revision, ...(args.repairOperationId ? { repairOperationId: args.repairOperationId } : {}) }));
       return this.generationResponse("revise_session", verifiedPubkey, requestEventId, request.id, result);
@@ -365,7 +372,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "approve_session_cap") {
       const args = ApproveSessionCapArgumentsSchema.parse(argumentsInput);
-      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
+      await this.sponsor(verifiedPubkey, name, args);
       if (!this.options.sessionCaps) throw new Error("SESSION_CAP_APPROVAL_UNAVAILABLE");
       let result;
       try {
@@ -381,7 +388,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "funded_admission") {
       const args = FundedAdmissionArgumentsSchema.parse(argumentsInput);
-      await this.options.freeAccess?.prepare({ pubkey: verifiedPubkey }, name, args);
+      await this.sponsor(verifiedPubkey, name, args);
       if (!this.options.admissions || !this.options.admissionReceipts) throw new Error("FUNDED_ADMISSION_UNAVAILABLE");
       // Canonical identity is established only after the signed envelope and
       // event correlation are verified, and before receipt/lifecycle authority.

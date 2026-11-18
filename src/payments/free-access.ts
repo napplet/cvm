@@ -37,3 +37,27 @@ export class FreeCreditAccess {
     await this.#credits.grant({ principal, reference: `${tool}:${parsed.idempotencyKey}`, credits, policyVersion: "operator-free-v1", verifiedAt: new Date().toISOString() });
   }
 }
+
+/**
+ * Test-credit sponsorship. Unlike payment-free mode it excludes nobody and
+ * leaves top-ups enabled: listed pubkeys receive a grant covering each
+ * requested cap, while every other pubkey funds sessions normally. Compositions
+ * must refuse to construct it unless balances are test credits.
+ */
+export class TestCreditSponsor {
+  readonly #allowlist: ReadonlySet<string>;
+  readonly #access: FreeCreditAccess;
+  constructor(funding: FundingService, input: Readonly<{ allowlist: readonly string[]; maximumCredits: string }>) {
+    this.#access = new FreeCreditAccess(funding, input);
+    this.#allowlist = new Set(input.allowlist.map(allowlistedPubkey));
+  }
+
+  async prepare(principal: Principal, tool: string, input: unknown): Promise<void> {
+    if (this.#allowlist.has(PrincipalSchema.parse(principal).pubkey)) await this.#access.prepare(principal, tool, input);
+  }
+}
+
+/** Comma/whitespace-separated hex or npub list; empty means no sponsorship. */
+export function parseSponsoredPubkeys(value: string | undefined): readonly string[] {
+  return (value ?? "").split(/[\s,]+/u).filter(Boolean).map(allowlistedPubkey);
+}

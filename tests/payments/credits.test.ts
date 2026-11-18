@@ -4,7 +4,7 @@ import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { adapterCreditGrants, purchasedCredits } from "../../src/payments/credits";
-import { FreeCreditAccess } from "../../src/payments/free-access";
+import { FreeCreditAccess, parseSponsoredPubkeys, TestCreditSponsor } from "../../src/payments/free-access";
 import { PaymentAdapterRegistry } from "../../src/payments/registry";
 import type { PaymentAdapter, PaymentRequest } from "../../src/payments/contracts";
 import { creditsPerToken } from "../../src/payments/pricing";
@@ -81,4 +81,21 @@ test("payment-free operation accepts npubs, sponsors bounded credits and preserv
   expect((await funding.status(principal)).available).toBe("0");
   expect((await funding.status({ pubkey: "cd".repeat(32) })).available).toBe("0");
   expect(await accountIdForPrincipal(principal)).toStartWith("account:");
+});
+
+test("test-credit sponsorship grants listed pubkeys each cap without excluding anyone else", async () => {
+  const funding = new FundingService(new TransactionalMemoryFundingStore());
+  const other = { pubkey: "cd".repeat(32) };
+  expect(parseSponsoredPubkeys(` ${nip19.npubEncode(principal.pubkey)}, `)).toEqual([principal.pubkey]);
+  expect(parseSponsoredPubkeys(undefined)).toEqual([]);
+  expect(() => parseSponsoredPubkeys("nsec1invalid")).toThrow("FREE_ACCESS_PUBKEY_INVALID");
+  const sponsor = new TestCreditSponsor(funding, { allowlist: parseSponsoredPubkeys(principal.pubkey), maximumCredits: "1000000000" });
+  await sponsor.prepare(principal, "funded_admission", { idempotencyKey: "s-1", requestedCap: "40000" });
+  await sponsor.prepare(principal, "funded_admission", { idempotencyKey: "s-1", requestedCap: "40000" });
+  await sponsor.prepare(principal, "start_session", { idempotencyKey: "s-2", maximum: "250000" });
+  expect((await funding.status(principal)).available).toBe("290000");
+  await sponsor.prepare(other, "funded_admission", { idempotencyKey: "s-3", requestedCap: "500" });
+  expect((await funding.status(other)).available).toBe("0");
+  await sponsor.prepare(principal, "account_status", {});
+  expect((await funding.status(principal)).available).toBe("290000");
 });

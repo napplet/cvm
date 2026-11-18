@@ -1,4 +1,5 @@
 import { configurePaymentDiscovery } from "../payments/discovery";
+import { parseSponsoredPubkeys, TestCreditSponsor } from "../payments/free-access";
 import { developmentCapacity, durableTimeline, safeGenerationDiagnostic } from "../service/shared";
 export { developmentCapacity, durableTimeline, safeGenerationDiagnostic } from "../service/shared";
 import { EncryptionMode } from "@contextvm/sdk/core";
@@ -83,6 +84,23 @@ async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amou
   return (module.mintCashuToken as (app: DevelopmentFunding, config: DevPayments, amount: number) => Promise<string>)(app, config, amount);
 }
 
+/** Per-request ceiling for sponsored test credits; effectively unlimited for one operator. */
+const TEST_SPONSOR_MAXIMUM_CREDITS = "1000000000";
+
+/**
+ * Operator-listed pubkeys (NAPPLET_CVM_TEST_SPONSORED_PUBKEYS) receive test
+ * credits for every requested cap. Fails closed unless this composition holds
+ * development-only test credits in a database never initialized as real money.
+ */
+async function developmentTestSponsor(app: DevelopmentFunding, config: DevPayments): Promise<TestCreditSponsor | undefined> {
+  const allowlist = parseSponsoredPubkeys(process.env.NAPPLET_CVM_TEST_SPONSORED_PUBKEYS);
+  if (!allowlist.length) return undefined;
+  if (config.developmentOnly !== true) throw new Error("TEST_SPONSOR_REQUIRES_TEST_CREDITS");
+  const realm = (await app.pool.query<{ realm: string }>("SELECT realm FROM service_realm WHERE singleton")).rows[0]?.realm;
+  if (realm !== undefined && realm !== "test") throw new Error("TEST_SPONSOR_REQUIRES_TEST_CREDITS");
+  return new TestCreditSponsor(app.funding, { allowlist, maximumCredits: TEST_SPONSOR_MAXIMUM_CREDITS });
+}
+
 export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number; chatGptFetch?: ChatGptFetch; onProgress?: (event: ProgressObservation) => void }> = {}): Promise<DevelopmentContextVmServer> {
   if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
   const stack = options.testMode ? developmentStack(true) : undefined;
@@ -102,6 +120,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   let configuring = false;
   let oauthGateway: ChatGptModelGateway | undefined;
   let actionCeilingSat = (2n * BigInt(maximumOperationCharge(composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] }))).toString();
+  const testSponsor = await developmentTestSponsor(app, config);
   const identity = developmentServiceIdentity(config.fundingKey);
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
@@ -311,7 +330,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       }
     },
   };
-  new ContextVmFundingAdapter({ publicPreviewOrigin: process.env.NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN, service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, payments: app.payments, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
+  new ContextVmFundingAdapter({ publicPreviewOrigin: process.env.NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN, service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, payments: app.payments, testSponsor, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
     await interrupted.recover(await accountIdForPrincipal(query.principal), query.sessionId);
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;

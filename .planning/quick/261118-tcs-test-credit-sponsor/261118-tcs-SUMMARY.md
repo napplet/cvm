@@ -19,3 +19,7 @@ The operator repository sets the pubkey for the private test-credit workspace.
 
 Validation: payment and ContextVM suites (22 pass, including the new sponsor
 test), TypeScript clean, operator CVM unit tests pass. Public PR #118.
+
+Deployed application revision `b59e1db` to the private test-credit workspace;
+signed public-WSS discovery passes with the same service key. Deployment records
+remain in the operator repository.
